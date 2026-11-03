@@ -13,7 +13,7 @@ const TOO_LONG = "That was too long to hear in one go. Keep it under two minutes
 export async function POST(req: NextRequest) {
   const ready = await prepare("listen");
   if (ready instanceof NextResponse) return ready;
-  const { me, provider, apiKey } = ready;
+  const { me, keys } = ready;
 
   if (Number(req.headers.get("content-length") ?? 0) > MAX_AUDIO_BYTES) return fail(413, TOO_LONG);
   const wav = new Uint8Array(await req.arrayBuffer());
@@ -23,12 +23,18 @@ export async function POST(req: NextRequest) {
 
   const hold = await reserveVoice(me);
   if (hold instanceof NextResponse) return hold;
-  try {
-    const t = await transcribe(provider, apiKey, wav, req.signal);
-    await recordUsage(hold, provider, t.model, t.input, t.output, t.cost);
-    return NextResponse.json({ text: t.text });
-  } catch (e) {
-    await releaseHold(hold, provider);
-    return fail(502, reason(provider, e).message);
+  // Best provider first; if it fails (a used-up free quota, say), the next one tries.
+  let problem = "";
+  for (const { provider, apiKey } of keys) {
+    try {
+      const t = await transcribe(provider, apiKey, wav, req.signal);
+      await recordUsage(hold, provider, t.model, t.input, t.output, t.cost);
+      return NextResponse.json({ text: t.text, by: provider });
+    } catch (e) {
+      if (req.signal.aborted) break;
+      problem ||= reason(provider, e).message;
+    }
   }
+  await releaseHold(hold, keys[0].provider);
+  return fail(502, problem || "Couldn't write out that recording. Try again.");
 }

@@ -12,7 +12,7 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest) {
   const ready = await prepare("speak");
   if (ready instanceof NextResponse) return ready;
-  const { me, provider, apiKey } = ready;
+  const { me, keys } = ready;
 
   const body = (await req.json().catch(() => ({}))) as { text?: unknown };
   const text = typeof body.text === "string" ? speakable(body.text).slice(0, MAX_SPEAK_CHARS) : "";
@@ -20,15 +20,20 @@ export async function POST(req: NextRequest) {
 
   const hold = await reserveVoice(me);
   if (hold instanceof NextResponse) return hold;
-  try {
-    const s = await speak(provider, apiKey, text, req.signal);
-    await recordUsage(hold, provider, s.model, s.input, s.output, s.cost);
-    return new Response(new Blob([s.pcm as BlobPart]), {
-      headers: { "content-type": "application/octet-stream", "x-sample-rate": String(s.rate), "cache-control": "no-store" },
-    });
-  } catch (e) {
-    await releaseHold(hold, provider);
-    // The browser reads it in its own voice instead, and says why.
-    return fail(502, reason(provider, e).message);
+  let problem = "";
+  for (const { provider, apiKey } of keys) {
+    try {
+      const s = await speak(provider, apiKey, text, req.signal);
+      await recordUsage(hold, provider, s.model, s.input, s.output, s.cost);
+      return new Response(new Blob([s.pcm as BlobPart]), {
+        headers: { "content-type": "application/octet-stream", "x-sample-rate": String(s.rate), "cache-control": "no-store" },
+      });
+    } catch (e) {
+      if (req.signal.aborted) break;
+      problem ||= reason(provider, e).message;
+    }
   }
+  await releaseHold(hold, keys[0].provider);
+  // The browser reads it in its own voice instead, and says why.
+  return fail(502, problem || "The voice service didn't answer.");
 }
