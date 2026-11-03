@@ -7,6 +7,7 @@ import { siteOrigin } from "@/lib/auth/session";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { supabaseServer } from "@/lib/supabase/server";
 import { cleanEmail, cleanName } from "@/lib/validate";
+import { TOO_MANY, allow, clientIp } from "@/lib/rate-limit";
 
 export type SetupState = { error?: string; sentTo?: string } | undefined;
 
@@ -21,6 +22,7 @@ export async function startSetup(_: SetupState, form: FormData): Promise<SetupSt
   const email = cleanEmail(form.get("email"));
   const via = form.get("via");
   if (!name || !family || !email) return { error: "Fill in your name, your family's name and your email." };
+  if (!(await allow(["invitePagePerIp", await clientIp()]))) return { error: TOO_MANY };
 
   const { data: taken } = await supabaseAdmin().rpc("app_owner_exists");
   if (taken) redirect("/sign-in");

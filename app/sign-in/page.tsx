@@ -40,6 +40,9 @@ export default async function SignIn({ searchParams }: { searchParams: Promise<{
       ) : null}
       <SignInForms />
       <p className="mt-10 text-center text-[13px] text-faint">No account yet? Ask your family admin for an invite.</p>
+      <p className="mt-2 text-center text-[13px] text-faint" data-testid="who-sees">
+        Only you can read your chats. Each message goes only to the AI company whose model you pick.
+      </p>
     </TitleCardPage>
   );
 }

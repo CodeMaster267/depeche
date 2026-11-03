@@ -1,9 +1,9 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useOptimistic, useState, useTransition } from "react";
 import { Button, Field, Kept, Notice, keepOnError } from "@/components/ui";
 import { MIN_PASSWORD } from "@/lib/validate";
-import { changePassword, saveProfile, setKeepChats } from "./actions";
+import { changePassword, deleteEverything, saveProfile, setKeepChats, setShareTitles } from "./actions";
 
 export function ProfileForm({ name, username }: { name: string; username: string }) {
   const [state, action, pending] = useActionState(keepOnError(saveProfile), undefined);
@@ -27,13 +27,51 @@ export function ProfileForm({ name, username }: { name: string; username: string
   );
 }
 
-export function PasswordForm() {
+export function PasswordForm({ label = "Set password" }: { label?: string }) {
   const [state, action, pending] = useActionState(changePassword, undefined);
   return (
     <form action={action} className="flex flex-col gap-3">
       <Field label="New password" name="password" type="password" autoComplete="new-password" minLength={MIN_PASSWORD} required />
       {state?.error ? <Notice tone="error">{state.error}</Notice> : state?.ok ? <Notice>{state.ok}</Notice> : null}
-      <Button variant="secondary" disabled={pending}>Set password</Button>
+      <Button variant="secondary" disabled={pending}>{label}</Button>
+    </form>
+  );
+}
+
+/** Each person decides whether their family admin sees their chat titles. Off unless they turn it on. */
+export function ShareTitlesToggle({ shared, isAdmin }: { shared: boolean; isAdmin: boolean }) {
+  const [on, setOn] = useOptimistic(shared);
+  const [, start] = useTransition();
+  return (
+    <label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl border border-line px-4 py-3">
+      <span className="min-w-0">
+        <span className="block text-[17px]">Show my chat titles to {isAdmin ? "the other admin" : "my family admin"}</span>
+        <span className="block text-[13px] text-mute">Titles only, never what&apos;s in a chat.</span>
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        className="h-6 w-6 shrink-0 accent-[var(--color-fg)]"
+        checked={on}
+        onChange={(e) => {
+          const next = e.target.checked;
+          start(async () => {
+            setOn(next);
+            await setShareTitles(next);
+          });
+        }}
+      />
+    </label>
+  );
+}
+
+export function DeleteEverythingForm() {
+  const [state, action, pending] = useActionState(deleteEverything, undefined);
+  return (
+    <form action={action} className="flex flex-col gap-3">
+      <Field label="Type delete to confirm" name="confirm" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off" />
+      {state?.error ? <Notice tone="error">{state.error}</Notice> : state?.ok ? <Notice>{state.ok}</Notice> : null}
+      <Button variant="secondary" disabled={pending}>{pending ? "Deleting…" : "Delete all my chats and memories"}</Button>
     </form>
   );
 }

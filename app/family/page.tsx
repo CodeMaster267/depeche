@@ -4,11 +4,12 @@ import { AppHeader, Page, Section } from "@/components/AppHeader";
 import { requireMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
 import { PROVIDERS, modelsFor } from "@/lib/ai/models";
+import { describeLog, when, type LogRow } from "@/lib/family/log";
 import { CreateFamilyForm, InviteForm, MemberRow, ProviderKeyRow, RevokeButton } from "./forms";
 
 export const metadata: Metadata = { title: "Family · Depeche" };
 
-type Member = { id: string; display_name: string; username: string | null; role: string; monthly_cap_usd: string };
+type Member = { id: string; display_name: string; username: string | null; role: string; monthly_cap_usd: string; share_titles: boolean };
 type Invite = { id: string; family_id: string; email: string; role: string; expires_at: string; accepted_at: string | null };
 
 /**
@@ -25,11 +26,11 @@ export default async function Family() {
   monthStart.setUTCDate(1);
   monthStart.setUTCHours(0, 0, 0, 0);
 
-  const [{ data: family }, { data: members }, { data: invites }, { data: usage }, { data: families }, { data: keys }, { data: keyModels }] = await Promise.all([
+  const [{ data: family }, { data: members }, { data: invites }, { data: usage }, { data: families }, { data: keys }, { data: keyModels }, { data: log }, { data: chats }] = await Promise.all([
     supabase.from("families").select("name").eq("id", me.profile.family_id).single<{ name: string }>(),
     supabase
       .from("profiles")
-      .select("id, display_name, username, role, monthly_cap_usd")
+      .select("id, display_name, username, role, monthly_cap_usd, share_titles")
       .eq("family_id", me.profile.family_id)
       .order("created_at")
       .returns<Member[]>(),
@@ -49,7 +50,25 @@ export default async function Family() {
       .eq("family_id", me.profile.family_id)
       .returns<{ provider: string; last4: string; updated_at: string }[]>(),
     supabase.rpc("family_models"),
+    supabase
+      .from("admin_log")
+      .select("id, actor_id, subject_id, action, detail, created_at")
+      .eq("family_id", me.profile.family_id)
+      .order("created_at", { ascending: false })
+      .limit(50)
+      .returns<LogRow[]>(),
+    // Row-level security returns only the titles of members who chose to share them.
+    supabase
+      .from("chats")
+      .select("owner_id, title")
+      .neq("owner_id", me.userId)
+      .order("updated_at", { ascending: false })
+      .limit(200)
+      .returns<{ owner_id: string; title: string }[]>(),
   ]);
+  const names = new Map((members ?? []).map((m) => [m.id, m.display_name]));
+  const admins = (members ?? []).filter((m) => m.role === "admin").length;
+  const titlesOf = (id: string) => (chats ?? []).filter((c) => c.owner_id === id).slice(0, 8).map((c) => c.title);
   const usable = new Map(((keyModels as { provider: string; models: string[] | null }[] | null) ?? []).map((k) => [k.provider, k.models]));
 
   const spent = new Map<string, number>();
@@ -64,7 +83,7 @@ export default async function Family() {
         <div className="flex flex-col gap-1 pt-4">
           <h1 className="text-[34px] font-semibold tracking-tight">{family?.name ?? "Family"}</h1>
           <p className="text-[15px] text-mute">
-            You can see members&apos; chat titles and spending, never what they write.
+            You see what members spend, and the titles of chats they choose to share. Never what they write.
           </p>
         </div>
 
@@ -95,6 +114,8 @@ export default async function Family() {
                 member={m}
                 spent={spent.get(m.id) ?? 0}
                 isMe={m.id === me.userId}
+                canAddAdmin={admins < 2}
+                titles={titlesOf(m.id)}
               />
             ))}
           </ul>
@@ -114,6 +135,24 @@ export default async function Family() {
               ))}
             </ul>
           ) : null}
+        </Section>
+
+        <Section title="Admin log">
+          <p className="text-[15px] text-mute">
+            Every change an admin makes. Members see the entries about themselves in Account.
+          </p>
+          {(log ?? []).length ? (
+            <ul className="flex flex-col gap-2 text-[15px]" data-testid="admin-log">
+              {(log ?? []).map((l) => (
+                <li key={l.id} className="flex flex-col">
+                  <span>{describeLog(l, names, me.userId)}</span>
+                  <span className="text-[13px] text-mute">{when(l.created_at)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[15px] text-faint">Nothing yet.</p>
+          )}
         </Section>
 
         {me.profile.is_app_owner ? (

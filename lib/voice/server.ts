@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
 import type { Provider } from "@/lib/ai/models";
 import { voiceProviders } from "@/lib/voice/speech";
+import { allow } from "@/lib/rate-limit";
 
 export const fail = (status: number, error: string) => NextResponse.json({ error }, { status });
 
@@ -18,6 +19,8 @@ type Ready = { me: Me; provider: Provider; apiKey: string };
 export async function prepare(kind: "listen" | "speak"): Promise<Ready | NextResponse> {
   const me = await getMe();
   if (!me) return fail(401, "Sign in again to keep chatting.");
+  if (me.profile.must_change_password) return fail(403, "Choose a new password first, in Account.");
+  if (!(await allow(["voicePerMinute", me.userId]))) return fail(429, "That's a lot of voice at once. Wait a minute and try again.");
   const admin = supabaseAdmin();
   const { data: rows } = await admin
     .from("provider_keys")
@@ -35,12 +38,6 @@ export async function prepare(kind: "listen" | "speak"): Promise<Ready | NextRes
     );
   }
 
-  const { data: spent } = await admin.rpc("month_spend", { p_person: me.userId });
-  const cap = Number(me.profile.monthly_cap_usd);
-  if (Number(spent ?? 0) >= cap) {
-    return fail(402, `You've reached your $${cap.toFixed(2)} limit for this month. Your family admin can raise it.`);
-  }
-
   try {
     const apiKey = decryptSecret(fromBytea(keys.find((k) => k.provider === provider)!.ciphertext));
     return { me, provider, apiKey };
@@ -49,18 +46,41 @@ export async function prepare(kind: "listen" | "speak"): Promise<Ready | NextRes
   }
 }
 
-/** Voice costs count against the same monthly limit as chat. Written by the server only. */
-export async function recordUsage(me: Me, provider: Provider, model: string, input: number, output: number, cost: number) {
-  if (!input && !output && !cost) return;
-  await supabaseAdmin().from("usage_events").insert({
-    owner_id: me.userId,
-    message_id: null,
-    provider,
-    model,
-    input_tokens: Math.max(0, Math.round(input)),
-    output_tokens: Math.max(0, Math.round(output)),
-    cost_usd: Math.max(0, cost).toFixed(6),
+/**
+ * The most one voice request can cost: two minutes of listening, or reading 4,000 characters
+ * aloud, priced high. Reserved before the provider is called, like a chat reply, so voice can never
+ * take someone past their monthly limit either.
+ */
+const VOICE_HOLD = { want: 0.1, need: 0.01 };
+
+/** Reserves the worst case for one voice request. Returns the hold's id, or the refusal to send. */
+export async function reserveVoice(me: Me): Promise<string | NextResponse> {
+  const { data, error } = await supabaseAdmin().rpc("reserve_spend", {
+    p_person: me.userId,
+    p_want: VOICE_HOLD.want,
+    p_need: VOICE_HOLD.need,
   });
+  const hold = (data as { hold_id: string }[] | null)?.[0];
+  if (!hold) return fail(402, error?.code === "P0001" ? `${error.message}.` : "Couldn't check your spending limit. Try again.");
+  return hold.hold_id;
+}
+
+/** Voice costs count against the same monthly limit as chat: the hold is swapped for the real cost. */
+export async function recordUsage(hold: string, provider: Provider, model: string, input: number, output: number, cost: number) {
+  await supabaseAdmin().rpc("settle_spend", {
+    p_hold: hold,
+    p_message: null,
+    p_provider: provider,
+    p_model: model,
+    p_input: Math.max(0, Math.round(input)),
+    p_output: Math.max(0, Math.round(output)),
+    p_cost: Number(Math.max(0, cost).toFixed(6)),
+  });
+}
+
+/** Lets go of a hold when the provider was never charged. */
+export async function releaseHold(hold: string, provider: Provider) {
+  await recordUsage(hold, provider, "none", 0, 0, 0);
 }
 
 /** A short reason code for the browser. Logged for debugging; never includes the key. */
