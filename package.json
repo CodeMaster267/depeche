@@ -17,11 +17,21 @@
     "db:stop": "supabase stop"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.135.0",
+    "@google/genai": "2.30.0",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.118.0",
+    "katex": "0.16.47",
+    "mermaid": "12.2.0",
     "next": "16.4.2",
+    "openai": "7.39.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "react-markdown": "10.1.0",
+    "rehype-highlight": "7.0.2",
+    "rehype-katex": "7.0.1",
+    "remark-gfm": "4.0.1",
+    "remark-math": "6.0.0",
     "server-only": "0.0.1"
   },
   "devDependencies": {

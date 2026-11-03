@@ -4,6 +4,7 @@ import {
   createInvite,
   emailCount,
   latestEmail,
+  menuLink,
   noSidewaysScroll,
   signInWithPassword,
   uniqueEmail,
@@ -28,7 +29,7 @@ test.describe("signing in", () => {
     const errors = watchErrors(page);
     await signInWithPassword(page, OWNER.email, OWNER.password);
     await expect(page.getByRole("heading", { name: "Hi, Hasan." })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Family" })).toBeVisible();
+    await expect(await menuLink(page, "Family")).toBeVisible();
     expect(errors).toEqual([]);
   });
 
@@ -210,7 +211,7 @@ test.describe("invites and families", () => {
     await bea.getByLabel("Password").fill("bea-password-123");
     await bea.getByRole("button", { name: "Join Depeche" }).click();
     await expect(bea.getByRole("heading", { name: "Hi, Bea." })).toBeVisible();
-    await bea.getByRole("link", { name: "Family" }).click();
+    await (await menuLink(bea, "Family")).click();
     await expect(bea.getByRole("heading", { name: family })).toBeVisible();
     // Bea is not the owner, so she can't start families.
     await expect(bea.getByText("Other families")).toHaveCount(0);

@@ -10,6 +10,8 @@ const env = {
   SUPABASE_SERVICE_ROLE_KEY: status.SECRET_KEY ?? status.SERVICE_ROLE_KEY,
   MAILPIT_URL: status.MAILPIT_URL ?? status.INBUCKET_URL,
   DEPECHE_OWNER_EMAIL: "hasan@example.com",
+  // Replies come from a built-in stand-in, so tests never call (or pay) a real AI provider.
+  DEPECHE_FAKE_AI: "1",
 };
 writeFileSync(".env.local", Object.entries(env).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
 console.log("Wrote .env.local for the local Supabase.");

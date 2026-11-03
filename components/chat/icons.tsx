@@ -1,0 +1,84 @@
+/** Thin line icons, drawn in currentColor so they follow light and dark mode. */
+type P = { className?: string };
+const base = {
+  width: 22,
+  height: 22,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.6,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  "aria-hidden": true,
+};
+
+export const MenuIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 8h16M4 16h10" />
+  </svg>
+);
+export const NewChatIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 20h7M14.5 4.5l5 5L10 19H5v-5z" />
+  </svg>
+);
+export const PlusIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+export const ArrowUpIcon = (p: P) => (
+  <svg {...base} strokeWidth={2} {...p}>
+    <path d="M12 19V5M6 11l6-6 6 6" />
+  </svg>
+);
+export const StopIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none" />
+  </svg>
+);
+export const ChevronDownIcon = (p: P) => (
+  <svg {...base} width={14} height={14} {...p}>
+    <path d="M6 9l6 6 6-6" />
+  </svg>
+);
+export const CheckIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M5 12.5l4.5 4.5L19 7.5" />
+  </svg>
+);
+export const CopyIcon = (p: P) => (
+  <svg {...base} width={18} height={18} {...p}>
+    <rect x="8" y="8" width="12" height="12" rx="2" />
+    <path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" />
+  </svg>
+);
+export const RetryIcon = (p: P) => (
+  <svg {...base} width={18} height={18} {...p}>
+    <path d="M20 12a8 8 0 1 1-2.4-5.7M20 4v5h-5" />
+  </svg>
+);
+export const MoreIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="5" cy="12" r="1" fill="currentColor" />
+    <circle cx="12" cy="12" r="1" fill="currentColor" />
+    <circle cx="19" cy="12" r="1" fill="currentColor" />
+  </svg>
+);
+export const SearchIcon = (p: P) => (
+  <svg {...base} width={18} height={18} {...p}>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="M20 20l-4-4" />
+  </svg>
+);
+export const CloseIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+);
+export const SidebarIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+    <path d="M9.5 4.5v15" />
+  </svg>
+);
