@@ -95,7 +95,26 @@ export type MicOptions = {
   autoStop?: boolean;
   /** Called when it stops by itself (quiet after speech, nothing said for a while, or too long). */
   onAutoStop?: (heardSpeech: boolean) => void;
+  /** The sound as it's recorded, as 16 kHz mono 16-bit pieces, for live listening. */
+  onChunk?: (pcm: Int16Array) => void;
+  /** How long a pause ends your turn. */
+  quietMs?: number;
 };
+
+/** Turns one recorded piece into 16 kHz 16-bit samples, averaging the samples in each step. */
+export function toPcm16(input: Float32Array, rate: number): Int16Array {
+  const ratio = rate / TARGET_RATE;
+  const out = new Int16Array(Math.floor(input.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const from = Math.floor(i * ratio);
+    const to = Math.max(from + 1, Math.floor((i + 1) * ratio));
+    let sum = 0;
+    for (let j = from; j < to; j++) sum += input[j];
+    const v = Math.max(-1, Math.min(1, sum / (to - from)));
+    out[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+  }
+  return out;
+}
 
 const TARGET_RATE = 16_000;
 const MAX_SECONDS = 120;
@@ -144,10 +163,20 @@ export class Mic {
     return this.heard;
   }
 
+  /** Starts the turn over (what was picked up while the answer played doesn't count). */
+  restart(autoStop = this.opts.autoStop) {
+    this.opts = { ...this.opts, autoStop };
+    this.chunks = [];
+    this.length = 0;
+    this.heard = false;
+    this.started = performance.now();
+  }
+
   private take(input: Float32Array) {
     if (this.done) return;
     this.chunks.push(new Float32Array(input));
     this.length += input.length;
+    if (this.opts.onChunk) this.opts.onChunk(toPcm16(input, this.ctx.sampleRate));
 
     let sum = 0;
     for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
@@ -165,7 +194,7 @@ export class Mic {
     const seconds = this.length / this.ctx.sampleRate;
     if (seconds >= MAX_SECONDS) return this.autoStop();
     if (!this.opts.autoStop) return;
-    if (this.heard && now - this.lastLoud > QUIET_AFTER_SPEECH_MS) this.autoStop();
+    if (this.heard && now - this.lastLoud > (this.opts.quietMs ?? QUIET_AFTER_SPEECH_MS)) this.autoStop();
     else if (!this.heard && now - this.started > NOTHING_SAID_MS) this.autoStop();
   }
 
@@ -248,7 +277,6 @@ export function encodeWav(chunks: Float32Array[], length: number, rate: number):
   return new Blob([header, pcm.buffer as ArrayBuffer], { type: "audio/wav" });
 }
 
-/** Sends a recording to be written out as text. */
 const LANGUAGES_KEY = "depeche:voice-languages";
 
 /** The languages this person speaks, main one first: their choice, or the device's languages. */
@@ -267,6 +295,7 @@ export function saveVoiceLanguages(languages: string[]) {
   } catch {}
 }
 
+/** Sends a recording to be written out as text. */
 export async function listen(wav: Blob, signal?: AbortSignal): Promise<string> {
   const res = await fetch("/api/voice/listen", {
     method: "POST",
@@ -287,12 +316,13 @@ export async function listen(wav: Blob, signal?: AbortSignal): Promise<string> {
 export type Voiced = { pcm: ArrayBuffer; rate: number } | { fallback: string };
 
 /** Fetches the spoken audio for some text. Start it early: generating speech takes a few seconds. */
-export async function fetchVoice(text: string, signal: AbortSignal): Promise<Voiced> {
+/** Makes the audio for `text`. `fast` asks for the quicker voice, for voice chat. */
+export async function fetchVoice(text: string, signal: AbortSignal, fast = false): Promise<Voiced> {
   try {
     const res = await fetch("/api/voice/speak", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, fast }),
       // A slow voice service shouldn't stall the conversation: the device's voice takes over.
       signal: within(signal, 20_000),
     });
