@@ -107,8 +107,17 @@ test.describe("chatting", () => {
     await expect(reply.getByRole("heading", { name: "The formula" })).toBeVisible();
     await expect(reply.locator(".katex-display")).toHaveCount(1);
     await expect(reply.locator(".katex").first()).toBeVisible();
-    await expect(reply.getByRole("table")).toBeVisible();
+    await expect(reply.getByRole("table")).toHaveCount(2);
     await expect(reply.getByRole("cell", { name: "Discriminant" })).toBeVisible();
+    // Wide tables keep readable columns and scroll inside their box; words never split mid-way.
+    const cells = await reply.locator(".md-table td, .md-table th").evaluateAll((els) =>
+      els.map((el) => ({ text: el.textContent ?? "", width: el.getBoundingClientRect().width, fits: el.scrollWidth <= el.clientWidth + 1 })),
+    );
+    for (const cell of cells) {
+      expect(cell.width, `column "${cell.text}"`).toBeGreaterThanOrEqual(120);
+      expect(cell.fits, `column "${cell.text}"`).toBe(true);
+    }
+    await expect(reply.getByRole("cell", { name: "Quadratic formula" })).toBeVisible();
     await expect(reply.locator(".md-code-bar").getByText("python")).toBeVisible();
     await expect(reply.getByRole("button", { name: "Copy", exact: true })).toBeVisible();
     await expect(reply.locator(".hljs-keyword").first()).toHaveText("import");
@@ -122,7 +131,7 @@ test.describe("chatting", () => {
     const chatUrl = page.url();
     await page.reload();
     await expect(page.getByTestId("user-message").last()).toHaveText(question);
-    await expect(page.getByTestId("reply").last().getByRole("table")).toBeVisible();
+    await expect(page.getByTestId("reply").last().getByRole("table").first()).toBeVisible();
     await expect(await menuLink(page, question)).toBeVisible();
     expect(page.url()).toBe(chatUrl);
     // Safari reports link prefetches it cancels on reload; those aren't errors in the page.

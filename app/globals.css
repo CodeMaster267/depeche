@@ -190,7 +190,16 @@ body {
 .md-table { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; -webkit-overflow-scrolling: touch; }
 .md-table table { width: 100%; border-collapse: collapse; font-size: 15px; font-variant-numeric: tabular-nums; }
 .md-table th { text-align: left; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); background: var(--soft); }
-.md-table th, .md-table td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+/*
+ * Wide tables scroll sideways inside their box instead of squeezing columns. Cells wrap only
+ * between words (the reply's break-anywhere rule would let a column shrink to one letter), and
+ * each column keeps a readable minimum. Long links may still break, so one URL can't widen a column.
+ */
+.md-table th, .md-table td {
+  padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top;
+  min-width: 8rem; overflow-wrap: break-word; hyphens: manual;
+}
+.md-table a { overflow-wrap: anywhere; }
 .md-table tr:last-child td { border-bottom: 0; }
 
 .md-code, .md-diagram { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
