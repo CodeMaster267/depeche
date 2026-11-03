@@ -44,4 +44,6 @@ without setting `DEPECHE_ENCRYPTION_KEY` first means admins re-enter their provi
 | `components/chat/`, `components/markdown/` | The chat screen, and how replies are rendered |
 | `e2e/` | Browser tests against the local Supabase |
 | `scripts/backup/`, `docs/backups.md` | Nightly encrypted backups with a restore test, and the keep-alive that stops Supabase pausing |
+| `app/report/` | Report a bug (each person sees only their own reports) |
+| `scripts/bugs/`, `.github/workflows/bug-fix*.yml` | The daily bug fixer and the rules for what it may change and merge |
 | `CLAUDE.md` | The rules any code change must follow |

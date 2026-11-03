@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { AppHeader, Page, Section } from "@/components/AppHeader";
 import { Button } from "@/components/ui";
 import { requireMe } from "@/lib/auth/session";
@@ -32,6 +33,11 @@ export default async function Account() {
             Set one to sign in with your username or email and a password. Forgot it? Your family admin can reset it.
           </p>
           <PasswordForm />
+        </Section>
+        <Section title="Something broken?">
+          <Link href="/report?from=/account" className="press text-[15px] underline underline-offset-4">
+            Report a bug
+          </Link>
         </Section>
       </Page>
     </>
