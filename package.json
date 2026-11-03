@@ -32,7 +32,8 @@
     "rehype-katex": "7.0.1",
     "remark-gfm": "4.0.1",
     "remark-math": "6.0.0",
-    "server-only": "0.0.1"
+    "server-only": "0.0.1",
+    "unpdf": "1.9.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.10",

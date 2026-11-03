@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
 import { MAX_OUTPUT } from "@/lib/ai/budget";
+import { GROQ_VISION_MODEL, groqReply } from "@/lib/ai/groq";
 import type { Source } from "@/lib/chat/thread";
 import { webSource } from "@/lib/ai/sources";
 
@@ -65,7 +66,9 @@ const BUSY_FALLBACK: Record<string, string> = {
 /** Every model that might answer when this one is chosen, so a spending hold covers the dearest. */
 export function modelsThatMayAnswer(model: Model): Model[] {
   const backup = findModel(BUSY_FALLBACK[model.id]);
-  return backup ? [model, backup] : [model];
+  // On Groq, Qwen answers messages with pictures.
+  const vision = model.provider === "groq" ? findModel(GROQ_VISION_MODEL) : undefined;
+  return [model, backup, vision].filter((m, i, all): m is Model => !!m && all.findIndex((x) => x?.id === m.id) === i);
 }
 
 /** Groq's free tier says "rate limit reached" (429) when a model's minute or day allowance is used up. */
@@ -341,123 +344,6 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
       throw new Error(ev.message);
     }
   }
-}
-
-/**
- * Groq serves open models through an OpenAI-compatible Chat Completions API. A maximum length is
- * sent only when a spending hold needs a shorter reply, because Groq counts a requested maximum
- * against the free tier's tokens-per-minute allowance (Groq's prices are tiny, so a full-length
- * reply can't take anyone meaningfully past their limit).
- * Reasoning is kept out of the reply text. The GPT-OSS models can search with Groq's browser search,
- * which reports what it ran as `executed_tools` and marks citations in the text like 【3†L4-L9】.
- */
-async function* groqReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
-  const client = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1", maxRetries: 0 });
-  const gptOss = model.id.startsWith("openai/gpt-oss");
-  // Groq advises low effort when browsing, as higher effort browses much longer.
-  const reasoning = gptOss ? { include_reasoning: false, reasoning_effort: search ? "low" : "medium" } : { reasoning_format: "hidden" };
-  const stream = await client.chat.completions.create(
-    {
-      model: model.id,
-      messages: [{ role: "system", content: system }, ...turns.map((t) => ({ role: t.role, content: groqText(t) }))],
-      stream: true,
-      stream_options: { include_usage: true },
-      ...(maxOutput < MAX_OUTPUT ? { max_completion_tokens: maxOutput } : {}),
-      ...(reasoning as object),
-      ...(search && gptOss ? { tools: [{ type: "browser_search" }] as never, tool_choice: "auto" as const } : {}),
-    },
-    { signal },
-  );
-  if (turns.at(-1)?.files?.length) {
-    yield { type: "notice", text: `${model.name} reads text only, so it couldn't see the attached image or PDF. Pick a Gemini, GPT or Claude model for those.` };
-  }
-  let input = 0;
-  let output = 0;
-  let wroteText = false;
-  let finish = "";
-  let held = "";
-  const sources: Source[] = [];
-  const seenTools = new Set<string>();
-  let searches = 0;
-  for await (const chunk of stream) {
-    const choice = chunk.choices?.[0];
-    const delta = choice?.delta as { content?: string | null; executed_tools?: GroqTool[] } | undefined;
-    for (const tool of delta?.executed_tools ?? []) {
-      const ev = groqTool(tool, seenTools, sources);
-      if (ev.searched) {
-        searches++;
-        yield { type: "searching", ...(ev.query ? { query: ev.query } : {}) };
-      }
-    }
-    if (delta?.content) {
-      // Drop Groq's citation marks, holding back a mark until it is complete.
-      const { out, rest } = stripGroqMarks(held + delta.content);
-      held = rest;
-      if (out) {
-        wroteText = true;
-        yield { type: "text", text: out };
-      }
-    }
-    if (choice?.finish_reason) finish = choice.finish_reason;
-    // Groq reports usage on the last chunk, in its own field on older API versions.
-    const u = chunk.usage ?? (chunk as { x_groq?: { usage?: typeof chunk.usage } }).x_groq?.usage;
-    if (u) {
-      input = u.prompt_tokens ?? input;
-      output = u.completion_tokens ?? output;
-    }
-  }
-  if (held) {
-    wroteText = true;
-    yield { type: "text", text: held };
-  }
-  if (!wroteText) yield { type: "notice", text: "The model sent back an empty reply. Try again." };
-  if (finish === "length") yield { type: "notice", text: "The reply hit its length limit." };
-  if (sources.length) yield { type: "sources", sources };
-  if (searches) yield { type: "searches", count: searches };
-  yield { type: "usage", input, output };
-}
-
-/** Groq's models read text only: images and PDFs are named in the text instead of sent. */
-function groqText(t: Turn): string {
-  const names = (t.files ?? []).map((f) => `[Attached ${f.name}, which this model can't open]`);
-  return [t.text, ...names].filter(Boolean).join("\n\n");
-}
-
-type GroqTool = {
-  index?: number;
-  type?: string;
-  arguments?: string;
-  search_results?: { results?: { title?: string; url?: string }[] };
-};
-
-/** Reads one of Groq's executed tools: whether it was a search (billed) and the pages it found. */
-export function groqTool(tool: GroqTool, seen: Set<string>, sources: Source[]): { searched: boolean; query?: string } {
-  for (const r of tool.search_results?.results ?? []) {
-    const src = webSource(r.url, r.title);
-    if (src && !sources.some((x) => x.url === src.url)) sources.push(src);
-  }
-  // A tool can be reported more than once as it runs; count each one once.
-  const key = `${tool.index ?? ""}|${tool.type ?? ""}|${tool.arguments ?? ""}`;
-  if (seen.has(key)) return { searched: false };
-  seen.add(key);
-  let args: { query?: unknown; q?: unknown } = {};
-  try {
-    args = JSON.parse(tool.arguments || "{}");
-  } catch {
-    // Only shown, so a malformed query is skipped.
-  }
-  const query = typeof args.query === "string" ? args.query : typeof args.q === "string" ? args.q : undefined;
-  // Opening or scrolling a page isn't a search; only searches carry a query.
-  const searched = /search/i.test(tool.type ?? "") && (!!query || !tool.arguments);
-  return { searched, query: query?.slice(0, 200) };
-}
-
-/** Removes Groq browser-search citation marks (【3†L4-L9】), returning any unfinished mark separately. */
-export function stripGroqMarks(text: string): { out: string; rest: string } {
-  const open = text.lastIndexOf("【");
-  const rest = open >= 0 && !text.includes("】", open) && text.length - open < 40 ? text.slice(open) : "";
-  const body = rest ? text.slice(0, open) : text;
-  return { out: body.replace(/【[^】]{0,40}】/g, ""), rest };
 }
 
 async function* googleReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
