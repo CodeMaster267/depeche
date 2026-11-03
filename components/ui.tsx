@@ -1,6 +1,7 @@
 "use client";
 
 import { useFormStatus } from "react-dom";
+import { GlassCode } from "./Glass";
 import { createContext, useContext, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
 
 /** Small building blocks for Depeche's forms: black and white, large touch targets. */
@@ -52,7 +53,7 @@ export function Button({
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "quiet" }) {
   const look = {
-    primary: "bg-inv text-on-inv",
+    primary: "glass glass-pill",
     secondary: "border border-line bg-bg text-fg",
     quiet: "text-mute underline underline-offset-4 h-auto",
   }[variant];
@@ -66,7 +67,8 @@ export function Button({
       {...props}
       className={`press inline-flex h-14 w-full items-center justify-center gap-3 rounded-2xl px-5 text-[17px] font-semibold transition-opacity disabled:opacity-50 ${look} ${className}`}
     >
-      {children}
+      {variant === "primary" ? <GlassCode seed={typeof children === "string" ? children : ""} /> : null}
+      {variant === "primary" && typeof children === "string" ? <span>{children}</span> : children}
     </button>
   );
 }

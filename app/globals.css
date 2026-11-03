@@ -394,3 +394,119 @@ body {
   .loader .glitch { animation: press-dip 1.6s ease-in-out infinite alternate; }
   .loader-scan::after { animation: none; width: 100%; opacity: 0.4; }
 }
+
+/*
+ * Liquid glass (components/Glass.tsx). Dark smoky glass in both light and dark mode: a thin white
+ * rim, a bright lip and sheen across the top, a soft drop shadow, and a light that follows the
+ * pointer. `.glass` alone is the plain version for small icon buttons. `.glass-pill` adds Hasan's
+ * code pattern inside (a `<GlassCode>` child), bent at the rim by the filter in `--glass-bend`.
+ * No backdrop-filter anywhere: the buttons sit on solid ground, and nothing filtered ever sits over
+ * content that scrolls or streams. The glitch tap flash (`.press`) still plays on top.
+ */
+.glass {
+  --g-top: rgba(46, 46, 46, 0.92);
+  --g-bottom: rgba(8, 8, 8, 0.96);
+  --g-rim: linear-gradient(var(--ra, 160deg), rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.28) 38%, rgba(255, 255, 255, 0.12) 60%, rgba(255, 255, 255, 0.7));
+  --g-drop: rgba(0, 0, 0, 0.35);
+  position: relative;
+  isolation: isolate;
+  color: #fff;
+  background:
+    radial-gradient(130% 85% at 50% -32%, rgba(255, 255, 255, 0.22), transparent 60%),
+    linear-gradient(180deg, var(--g-top), var(--g-bottom));
+  box-shadow:
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.45),
+    inset 0 -1.5px 1px rgba(255, 255, 255, 0.16),
+    0 1px 2px var(--g-drop),
+    0 12px 24px -14px var(--g-drop);
+  -webkit-tap-highlight-color: transparent;
+}
+@media (prefers-color-scheme: dark) {
+  .glass {
+    --g-top: rgba(40, 40, 40, 0.75);
+    --g-bottom: rgba(10, 10, 10, 0.85);
+    --g-drop: rgba(0, 0, 0, 0.9);
+  }
+}
+/* The 1px rim: a gradient masked down to a ring. */
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--g-rim);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  pointer-events: none;
+}
+/* The light under the pointer or finger. */
+.glass::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: radial-gradient(circle 80px at var(--gx, 50%) var(--gy, 0%), rgba(255, 255, 255, 0.16), transparent 70%);
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+}
+@media (hover: hover) {
+  .glass:hover:not(:disabled)::after { opacity: 1; }
+}
+.glass[data-pressed]::after { opacity: 1; }
+
+/* Main buttons: a capsule with the code inside. */
+.glass-pill {
+  border-radius: 999px;
+}
+.glass-pill > :not(.glass-lens) {
+  position: relative;
+  text-shadow: 0 0 10px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.8);
+}
+.glass-lens {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  border-radius: inherit;
+  overflow: hidden;
+  /* Safari doesn't clip a filtered child to rounded overflow; clip-path does, in both engines. */
+  clip-path: inset(0 round 999px);
+  /* A clear patch behind the label, so the label stays easy to read. */
+  /* --clear is the label's width, measured by GlassEffects. */
+  --clear-x: calc(var(--clear, 40%) / 2 + 26px);
+  -webkit-mask: radial-gradient(var(--clear-x) 95% at 50% 50%, transparent 62%, #000 100%);
+  mask: radial-gradient(var(--clear-x) 95% at 50% 50%, transparent 62%, #000 100%);
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.glass-code {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 8.5px;
+  line-height: 2.1;
+  letter-spacing: 0.08em;
+  white-space: pre;
+  color: rgba(255, 255, 255, 0.17);
+  /* Scanlines, bent with the code. */
+  background: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 3px);
+  filter: var(--glass-bend, none);
+}
+.glass-code > span {
+  display: block;
+}
+
+/* Touch screens: no :active swell (a scroll that starts on a button would make it pulse); the
+ * delayed press in components/Press.tsx plays the flash instead. */
+@media (hover: none) {
+  .press:active:not(:disabled) { transform: none; }
+}

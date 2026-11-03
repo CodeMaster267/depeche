@@ -444,7 +444,7 @@ function Composer({
         className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
       />
       {busy ? (
-        <button type="button" onClick={onStop} aria-label="Stop" className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-inv text-on-inv">
+        <button type="button" onClick={onStop} aria-label="Stop" className="press glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full">
           <StopIcon />
         </button>
       ) : (
@@ -452,7 +452,7 @@ function Composer({
           type="submit"
           aria-label="Send"
           disabled={disabled || !value.trim()}
-          className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-inv text-on-inv transition-opacity disabled:opacity-30"
+          className="press glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-opacity disabled:opacity-30"
         >
           <ArrowUpIcon />
         </button>
