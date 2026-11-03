@@ -2,7 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
-import type { Model, Provider } from "@/lib/ai/models";
+import { findModel, type Model, type Provider } from "@/lib/ai/models";
 
 /**
  * One streaming interface over the three providers. Depeche stores conversations in its own
@@ -14,7 +14,9 @@ export type Turn = { role: "user" | "assistant"; text: string };
 export type StreamEvent =
   | { type: "text"; text: string }
   | { type: "usage"; input: number; output: number }
-  | { type: "notice"; text: string };
+  | { type: "notice"; text: string }
+  /** Another model answered (the chosen one was busy). */
+  | { type: "model"; id: string };
 
 export type ReplyRequest = {
   model: Model;
@@ -29,19 +31,63 @@ export class ProviderError extends Error {}
 
 const MAX_OUTPUT = 32_000;
 
+/**
+ * When a model is overloaded (Google's free tier often says "high demand"), try again twice, then
+ * let a lighter model from the same provider answer instead and say so.
+ */
+const BUSY_FALLBACK: Record<string, string> = {
+  "gemini-3.8-flash": "gemini-3.5-flash-lite",
+  "gemini-4-argon": "gemini-3.8-flash",
+  "gemini-3.5-flash-lite": "gemini-3.8-flash",
+};
+
+export function isBusy(e: unknown): boolean {
+  const code = status(e);
+  return code === 500 || code === 502 || code === 503 || code === 504 || code === 529 || /overloaded|high demand|unavailable|try again later/i.test(detail(e));
+}
+
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+  });
+
 export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEvent> {
-  if (fakeAi()) {
-    yield* fakeReply(req);
-    return;
+  const attempts: { model: Model; wait: number }[] = [
+    { model: req.model, wait: 0 },
+    { model: req.model, wait: 1500 },
+    { model: req.model, wait: 3500 },
+  ];
+  const backup = findModel(BUSY_FALLBACK[req.model.id]);
+  if (backup) attempts.push({ model: backup, wait: 0 });
+
+  let lastError: unknown;
+  for (const attempt of attempts) {
+    if (attempt.wait) await pause(attempt.wait, req.signal);
+    if (req.signal.aborted) throw new DOMException("Aborted", "AbortError");
+    let wrote = false;
+    try {
+      if (attempt.model.id !== req.model.id) {
+        yield { type: "model", id: attempt.model.id };
+        yield { type: "notice", text: `${req.model.name} was busy, so ${attempt.model.name} answered instead.` };
+      }
+      const r = { ...req, model: attempt.model };
+      const inner = fakeAi()
+        ? fakeReply(r, attempt.model.id === req.model.id)
+        : r.model.provider === "anthropic" ? anthropicReply(r) : r.model.provider === "openai" ? openaiReply(r) : googleReply(r);
+      for await (const ev of inner) {
+        if (ev.type === "text") wrote = true;
+        yield ev;
+      }
+      return;
+    } catch (e) {
+      if (req.signal.aborted) throw e;
+      lastError = e;
+      // Retrying after part of a reply was shown would repeat it, and other errors won't go away.
+      if (wrote || !isBusy(e)) break;
+    }
   }
-  try {
-    if (req.model.provider === "anthropic") yield* anthropicReply(req);
-    else if (req.model.provider === "openai") yield* openaiReply(req);
-    else yield* googleReply(req);
-  } catch (e) {
-    if (req.signal.aborted) throw e;
-    throw new ProviderError(describe(req.model.provider, e));
-  }
+  throw new ProviderError(describe(req.model.provider, lastError));
 }
 
 /** The models that fall back to another Claude model when a safety check declines a request. */
@@ -168,6 +214,7 @@ function friendlyError(provider: Provider, e: unknown): string {
     return "Google's limit for this key is reached for now. Free keys allow only a few messages a minute and some models not at all. Wait a minute, or pick a Flash model.";
   if (code === 429 || /quota|rate limit|credit|billing/i.test(msg))
     return `${name} says the key is out of credit or busy. Try again in a minute, or ask your family admin to check billing.`;
+  if (isBusy(e)) return `${name}'s servers are very busy right now, even after a few tries. Wait a minute, or pick another model.`;
   if (code === 404) return `${name} doesn't offer this model to your family's key. Try another model.`;
   if (code === 400) return `${name} couldn't take this request. Try a shorter message or another model.`;
   return `${name} had a problem answering. Try again.`;
@@ -241,8 +288,10 @@ This is well documented[^1].
 [^1]: [Quadratic formula](https://en.wikipedia.org/wiki/Quadratic_formula), Wikipedia.
 `.replaceAll("\\`", "`");
 
-async function* fakeReply({ turns, signal }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* fakeReply({ turns, signal }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const q = turns.at(-1)?.text.slice(0, 80) ?? "";
+  // "busy" in the message makes the chosen model act overloaded, to test retries and the fallback.
+  if (chosen && q.includes("busy")) throw Object.assign(new Error("This model is currently experiencing high demand."), { status: 503 });
   const reply = FAKE_REPLY.replace("{q}", q);
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
