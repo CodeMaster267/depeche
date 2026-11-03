@@ -43,4 +43,9 @@ under reduced motion. Mockups: `/mnt/project-files/depeche/screens/` in the proj
   Supabase, including Supabase's permissive default grants, then applies `supabase/migrations/`.
   Any schema change needs matching tests in `tests/db/`.
 - `npm run typecheck`, `npm run build` must pass. CI runs all three on every PR.
+- **Test every UI change in Chrome and Safari.** `npm run test:e2e` runs Playwright against
+  Chromium and WebKit, each on desktop and on a phone (Pixel 7, iPhone 15). Report both results.
+  Claude's cloud container has only Chromium (WebKit cannot be downloaded there), so locally run
+  `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npx playwright test --project=chrome-desktop --project=chrome-android`
+  and read the WebKit result from the CI `e2e` job. Say which browser ran where.
 - Migrations are forward-only SQL files in `supabase/migrations/`, named by timestamp.

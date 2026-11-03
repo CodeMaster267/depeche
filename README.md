@@ -12,6 +12,7 @@ prove them. Nothing is deployed yet.
 ```sh
 npm install
 npm test          # database privacy tests (no setup needed)
+npm run build && npm run test:e2e   # Chrome and Safari, desktop and phone
 npm run dev       # http://localhost:3000
 ```
 
