@@ -4,9 +4,11 @@ import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
 import { MAX_SEARCHES, estimateCost, findModel, searchCost } from "@/lib/ai/models";
-import { ProviderError, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
+import { ProviderError, fakeAi, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
+import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOfferChatSearch } from "@/lib/chat/search";
 import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
-import { MAX_FILES_PER_MESSAGE, UPLOAD_BUCKET, isFileRef, type FileRef } from "@/lib/chat/files";
+import { MAX_FILES_PER_MESSAGE, OFFICE_TYPES, UPLOAD_BUCKET, isFileRef, readAsText, type FileRef } from "@/lib/chat/files";
+import { documentText } from "@/lib/docs/read";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
@@ -134,22 +136,40 @@ export async function POST(req: NextRequest) {
   for (const f of [...fileRefs, ...all.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : []))]) {
     if (!isFileRef(f, me.userId)) continue;
     if (f.mime === "text/plain") fileTokens += Math.ceil(Math.min(f.size, 200_000) / 2);
+    // Word, Excel and PowerPoint files are zipped, so their text can be several times their size.
+    else if (OFFICE_TYPES.includes(f.mime)) fileTokens += Math.ceil(Math.min(f.size * 5, 200_000) / 2);
     else if (binaryBytes + f.size <= FILE_BYTES_BUDGET) {
       binaryBytes += f.size;
       fileTokens += f.mime === "application/pdf" ? Math.ceil(f.size / 40) + 3_000 : 5_000;
     }
   }
-  const plan = planReply(modelsThatMayAnswer(model), inputTokensUpperBound(seen), {
-    // Web searches have a fee each, and the pages they read come back as extra input.
-    extraUsd: search ? Math.max(...modelsThatMayAnswer(model).map((m) => searchCost(m.provider, MAX_SEARCHES))) : 0,
-    extraInputTokens: (search ? MAX_SEARCHES * SEARCH_INPUT_TOKENS : 0) + fileTokens,
-  });
-  const { data: holds, error: holdError } = await admin.rpc("reserve_spend", {
-    p_person: me.userId,
-    p_want: plan.want,
-    p_need: plan.need,
-  });
-  const hold = (holds as { hold_id: string; amount_usd: number }[] | null)?.[0];
+  // "Search this chat" may be offered when part of the chat won't be sent word for word (very
+  // long chats today; summarised ones once compaction lands). Each lookup sends the conversation
+  // to the model again, so the hold covers that too, or the tool isn't offered.
+  const historyTotal = all.reduce((n, m) => n + (m.content.text?.length ?? 0), text.length);
+  let mayLookUp = model.provider !== "groq" && (historyTotal + fileTokens * 2 > HISTORY_CHARS * 0.8 || fakeAi());
+  const reserve = async (lookups: boolean) => {
+    const baseInput = inputTokensUpperBound(seen);
+    const searchInput = search ? MAX_SEARCHES * SEARCH_INPUT_TOKENS : 0;
+    const lookupInput = lookups
+      ? MAX_CHAT_SEARCHES * (baseInput + fileTokens + searchInput) +
+        CHAT_SEARCH_RESULT_TOKENS * ((MAX_CHAT_SEARCHES * (MAX_CHAT_SEARCHES + 1)) / 2)
+      : 0;
+    const plan = planReply(modelsThatMayAnswer(model), baseInput, {
+      // Web searches have a fee each, and the pages they read come back as extra input.
+      extraUsd: search ? Math.max(...modelsThatMayAnswer(model).map((m) => searchCost(m.provider, MAX_SEARCHES))) : 0,
+      extraInputTokens: searchInput + fileTokens + lookupInput,
+    });
+    const { data, error } = await admin.rpc("reserve_spend", { p_person: me.userId, p_want: plan.want, p_need: plan.need });
+    return { plan, hold: (data as { hold_id: string; amount_usd: number }[] | null)?.[0], error };
+  };
+  let reserved = await reserve(mayLookUp);
+  if (!reserved.hold && mayLookUp && reserved.error?.code === "P0001") {
+    // Too close to the limit for lookups: answer without them rather than refusing.
+    mayLookUp = false;
+    reserved = await reserve(false);
+  }
+  const { plan, hold, error: holdError } = reserved;
   if (!hold) {
     return fail(402, holdError?.code === "P0001" ? `${holdError.message}.` : "Couldn't check your spending limit. Try again.");
   }
@@ -210,6 +230,8 @@ export async function POST(req: NextRequest) {
   const path: MessageRow[] = [];
   for (let m: MessageRow | undefined = question; m; m = m.parent_id ? byId.get(m.parent_id) : undefined) path.unshift(m);
   const turns: Turn[] = [];
+  // Messages the model gets word for word (or that have nothing to send); the rest can be looked up.
+  const sent = new Set<string>([question.id]);
   let budget = HISTORY_CHARS;
   let fileBudget = FILE_BYTES_BUDGET;
   const storage = supabaseAdmin().storage.from(UPLOAD_BUCKET);
@@ -220,14 +242,22 @@ export async function POST(req: NextRequest) {
       for (const f of m.content.files ?? []) {
         // Only ever the sender's own folder, even if a stored message says otherwise.
         if (!isFileRef(f, me.userId)) continue;
-        const fits = f.mime === "text/plain" ? budget - f.size > 0 : fileBudget - f.size > 0;
+        const fits = readAsText(f.mime) ? budget - f.size > 0 : fileBudget - f.size > 0;
         const { data: blob } = fits ? await storage.download(f.path) : { data: null };
         if (!blob) {
           t += `\n\n[Attached file "${f.name}" is ${fits ? "no longer available: files are removed after 3 days without use" : "too large to send again"}.]`;
-        } else if (f.mime === "text/plain") {
-          const body = (await blob.text()).slice(0, 200_000);
-          budget -= body.length;
-          t += `\n\n<file name="${f.name.replace(/"/g, "'")}">\n${body}\n</file>`;
+        } else if (readAsText(f.mime)) {
+          // Word, Excel and PowerPoint files are read here, as no provider takes them directly.
+          const body =
+            f.mime === "text/plain"
+              ? (await blob.text()).slice(0, 200_000)
+              : await documentText(f.mime, new Uint8Array(await blob.arrayBuffer())).catch(() => null);
+          const name = f.name.replace(/"/g, "'");
+          if (body === null) t += `\n\n[Attached file "${name}" couldn't be read. It may be damaged or password-protected.]`;
+          else {
+            budget -= body.length;
+            t += `\n\n<file name="${name}">\n${body || "(This file has no text in it.)"}\n</file>`;
+          }
         } else {
           fileBudget -= f.size;
           attached.push({ name: f.name, mime: f.mime, data: Buffer.from(await blob.arrayBuffer()).toString("base64") });
@@ -235,15 +265,25 @@ export async function POST(req: NextRequest) {
       }
     }
     t = t.trim();
-    if ((!t && !attached.length) || m.role === "system" || (m.role === "assistant" && m.status === "failed")) continue;
+    if ((!t && !attached.length) || m.role === "system" || (m.role === "assistant" && m.status === "failed")) {
+      sent.add(m.id);
+      continue;
+    }
     if (budget - t.length < 0 && turns.length) break;
     budget -= t.length;
+    sent.add(m.id);
     // Providers expect turns to alternate, so two in a row from one side are joined.
     if (turns[0]?.role === m.role) {
       turns[0] = { ...turns[0], text: [t, turns[0].text].filter(Boolean).join("\n\n"), files: [...attached, ...(turns[0].files ?? [])] };
     } else turns.unshift({ role: m.role as Turn["role"], text: t, files: attached.length ? attached : undefined });
   }
   while (turns[0]?.role === "assistant") turns.shift();
+  // The question itself is in front of the model, so a lookup searches everything before it.
+  const earlier = path.filter((m) => m.id !== question.id);
+  const chatSearch =
+    mayLookUp && (shouldOfferChatSearch(earlier, sent) || fakeAi())
+      ? chatSearcher(db, chatId, earlier, me.profile.display_name)
+      : undefined;
 
   const abort = new AbortController();
   req.signal.addEventListener("abort", () => abort.abort());
@@ -279,7 +319,7 @@ export async function POST(req: NextRequest) {
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput })) {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch })) {
           if (ev.type === "text") {
             // A suggested memory is taken out of the reply and offered separately.
             const shown = memory.push(ev.text);
@@ -290,7 +330,8 @@ export async function POST(req: NextRequest) {
           } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
           else if (ev.type === "model") used = findModel(ev.id) ?? model;
           else if (ev.type === "searching") {
-            if (ev.query) queried++;
+            // Looking back through this chat is free; only web searches have a fee.
+            if (ev.query && ev.where !== "chat") queried++;
             send(ev);
           }
           else if (ev.type === "sources") {
@@ -403,12 +444,21 @@ export async function POST(req: NextRequest) {
 /** About how many input tokens the pages from one web search add, erring high. */
 const SEARCH_INPUT_TOKENS = 12_000;
 
+/** How a model makes a file to download (shown by components/markdown/FileCard.tsx). */
+const FILE_INSTRUCTIONS = [
+  "You can make files to download.",
+  "When asked for a document, spreadsheet or other file (Word, PDF, Excel, CSV, Markdown, text or JSON), write the whole file in one fenced code block labelled file: and its name, for example ```file:Trip-plan.docx, and the app shows it with a Download button; never say you can't make files.",
+  "Inside, write Markdown for .docx, .pdf and .md; CSV with a heading row for .csv and .xlsx (for several sheets, put each under a line like ## Sheet: Name; Excel formulas such as =SUM(B2:B9) work in .xlsx); plain text for .txt and .json.",
+  "Use a short file name without spaces. If the file contains ``` fences, open and close the file block with ```` instead. Only make a file when one is wanted, and keep remarks outside the block.",
+].join(" ");
+
 function systemPrompt(name: string, voice: boolean, memories: string[]): string {
   return [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
     memoryInstructions(name, memories),
+    voice ? "" : FILE_INSTRUCTIONS,
     voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."
       : "",

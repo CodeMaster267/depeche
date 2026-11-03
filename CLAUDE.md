@@ -47,6 +47,14 @@ under reduced motion. Mockups: `/mnt/project-files/depeche/screens/` in the proj
   `supabase/templates/`), so it works in the iPhone home-screen app. Google returns to `/auth/callback`.
 - Usernames are looked up on the server (`email_for_username`), never exposed to the browser.
 
+## Documents
+
+- Word, Excel and PowerPoint uploads are read on the server (`lib/docs/read.ts`) and sent as text;
+  PDFs and images go to providers as files.
+- Models make files by writing a ```` ```file:Name.ext ```` block (instructions in the chat route's
+  system prompt). The browser builds the file on Download (`lib/docs/write.ts`); only docx, pdf,
+  xlsx, csv, md, txt and json, never HTML or SVG.
+
 ## Bug reports
 
 - People report bugs at `/report` (3 a day each, enforced in `submit_bug_report`). Who sent a report

@@ -8,6 +8,8 @@ import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import "katex/dist/katex.min.css";
 import { Mermaid } from "./Mermaid";
+import { FileCard } from "./FileCard";
+import { fileFromLang } from "@/lib/docs/kinds";
 import { normaliseMaths } from "@/lib/markdown";
 
 /**
@@ -35,6 +37,9 @@ function CodeBlock({ node, children }: { node?: HastNode; children?: ReactNode }
   const raw = textOf(code).replace(/\n$/, "");
 
   if (lang === "mermaid" && !streaming) return <Mermaid source={raw} />;
+  // A file the model made, written as ```file:Name.ext.
+  const file = fileFromLang(lang);
+  if (file) return <FileCard name={file.name} kind={file.kind} content={raw} streaming={streaming} />;
 
   return (
     <div className="md-code">
