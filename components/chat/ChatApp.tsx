@@ -10,9 +10,11 @@ import type { Shell } from "@/lib/chat/load";
 import { deleteChat, pinChat, refreshChat, refreshShell, rememberModel, renameChat } from "@/app/c/actions";
 import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
 import { VoiceMode } from "@/components/voice/VoiceMode";
+import type { FileRef } from "@/lib/chat/files";
+import { ACCEPT, AttachmentTray, MessageFiles, useAttachments, type Pending } from "./Attachments";
 import { ModelPicker } from "./ModelPicker";
 import { Sidebar } from "./Sidebar";
-import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, RetryIcon, StopIcon } from "./icons";
+import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions, Searching, Sources } from "./Sources";
 import type { Source } from "@/lib/chat/thread";
 
@@ -64,6 +66,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     });
   };
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const attachments = useAttachments(initialShell.userId);
   const abortRef = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
@@ -108,7 +111,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     rememberModel(id).catch(() => {});
   };
 
-  async function run(body: { text?: string; regenerate?: string; voice?: boolean }, optimistic: Live[]) {
+  async function run(body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean }, optimistic: Live[]) {
     if (!model) return;
     setBanner(null);
     setBusy(true);
@@ -178,7 +181,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
               chatId = ev.chatId;
               const created: ChatRow = {
                 id: ev.chatId,
-                title: titleFrom(ev.userMessage.content.text ?? ""),
+                title: titleFrom(ev.userMessage.content.text || ev.userMessage.content.files?.[0]?.name || ""),
                 model: model.id,
                 pinned: false,
                 updated_at: new Date().toISOString(),
@@ -237,24 +240,24 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
 
   const send = () => {
     const text = draft.trim();
-    if (!text || busy || !model) return;
+    if ((!text && !attachments.ready) || attachments.uploading || busy || !model) return;
     setDraft("");
-    sendText(text);
+    sendText(text, false, attachments.take());
   };
 
-  const sendText = (text: string, voice = false) => {
-    if (!text || busy || !model) return;
+  const sendText = (text: string, voice = false, files: FileRef[] = []) => {
+    if ((!text && !files.length) || busy || !model) return;
     const mine: Live = {
       id: draftId(),
       chat_id: chat?.id ?? "",
       parent_id: null,
       role: "user",
-      content: { text },
+      content: files.length ? { text, files } : { text },
       status: "completed",
       model: null,
       created_at: new Date().toISOString(),
     };
-    run(voice ? { text, voice } : { text }, [mine]);
+    run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}) }, [mine]);
   };
 
   const regenerate = (questionId: string) => {
@@ -346,13 +349,16 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             ) : null}
             {messages.map((m) =>
               m.role === "user" ? (
-                <div key={m.id} className="flex justify-end">
-                  <div
-                    data-testid="user-message"
-                    className="max-w-[85%] whitespace-pre-wrap break-words rounded-[22px] bg-inv px-5 py-3 text-[17px] leading-relaxed text-on-inv"
-                  >
-                    {m.content.text}
-                  </div>
+                <div key={m.id} className="flex flex-col items-end gap-2">
+                  {m.content.files?.length ? <MessageFiles files={m.content.files} /> : null}
+                  {m.content.text ? (
+                    <div
+                      data-testid="user-message"
+                      className="max-w-[85%] whitespace-pre-wrap break-words rounded-[22px] bg-inv px-5 py-3 text-[17px] leading-relaxed text-on-inv"
+                    >
+                      {m.content.text}
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <Reply
@@ -373,6 +379,13 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             </p>
           ) : null}
           <Composer
+            attachments={attachments.items}
+            onAttach={async (files) => {
+              const skipped = await attachments.add(files);
+              if (skipped) setBanner("You can attach up to 5 files to one message.");
+            }}
+            onRemoveAttachment={attachments.remove}
+            canSend={!attachments.uploading && (!!draft.trim() || attachments.ready)}
             value={draft}
             onChange={setDraft}
             onSend={send}
@@ -470,6 +483,10 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
 }
 
 function Composer({
+  attachments,
+  onAttach,
+  onRemoveAttachment,
+  canSend,
   value,
   onChange,
   onSend,
@@ -485,6 +502,10 @@ function Composer({
 }: {
   search: boolean;
   onToggleSearch: () => void;
+  attachments: Pending[];
+  onAttach: (files: File[]) => void;
+  onRemoveAttachment: (id: string) => void;
+  canSend: boolean;
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
@@ -497,6 +518,8 @@ function Composer({
   onVoiceError: (msg: string) => void;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
@@ -506,56 +529,99 @@ function Composer({
 
   return (
     <form
-      className="flex items-end gap-1 rounded-[26px] border border-line bg-bg p-2 pl-2 focus-within:border-fg"
+      className={`rounded-[26px] border bg-bg p-2 focus-within:border-fg ${dragging ? "border-fg" : "border-line"}`}
       onSubmit={(e) => {
         e.preventDefault();
         onSend();
       }}
+      onDragOver={(e) => {
+        if (disabled || !e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        setDragging(false);
+        if (disabled || !e.dataTransfer.files.length) return;
+        e.preventDefault();
+        onAttach([...e.dataTransfer.files]);
+      }}
     >
-      <button
-        type="button"
-        onClick={onToggleSearch}
-        aria-pressed={search}
-        aria-label="Search the web"
-        title={search ? "Web search on: the model searches when it needs to" : "Web search off"}
-        className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors ${search ? "text-fg" : "text-faint"}`}
-      >
-        {search ? <GlobeIcon /> : <GlobeOffIcon />}
-      </button>
-      <textarea
-        ref={box}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          // On a keyboard, Enter sends. On phones, Enter is a new line and the button sends.
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
-            e.preventDefault();
-            onSend();
-          }
-        }}
-        rows={1}
-        placeholder="Message Depeche"
-        aria-label="Message Depeche"
-        disabled={disabled}
-        className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
-      />
-      {voice ? <DictateButton onText={onDictated} onError={onVoiceError} disabled={disabled} /> : null}
-      {busy ? (
-        <button type="button" onClick={onStop} aria-label="Stop" className="press glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full">
-          <StopIcon />
-        </button>
-      ) : voice && !value.trim() ? (
-        <VoiceChatButton onOpen={onVoice} disabled={disabled} />
-      ) : (
+      <AttachmentTray items={attachments} onRemove={onRemoveAttachment} />
+      <div className="flex items-end gap-1">
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          accept={ACCEPT}
+          className="hidden"
+          data-testid="file-input"
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = "";
+            if (files.length) onAttach(files);
+          }}
+        />
         <button
-          type="submit"
-          aria-label="Send"
-          disabled={disabled || !value.trim()}
-          className="press glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-opacity disabled:opacity-30"
+          type="button"
+          onClick={() => picker.current?.click()}
+          disabled={disabled}
+          aria-label="Attach photos or files"
+          className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
         >
-          <ArrowUpIcon />
+          <PaperclipIcon />
         </button>
-      )}
+        <button
+          type="button"
+          onClick={onToggleSearch}
+          aria-pressed={search}
+          aria-label="Search the web"
+          title={search ? "Web search on: the model searches when it needs to" : "Web search off"}
+          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors ${search ? "text-fg" : "text-faint"}`}
+        >
+          {search ? <GlobeIcon /> : <GlobeOffIcon />}
+        </button>
+        <textarea
+          ref={box}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.files];
+            if (!files.length) return;
+            e.preventDefault();
+            onAttach(files);
+          }}
+          onKeyDown={(e) => {
+            // On a keyboard, Enter sends. On phones, Enter is a new line and the button sends.
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+          rows={1}
+          placeholder="Message Depeche"
+          aria-label="Message Depeche"
+          disabled={disabled}
+          className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
+        />
+        {voice ? <DictateButton onText={onDictated} onError={onVoiceError} disabled={disabled} /> : null}
+        {busy ? (
+          <button type="button" onClick={onStop} aria-label="Stop" className="press glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full">
+            <StopIcon />
+          </button>
+        ) : voice && !value.trim() && !attachments.length ? (
+          <VoiceChatButton onOpen={onVoice} disabled={disabled} />
+        ) : (
+          <button
+            type="submit"
+            aria-label="Send"
+            disabled={disabled || !canSend}
+            className="press glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-opacity disabled:opacity-30"
+          >
+            <ArrowUpIcon />
+          </button>
+        )}
+      </div>
     </form>
   );
 }

@@ -96,3 +96,13 @@ export const GlobeOffIcon = (p: P) => (
     <path d="M4 4l16 16" />
   </svg>
 );
+export const PaperclipIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M20 11.5l-7.8 7.8a5 5 0 01-7.1-7.1l8.2-8.2a3.4 3.4 0 014.8 4.8l-8.1 8.1a1.7 1.7 0 01-2.4-2.4l7.4-7.4" />
+  </svg>
+);
+export const FileIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5" />
+  </svg>
+);
