@@ -182,7 +182,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             | { type: "text"; text: string }
             | { type: "thinking"; text: string }
             | { type: "notice"; text: string }
-            | { type: "searching"; query?: string }
+            | { type: "searching"; query?: string; where?: "chat" }
             | { type: "sources"; sources: Source[] }
             | { type: "done" | "error"; message: MessageRow | null; error?: string };
           if (ev.type === "start") {
@@ -212,7 +212,16 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             if (frame) cancelAnimationFrame(frame);
             flush();
             const q = ev.query;
-            patchReply((m) => ({ ...stopThinking(m), searchingNow: true, queries: q ? [...(m.queries ?? []), q] : (m.queries ?? []) }));
+            const where = ev.where === "chat" ? "chat" : "web";
+            patchReply((m) => ({
+              ...stopThinking(m),
+              searchingNow: true,
+              searchingWhere: where,
+              // Web searches and lookups in this chat are listed apart, so a line never names the wrong one.
+              ...(where === "chat"
+                ? { lookupQueries: q ? [...(m.lookupQueries ?? []), q] : (m.lookupQueries ?? []) }
+                : { queries: q ? [...(m.queries ?? []), q] : (m.queries ?? []) }),
+            }));
           } else if (ev.type === "sources") {
             const sources = ev.sources;
             patchReply((m) => ({ ...m, content: { ...m.content, sources } }));

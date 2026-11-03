@@ -4,7 +4,8 @@ import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
 import { MAX_SEARCHES, estimateCost, findModel, searchCost } from "@/lib/ai/models";
-import { ProviderError, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
+import { ProviderError, fakeAi, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
+import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOfferChatSearch } from "@/lib/chat/search";
 import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
 import { MAX_FILES_PER_MESSAGE, UPLOAD_BUCKET, isFileRef, type FileRef } from "@/lib/chat/files";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
@@ -140,17 +141,33 @@ export async function POST(req: NextRequest) {
       fileTokens += f.mime === "application/pdf" ? Math.ceil(f.size / 40) + 3_000 : 5_000;
     }
   }
-  const plan = planReply(modelsThatMayAnswer(model), inputTokensUpperBound(seen), {
-    // Web searches have a fee each, and the pages they read come back as extra input.
-    extraUsd: search ? Math.max(...modelsThatMayAnswer(model).map((m) => searchCost(m.provider, MAX_SEARCHES))) : 0,
-    extraInputTokens: (search ? MAX_SEARCHES * SEARCH_INPUT_TOKENS : 0) + fileTokens,
-  });
-  const { data: holds, error: holdError } = await admin.rpc("reserve_spend", {
-    p_person: me.userId,
-    p_want: plan.want,
-    p_need: plan.need,
-  });
-  const hold = (holds as { hold_id: string; amount_usd: number }[] | null)?.[0];
+  // "Search this chat" may be offered when part of the chat won't be sent word for word (very
+  // long chats today; summarised ones once compaction lands). Each lookup sends the conversation
+  // to the model again, so the hold covers that too, or the tool isn't offered.
+  const historyTotal = all.reduce((n, m) => n + (m.content.text?.length ?? 0), text.length);
+  let mayLookUp = model.provider !== "groq" && (historyTotal + fileTokens * 2 > HISTORY_CHARS * 0.8 || fakeAi());
+  const reserve = async (lookups: boolean) => {
+    const baseInput = inputTokensUpperBound(seen);
+    const searchInput = search ? MAX_SEARCHES * SEARCH_INPUT_TOKENS : 0;
+    const lookupInput = lookups
+      ? MAX_CHAT_SEARCHES * (baseInput + fileTokens + searchInput) +
+        CHAT_SEARCH_RESULT_TOKENS * ((MAX_CHAT_SEARCHES * (MAX_CHAT_SEARCHES + 1)) / 2)
+      : 0;
+    const plan = planReply(modelsThatMayAnswer(model), baseInput, {
+      // Web searches have a fee each, and the pages they read come back as extra input.
+      extraUsd: search ? Math.max(...modelsThatMayAnswer(model).map((m) => searchCost(m.provider, MAX_SEARCHES))) : 0,
+      extraInputTokens: searchInput + fileTokens + lookupInput,
+    });
+    const { data, error } = await admin.rpc("reserve_spend", { p_person: me.userId, p_want: plan.want, p_need: plan.need });
+    return { plan, hold: (data as { hold_id: string; amount_usd: number }[] | null)?.[0], error };
+  };
+  let reserved = await reserve(mayLookUp);
+  if (!reserved.hold && mayLookUp && reserved.error?.code === "P0001") {
+    // Too close to the limit for lookups: answer without them rather than refusing.
+    mayLookUp = false;
+    reserved = await reserve(false);
+  }
+  const { plan, hold, error: holdError } = reserved;
   if (!hold) {
     return fail(402, holdError?.code === "P0001" ? `${holdError.message}.` : "Couldn't check your spending limit. Try again.");
   }
@@ -211,6 +228,8 @@ export async function POST(req: NextRequest) {
   const path: MessageRow[] = [];
   for (let m: MessageRow | undefined = question; m; m = m.parent_id ? byId.get(m.parent_id) : undefined) path.unshift(m);
   const turns: Turn[] = [];
+  // Messages the model gets word for word (or that have nothing to send); the rest can be looked up.
+  const sent = new Set<string>([question.id]);
   let budget = HISTORY_CHARS;
   let fileBudget = FILE_BYTES_BUDGET;
   const storage = supabaseAdmin().storage.from(UPLOAD_BUCKET);
@@ -236,15 +255,25 @@ export async function POST(req: NextRequest) {
       }
     }
     t = t.trim();
-    if ((!t && !attached.length) || m.role === "system" || (m.role === "assistant" && m.status === "failed")) continue;
+    if ((!t && !attached.length) || m.role === "system" || (m.role === "assistant" && m.status === "failed")) {
+      sent.add(m.id);
+      continue;
+    }
     if (budget - t.length < 0 && turns.length) break;
     budget -= t.length;
+    sent.add(m.id);
     // Providers expect turns to alternate, so two in a row from one side are joined.
     if (turns[0]?.role === m.role) {
       turns[0] = { ...turns[0], text: [t, turns[0].text].filter(Boolean).join("\n\n"), files: [...attached, ...(turns[0].files ?? [])] };
     } else turns.unshift({ role: m.role as Turn["role"], text: t, files: attached.length ? attached : undefined });
   }
   while (turns[0]?.role === "assistant") turns.shift();
+  // The question itself is in front of the model, so a lookup searches everything before it.
+  const earlier = path.filter((m) => m.id !== question.id);
+  const chatSearch =
+    mayLookUp && (shouldOfferChatSearch(earlier, sent) || fakeAi())
+      ? chatSearcher(db, chatId, earlier, me.profile.display_name)
+      : undefined;
 
   const abort = new AbortController();
   req.signal.addEventListener("abort", () => abort.abort());
@@ -280,12 +309,13 @@ export async function POST(req: NextRequest) {
       let reasoning = "";
       const clock = thinkingClock();
       const queries: string[] = [];
+      const lookups: string[] = [];
       // The files sent with the question, shown as "Read report.pdf".
       const read = (question.content.files ?? []).filter((f) => isFileRef(f, me.userId)).map((f) => f.name.slice(0, 200));
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput })) {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch })) {
           if (ev.type !== "thinking") clock.stopped();
           if (ev.type === "thinking") {
             clock.thinking();
@@ -304,10 +334,10 @@ export async function POST(req: NextRequest) {
           } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
           else if (ev.type === "model") used = findModel(ev.id) ?? model;
           else if (ev.type === "searching") {
-            if (ev.query) {
-              queried++;
-              if (queries.length < MAX_QUERIES && !queries.includes(ev.query)) queries.push(ev.query);
-            }
+            // Looking back through this chat is free; only web searches have a fee.
+            if (ev.query && ev.where !== "chat") queried++;
+            const list = ev.where === "chat" ? lookups : queries;
+            if (ev.query && list.length < MAX_QUERIES && !list.includes(ev.query)) list.push(ev.query);
             send(ev);
           }
           else if (ev.type === "sources") {
@@ -362,6 +392,7 @@ export async function POST(req: NextRequest) {
             ...(suggestions ? { suggestions } : {}),
             ...(reasoning.trim() ? { reasoning, thoughtMs: clock.ms } : {}),
             ...(queries.length ? { queries } : {}),
+            ...(lookups.length ? { lookups } : {}),
             ...(read.length ? { read } : {}),
             cost,
           },

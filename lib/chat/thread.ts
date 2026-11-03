@@ -27,6 +27,8 @@ export type MessageRow = {
     thoughtMs?: number;
     /** What the reply searched the web for. */
     queries?: string[];
+    /** What the reply looked up in earlier messages of this chat. */
+    lookups?: string[];
     /** Files the reply read (those sent with the question). */
     read?: string[];
   };

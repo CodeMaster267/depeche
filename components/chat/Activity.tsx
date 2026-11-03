@@ -16,7 +16,12 @@ export type LiveActivity = {
   /** Thinking already finished in earlier spells (ms). */
   thoughtSoFar?: number;
   searchingNow?: boolean;
+  /** What it is searching: the web, or earlier messages of this chat. */
+  searchingWhere?: "web" | "chat";
+  /** Web searches so far. */
   queries?: string[];
+  /** Lookups in this chat so far. */
+  lookupQueries?: string[];
 };
 
 /**
@@ -28,9 +33,13 @@ export function Activity({ message: m }: { message: MessageRow & LiveActivity })
   const c = m.content;
   const queries = c.queries ?? m.queries ?? [];
   const reasoning = c.reasoning ?? "";
-  const searched = !!(m.searchingNow || queries.length || c.sources?.length || c.searches);
+  const lookups = c.lookups ?? m.lookupQueries ?? [];
+  const searchingChat = !!(m.streaming && m.searchingNow && m.searchingWhere === "chat");
+  const searchingWeb = !!(m.streaming && m.searchingNow && m.searchingWhere !== "chat");
+  const searched = searchingWeb || !!(queries.length || c.sources?.length || c.searches);
+  const lookedBack = searchingChat || lookups.length > 0;
   const read = c.read ?? [];
-  if (!read.length && !reasoning && !m.thinkingNow && !searched) return null;
+  if (!read.length && !reasoning && !m.thinkingNow && !searched && !lookedBack) return null;
   return (
     <div data-testid="activity" className="flex flex-col items-start gap-0.5">
       {read.map((name, i) => (
@@ -41,7 +50,8 @@ export function Activity({ message: m }: { message: MessageRow & LiveActivity })
         </p>
       ))}
       {reasoning || m.thinkingNow ? <Thought m={m} reasoning={reasoning} /> : null}
-      {searched ? <Searched m={m} queries={queries} /> : null}
+      {lookedBack ? <LookedBack live={searchingChat} queries={lookups} /> : null}
+      {searched ? <Searched m={m} live={searchingWeb} queries={queries} /> : null}
     </div>
   );
 }
@@ -96,11 +106,35 @@ function Thought({ m, reasoning }: { m: MessageRow & LiveActivity; reasoning: st
   );
 }
 
+/** "Looking back through this chat for …" while it looks up earlier messages; "Looked back through this chat" after. */
+function LookedBack({ live, queries }: { live: boolean; queries: string[] }) {
+  const last = queries.at(-1);
+  const label = live
+    ? last
+      ? `Looking back through this chat for “${last}”`
+      : "Looking back through this chat"
+    : "Looked back through this chat";
+  return (
+    <div data-testid={live ? "searching" : "lookups"} data-where="chat" aria-live={live ? "polite" : undefined} className="w-full">
+      <Line testId="looked-back" label={label} live={live}>
+        {queries.length && !live ? (
+          <ul className="flex flex-col gap-1 pb-1 text-[14px] text-mute">
+            {queries.map((q) => (
+              <li key={q} className="break-words">
+                “{q}”
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </Line>
+    </div>
+  );
+}
+
 /** "Searching the web for …" while it searches; "Searched the web · 3 sources" afterwards. */
-function Searched({ m, queries }: { m: MessageRow & LiveActivity; queries: string[] }) {
+function Searched({ m, live, queries }: { m: MessageRow & LiveActivity; live: boolean; queries: string[] }) {
   const sources = m.content.sources ?? [];
   const searches = m.content.searches;
-  const live = !!(m.streaming && m.searchingNow);
   const last = queries.at(-1);
   const label = live
     ? last
