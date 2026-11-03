@@ -9,7 +9,7 @@ import { allow } from "@/lib/rate-limit";
 
 export const fail = (status: number, error: string) => NextResponse.json({ error }, { status });
 
-type Ready = { me: Me; provider: Provider; apiKey: string };
+type Ready = { me: Me; keys: { provider: Provider; apiKey: string }[] };
 
 /**
  * The checks every voice request goes through, the same as a chat message: signed in, under the
@@ -28,22 +28,25 @@ export async function prepare(kind: "listen" | "speak"): Promise<Ready | NextRes
     .eq("family_id", me.profile.family_id)
     .returns<{ provider: Provider; ciphertext: string }[]>();
   const keys = rows ?? [];
-  const provider = voiceProviders(keys.map((k) => k.provider))[kind];
-  if (!provider) {
+  const order = voiceProviders(keys.map((k) => k.provider))[kind];
+  if (!order.length) {
     return fail(
       400,
       kind === "listen"
-        ? "Voice needs a Google or OpenAI key. Ask your family admin to add one in Family settings."
+        ? "Voice needs a Groq, Google or OpenAI key. Ask your family admin to add one in Family settings."
         : "Reading aloud needs a Google or OpenAI key.",
     );
   }
-
-  try {
-    const apiKey = decryptSecret(fromBytea(keys.find((k) => k.provider === provider)!.ciphertext));
-    return { me, provider, apiKey };
-  } catch {
-    return fail(500, "Your family's key needs to be added again. Ask your family admin.");
+  const usable: Ready["keys"] = [];
+  for (const provider of order) {
+    try {
+      usable.push({ provider, apiKey: decryptSecret(fromBytea(keys.find((k) => k.provider === provider)!.ciphertext)) });
+    } catch {
+      // That key needs adding again; the others may still work.
+    }
   }
+  if (!usable.length) return fail(500, "Your family's key needs to be added again. Ask your family admin.");
+  return { me, keys: usable };
 }
 
 /**

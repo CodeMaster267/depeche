@@ -76,8 +76,8 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   // Some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
   const searchable = canSearch(model);
   const noModels = shell.modelIds.length === 0;
-  // Listening needs a provider that understands audio (OpenAI or Google); Claude has none.
-  const canListen = shell.modelIds.some((id) => ["openai", "google"].includes(findModel(id)?.provider ?? ""));
+  // Listening needs a provider that understands audio (Groq, OpenAI or Google); Claude has none.
+  const canListen = shell.modelIds.some((id) => ["groq", "openai", "google"].includes(findModel(id)?.provider ?? ""));
 
   // Keep the newest text in view while a reply streams, unless the person scrolled up to read.
   useLayoutEffect(() => {
