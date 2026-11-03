@@ -19,6 +19,8 @@ import type { Provider } from "@/lib/ai/models";
  */
 export const VOICE = {
   transcribe: {
+    // Groq's Whisper: free tier on Groq keys, and fast. $0.04 an audio hour on paid keys.
+    groq: { model: "whisper-large-v3-turbo", perMinute: 0.04 / 60 },
     openai: { model: "gpt-transcribe", perMinute: 0.0045 },
     // Audio input is estimated at 32 tokens a second at twice Flash's text price, to err high.
     // Flash-Lite first: writing out speech needs no deep model, and it answers in a second or two.
@@ -32,11 +34,16 @@ export const VOICE = {
 } as const;
 
 /** Which provider listens and which speaks, given the providers a family has keys for. */
-export function voiceProviders(providers: readonly string[]): { listen: Provider | null; speak: Provider | null } {
+/**
+ * Which providers can listen and speak, best first, given the providers a family has keys for.
+ * Listening prefers Groq's free Whisper. If one fails (a used-up free quota, say), the next is
+ * tried. Groq's own speech voice is left out for now: it is a preview limited to 200 characters.
+ */
+export function voiceProviders(providers: readonly string[]): { listen: Provider[]; speak: Provider[] } {
   const has = (p: Provider) => providers.includes(p);
   return {
-    listen: has("openai") ? "openai" : has("google") ? "google" : null,
-    speak: has("google") ? "google" : has("openai") ? "openai" : null,
+    listen: (["groq", "openai", "google"] as const).filter(has),
+    speak: (["google", "openai"] as const).filter(has),
   };
 }
 
@@ -56,16 +63,37 @@ export function wavSeconds(wav: Uint8Array): number {
   return (wav.length - 44) / (rate * channels * (bits / 8));
 }
 
-export async function transcribe(provider: Provider, apiKey: string, wav: Uint8Array, signal: AbortSignal): Promise<Transcript> {
+/**
+ * `language` is the device's language (two letters, like "en"). Without it, Whisper guesses from
+ * the sound alone and, on a short or noisy clip, often picks the wrong language entirely.
+ */
+export async function transcribe(provider: Provider, apiKey: string, wav: Uint8Array, signal: AbortSignal, language?: string): Promise<Transcript> {
   const seconds = wavSeconds(wav);
   if (fakeAi()) {
     // Tests: a fixed sentence, so a voice turn can be followed end to end.
     return { text: "What is the quadratic formula?", model: "fake", cost: 0, input: 0, output: 0 };
   }
+  if (provider === "groq") {
+    // Groq speaks OpenAI's API, so the same client works with Groq's address.
+    const client = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1", maxRetries: 0, timeout: 15_000 });
+    const g = VOICE.transcribe.groq;
+    const res = await client.audio.transcriptions.create(
+      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: g.model, response_format: "json", ...(language ? { language } : {}) },
+      { signal },
+    );
+    return {
+      text: res.text.trim(),
+      model: g.model,
+      // Groq bills at least 10 seconds a request.
+      cost: (Math.max(10, seconds) / 60) * g.perMinute,
+      input: Math.ceil(seconds * 32),
+      output: Math.ceil(res.text.length / 4),
+    };
+  }
   if (provider === "openai") {
     const client = new OpenAI({ apiKey, maxRetries: 1 });
     const res = await client.audio.transcriptions.create(
-      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: VOICE.transcribe.openai.model },
+      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: VOICE.transcribe.openai.model, ...(language ? { language } : {}) },
       { signal },
     );
     return {
@@ -88,7 +116,7 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
             parts: [
               { inlineData: { mimeType: "audio/wav", data: Buffer.from(wav).toString("base64") } },
               {
-                text: "Transcribe this recording exactly as spoken, in the language spoken, with normal punctuation. Reply with only the words said. If nobody speaks, reply with nothing.",
+                text: `Transcribe this recording exactly as spoken, with normal punctuation.${language ? ` The speaker most likely speaks the language with code "${language}".` : ""} Reply with only the words said. If nobody speaks, reply with nothing.`,
               },
             ],
           },
@@ -148,7 +176,8 @@ export async function speak(provider: Provider, apiKey: string, text: string, si
     const ai = new GoogleGenAI({ apiKey });
     const res = await ai.models.generateContent({
       model: g.model,
-      contents: [{ role: "user", parts: [{ text: `Read this aloud in a warm, natural voice:\n\n${text}` }] }],
+      // Only the words to say: any instruction placed here gets read out as well.
+      contents: [{ role: "user", parts: [{ text }] }],
       config: {
         abortSignal: signal,
         responseModalities: ["AUDIO"],
