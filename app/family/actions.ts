@@ -4,15 +4,17 @@ import { revalidatePath } from "next/cache";
 import { INVITE_DAYS } from "@/lib/config";
 import { friendly, requireMe, siteOrigin } from "@/lib/auth/session";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { newInviteToken } from "@/lib/tokens";
-import { cleanEmail, cleanName, passwordProblem } from "@/lib/validate";
+import { newInviteToken, newTempPassword } from "@/lib/tokens";
+import { cleanEmail, cleanName } from "@/lib/validate";
+import { TOO_MANY, allow } from "@/lib/rate-limit";
 import { encryptSecret, toBytea } from "@/lib/crypto";
 import { listKeyModels } from "@/lib/ai/providers";
 import type { Provider } from "@/lib/ai/models";
 
-export type ActionState = { error?: string; ok?: string; link?: string } | undefined;
+export type ActionState = { error?: string; ok?: string; link?: string; password?: string } | undefined;
 
 async function makeInvite(actor: string, family: string, name: string, email: string, role: "member" | "admin") {
+  if (!(await allow(["invitesPerAdmin", actor]))) return { error: TOO_MANY };
   const { token, hash } = newInviteToken();
   const expires = new Date(Date.now() + INVITE_DAYS * 86_400_000).toISOString();
   const { error } = await supabaseAdmin().rpc("create_invite", {
@@ -72,17 +74,45 @@ export async function setCap(memberId: string, _: ActionState, form: FormData): 
   return { ok: "Saved." };
 }
 
-export async function resetPassword(memberId: string, _: ActionState, form: FormData): Promise<ActionState> {
+/**
+ * Gives a member a one-time temporary password. The database checks the admin may do this, logs
+ * it, signs the member out everywhere and makes them choose their own password when they next
+ * sign in. The temporary password is shown to the admin once and never stored by Depeche.
+ */
+export async function resetPassword(memberId: string): Promise<ActionState> {
   const me = await requireMe();
-  const password = String(form.get("password") ?? "");
-  const problem = passwordProblem(password);
-  if (problem) return { error: problem };
+  if (!(await allow(["adminActions", me.userId]))) return { error: TOO_MANY };
   const admin = supabaseAdmin();
-  const { data: allowed } = await admin.rpc("is_admin_of", { actor: me.userId, person: memberId });
-  if (allowed !== true) return { error: "Only this family's admin can reset passwords." };
+  const { error: denied } = await admin.rpc("start_password_reset", { p_actor: me.userId, p_member: memberId });
+  if (denied) return { error: friendly(denied) };
+  const password = newTempPassword();
   const { error } = await admin.auth.admin.updateUserById(memberId, { password });
-  if (error) return { error: "Couldn't set that password. Try a different one." };
-  return { ok: "New password set. Tell them in person, and they can change it in Account." };
+  if (error) return { error: "Couldn't set a temporary password. Try again." };
+  revalidatePath("/family");
+  return {
+    password,
+    ok: "Give them this temporary password in person. It works for one day, and they'll choose their own when they sign in.",
+  };
+}
+
+/** Signs a member out on every device. */
+export async function signOutMember(memberId: string): Promise<ActionState> {
+  const me = await requireMe();
+  if (!(await allow(["adminActions", me.userId]))) return { error: TOO_MANY };
+  const { error } = await supabaseAdmin().rpc("sign_out_everywhere", { p_actor: me.userId, p_person: memberId });
+  if (error) return { error: friendly(error) };
+  revalidatePath("/family");
+  return { ok: "Signed out on all their devices." };
+}
+
+/** Makes a member the family's backup admin, or removes an admin. */
+export async function setAdmin(memberId: string, makeAdmin: boolean): Promise<ActionState> {
+  const me = await requireMe();
+  const { error } = await supabaseAdmin().rpc("set_admin", { p_actor: me.userId, p_member: memberId, p_admin: makeAdmin });
+  if (error) return { error: friendly(error) };
+  revalidatePath("/family");
+  revalidatePath("/", "layout");
+  return { ok: makeAdmin ? "They're now a backup admin." : "They're no longer an admin." };
 }
 
 const PROVIDER_IDS = ["anthropic", "openai", "google", "groq"] as const;
@@ -96,6 +126,7 @@ export async function saveProviderKey(provider: string, _: ActionState, form: Fo
   const me = await requireMe();
   if (!PROVIDER_IDS.includes(provider as Provider)) return { error: "Unknown provider." };
   if (me.profile.role !== "admin") return { error: "Only a family admin can add keys." };
+  if (!(await allow(["keyChecks", me.userId]))) return { error: TOO_MANY };
   const key = String(form.get("key") ?? "").trim();
   if (key.length < 20 || key.length > 400 || /\s/.test(key)) return { error: "That doesn't look like a key. Copy it again." };
   const usable = await listKeyModels(provider as Provider, key);

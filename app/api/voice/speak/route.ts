@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { MAX_SPEAK_CHARS, speak } from "@/lib/voice/speech";
 import { speakable } from "@/lib/voice/text";
-import { fail, prepare, reason, recordUsage } from "@/lib/voice/server";
+import { fail, prepare, reason, recordUsage, releaseHold, reserveVoice } from "@/lib/voice/server";
 
 export const maxDuration = 60;
 
@@ -18,13 +18,16 @@ export async function POST(req: NextRequest) {
   const text = typeof body.text === "string" ? speakable(body.text).slice(0, MAX_SPEAK_CHARS) : "";
   if (!text) return fail(400, "Nothing to read.");
 
+  const hold = await reserveVoice(me);
+  if (hold instanceof NextResponse) return hold;
   try {
     const s = await speak(provider, apiKey, text, req.signal);
-    await recordUsage(me, provider, s.model, s.input, s.output, s.cost);
+    await recordUsage(hold, provider, s.model, s.input, s.output, s.cost);
     return new Response(new Blob([s.pcm as BlobPart]), {
       headers: { "content-type": "application/octet-stream", "x-sample-rate": String(s.rate), "cache-control": "no-store" },
     });
   } catch (e) {
+    await releaseHold(hold, provider);
     return fail(502, reason(e));
   }
 }

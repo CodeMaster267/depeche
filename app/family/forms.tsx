@@ -2,7 +2,6 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { Button, Field, Kept, Notice, keepOnError } from "@/components/ui";
-import { MIN_PASSWORD } from "@/lib/validate";
 import {
   createFamily,
   inviteMember,
@@ -10,7 +9,9 @@ import {
   resetPassword,
   revokeInvite,
   saveProviderKey,
+  setAdmin,
   setCap,
+  signOutMember,
   type ActionState,
 } from "./actions";
 
@@ -93,16 +94,41 @@ export function RevokeButton({ id }: { id: string }) {
   );
 }
 
-type Member = { id: string; display_name: string; username: string | null; role: string; monthly_cap_usd: string };
+type Member = {
+  id: string;
+  display_name: string;
+  username: string | null;
+  role: string;
+  monthly_cap_usd: string;
+  share_titles: boolean;
+};
 
-export function MemberRow({ member, spent, isMe }: { member: Member; spent: number; isMe: boolean }) {
+export function MemberRow({
+  member,
+  spent,
+  isMe,
+  canAddAdmin,
+  titles,
+}: {
+  member: Member;
+  spent: number;
+  isMe: boolean;
+  canAddAdmin: boolean;
+  titles: string[];
+}) {
   const [open, setOpen] = useState(false);
   const [capState, capAction, capPending] = useActionState(keepOnError(setCap.bind(null, member.id)), undefined);
   const [pwState, pwAction, pwPending] = useActionState(resetPassword.bind(null, member.id), undefined);
+  const [outState, outAction, outPending] = useActionState(signOutMember.bind(null, member.id), undefined);
+  const [adminState, adminAction, adminPending] = useActionState(
+    setAdmin.bind(null, member.id, member.role !== "admin"),
+    undefined,
+  );
   const cap = Number(member.monthly_cap_usd);
+  const isAdmin = member.role === "admin";
 
   return (
-    <li className="flex flex-col gap-3 px-4 py-3">
+    <li data-testid="member-row" className="flex flex-col gap-3 px-4 py-3">
       <button type="button" className="flex items-center justify-between gap-3 text-left" onClick={() => setOpen(!open)} aria-expanded={open}>
         <span className="min-w-0">
           <span className="block truncate text-[17px]">
@@ -110,7 +136,7 @@ export function MemberRow({ member, spent, isMe }: { member: Member; spent: numb
             {isMe ? <span className="text-mute"> (you)</span> : null}
           </span>
           <span className="block truncate text-[13px] text-mute">
-            {member.role === "admin" ? "Admin" : "Member"}
+            {isAdmin ? "Admin" : "Member"}
             {member.username ? ` · @${member.username}` : ""}
           </span>
         </span>
@@ -128,10 +154,44 @@ export function MemberRow({ member, spent, isMe }: { member: Member; spent: numb
             <Button variant="secondary" disabled={capPending}>Save limit</Button>
           </form>
           {!isMe ? (
-            <form action={pwAction} className="flex flex-col gap-2">
-              <Field label="New password for them" name="password" type="password" autoComplete="new-password" minLength={MIN_PASSWORD} />
-              {pwState?.error ? <Notice tone="error">{pwState.error}</Notice> : pwState?.ok ? <Notice>{pwState.ok}</Notice> : null}
-              <Button variant="secondary" disabled={pwPending}>Reset their password</Button>
+            <>
+              <p className="text-[13px] text-mute" data-testid="titles-note">
+                {member.share_titles
+                  ? titles.length
+                    ? "Recent chat titles they share with you:"
+                    : "They share chat titles with you, but have no chats yet."
+                  : "They keep their chat titles private."}
+              </p>
+              {member.share_titles && titles.length ? (
+                <ul className="flex flex-col gap-1 text-[15px]" data-testid="shared-titles">
+                  {titles.map((t, i) => (
+                    <li key={i} className="truncate">{t}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <form action={pwAction} className="flex flex-col gap-2">
+                {pwState?.password ? (
+                  <div className="flex flex-col gap-2 rounded-2xl bg-soft p-4">
+                    <code className="font-mono text-[20px] tracking-wide" data-testid="temp-password">{pwState.password}</code>
+                    <p className="text-[13px] text-mute">{pwState.ok}</p>
+                  </div>
+                ) : pwState?.error ? (
+                  <Notice tone="error">{pwState.error}</Notice>
+                ) : null}
+                <Button variant="secondary" disabled={pwPending}>Give them a temporary password</Button>
+              </form>
+              <form action={outAction} className="flex flex-col gap-2">
+                {outState?.error ? <Notice tone="error">{outState.error}</Notice> : outState?.ok ? <Notice>{outState.ok}</Notice> : null}
+                <Button variant="secondary" disabled={outPending}>Sign them out everywhere</Button>
+              </form>
+            </>
+          ) : null}
+          {(!isAdmin && canAddAdmin) || isAdmin ? (
+            <form action={adminAction} className="flex flex-col gap-2">
+              {adminState?.error ? <Notice tone="error">{adminState.error}</Notice> : adminState?.ok ? <Notice>{adminState.ok}</Notice> : null}
+              <Button variant="secondary" disabled={adminPending}>
+                {isAdmin ? (isMe ? "Step down as admin" : "Remove as admin") : "Make backup admin"}
+              </Button>
             </form>
           ) : null}
         </div>

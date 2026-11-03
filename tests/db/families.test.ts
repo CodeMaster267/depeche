@@ -153,11 +153,12 @@ describe("families and invites", () => {
     await expect(one("select create_family($1, 'Mine')", [U.stranger])).rejects.toThrow(/Only the owner/);
   });
 
-  it("a family can never have two admins", async () => {
+  it("a family can never have more than two admins (an admin and a backup)", async () => {
     const fam = await setUpHasan();
+    await db.exec(`insert into profiles (id, family_id, role, display_name) values ('${U.bea}', '${fam}', 'admin', 'Bea')`);
     await expect(
-      db.exec(`insert into profiles (id, family_id, role, display_name) values ('${U.bea}', '${fam}', 'admin', 'Bea')`),
-    ).rejects.toThrow(/profiles_one_admin_per_family/);
+      db.exec(`insert into profiles (id, family_id, role, display_name) values ('${U.amir}', '${fam}', 'admin', 'Amir')`),
+    ).rejects.toThrow(/at most two admins/);
   });
 
   it("an admin can cancel an unused invite", async () => {

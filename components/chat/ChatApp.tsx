@@ -13,6 +13,7 @@ import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
 import { ACCEPT, AttachmentTray, MessageFiles, useAttachments, type Pending } from "./Attachments";
 import { ModelPicker } from "./ModelPicker";
+import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
 import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions, Searching, Sources } from "./Sources";
@@ -444,6 +445,7 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
       {!m.streaming && m.content.sources?.length ? <Sources sources={m.content.sources} searches={m.content.searches} /> : null}
       {!m.streaming && m.content.suggestions ? <SearchSuggestions html={m.content.suggestions} /> : null}
       {m.content.notice ? <p className="text-[14px] text-mute">{m.content.notice}</p> : null}
+      {!m.streaming && m.memory ? <MemorySuggestion key={m.memory.id} memory={m.memory} /> : null}
       {m.status === "stopped" ? <p className="text-[14px] text-mute">Stopped.</p> : null}
       {m.status === "failed" ? (
         <p role="alert" className="rounded-2xl border border-fg px-4 py-3 text-[15px]">

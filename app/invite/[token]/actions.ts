@@ -8,6 +8,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { supabaseServer } from "@/lib/supabase/server";
 import { hashToken } from "@/lib/tokens";
 import { cleanUsername, passwordProblem } from "@/lib/validate";
+import { TOO_MANY, allow, clientIp } from "@/lib/rate-limit";
 
 export type InviteState = { error?: string; sentTo?: string } | undefined;
 
@@ -22,6 +23,7 @@ async function openInvite(token: string): Promise<Preview | null> {
 /** Accept by choosing a username and password. The invite link itself is the proof. */
 export async function acceptWithPassword(token: string, _: InviteState, form: FormData): Promise<InviteState> {
   if (!isConfigured()) return { error: "Depeche isn't connected to its database yet." };
+  if (!(await allow(["invitePagePerIp", await clientIp()]))) return { error: TOO_MANY };
   const invite = await openInvite(token);
   if (!invite) return { error: "This invite has expired or was already used." };
 
@@ -55,6 +57,7 @@ export async function acceptWithPassword(token: string, _: InviteState, form: Fo
 /** Accept with Google or an emailed link: the person proves they own the invited address. */
 export async function acceptWithProof(token: string, _: InviteState, form: FormData): Promise<InviteState> {
   if (!isConfigured()) return { error: "Depeche isn't connected to its database yet." };
+  if (!(await allow(["invitePagePerIp", await clientIp()]))) return { error: TOO_MANY };
   const invite = await openInvite(token);
   if (!invite) return { error: "This invite has expired or was already used." };
   if (!(await ensureAuthUser(invite.email))) return { error: "Couldn't prepare your account. Try again." };
@@ -69,6 +72,7 @@ export async function acceptWithProof(token: string, _: InviteState, form: FormD
     if (error || !data.url) return { error: "Google sign-in isn't available right now. Choose a password instead." };
     redirect(data.url);
   }
+  if (!(await allow(["emailsPerAddress", invite.email]))) return { error: TOO_MANY };
   const { error } = await supabase.auth.signInWithOtp({
     email: invite.email,
     options: { shouldCreateUser: false, emailRedirectTo: `${origin}/auth/confirm` },

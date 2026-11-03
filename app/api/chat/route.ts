@@ -3,9 +3,12 @@ import { getMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
-import { estimateCost, findModel, searchCost } from "@/lib/ai/models";
-import { ProviderError, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
+import { MAX_SEARCHES, estimateCost, findModel, searchCost } from "@/lib/ai/models";
+import { ProviderError, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
+import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
 import { MAX_FILES_PER_MESSAGE, UPLOAD_BUCKET, isFileRef, type FileRef } from "@/lib/chat/files";
+import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
+import { allow } from "@/lib/rate-limit";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
@@ -46,6 +49,10 @@ const FILE_BYTES_BUDGET = 30 * 1024 * 1024;
 export async function POST(req: NextRequest) {
   const me = await getMe();
   if (!me) return fail(401, "Sign in again to keep chatting.");
+  if (me.profile.must_change_password) return fail(403, "Choose a new password first, in Account.");
+  if (!(await allow(["messagesPerMinute", me.userId], ["messagesPerDay", me.userId]))) {
+    return fail(429, "You're sending messages very fast. Wait a minute and try again.");
+  }
   const body = (await req.json().catch(() => ({}))) as Body;
 
   const model = findModel(body.model);
@@ -79,42 +86,100 @@ export async function POST(req: NextRequest) {
     return fail(500, "Your family's key needs to be added again. Ask your family admin.");
   }
 
-  // The monthly limit, checked before anything is spent.
-  const { data: spent } = await admin.rpc("month_spend", { p_person: me.userId });
-  const cap = Number(me.profile.monthly_cap_usd);
-  if (Number(spent ?? 0) >= cap) {
-    return fail(402, `You've reached your $${cap.toFixed(2)} limit for this month. Your family admin can raise it.`);
-  }
-
-  // The chat: an existing one of yours, or a new one titled from the first message.
+  // The chat: an existing one of yours, or (once the spending hold is in place) a new one.
   let chatId = body.chatId ?? null;
+  let all: MessageRow[] = [];
   if (chatId) {
     const { data: chat } = await db.from("chats").select("id").eq("id", chatId).eq("owner_id", me.userId).maybeSingle();
     if (!chat) return fail(404, "That chat doesn't exist.");
-  } else {
-    if (body.regenerate) return fail(404, "That chat doesn't exist.");
+    const { data: existing } = await db
+      .from("messages")
+      .select("id, chat_id, parent_id, role, content, status, model, created_at")
+      .eq("chat_id", chatId)
+      .order("created_at")
+      .returns<MessageRow[]>();
+    all = existing ?? [];
+  } else if (body.regenerate) {
+    return fail(404, "That chat doesn't exist.");
+  }
+
+  // The monthly limit is a hard one: reserve the most this reply could cost before anything is
+  // spent, counting other replies still being written. The reply is then kept short enough to fit.
+  const search = body.search === true;
+  // What the person asked Depeche to remember. Their own rows only, read as them.
+  const { data: remembered } = await db
+    .from("memories")
+    .select("content")
+    .eq("owner_id", me.userId)
+    .eq("status", "active")
+    .order("updated_at", { ascending: false })
+    .limit(MEMORY_PROMPT_LIMIT)
+    .returns<{ content: string }[]>();
+  const system = systemPrompt(
+    me.profile.display_name,
+    Boolean(body.voice),
+    (remembered ?? []).map((m) => m.content),
+  );
+  let historyChars = 0;
+  const seen = [system, text];
+  for (const m of [...all].reverse()) {
+    const t = m.content.text ?? "";
+    if (historyChars + t.length > HISTORY_CHARS + 50_000) break;
+    historyChars += t.length;
+    seen.push(t);
+  }
+  // Attached files count too: text files as text, images and PDFs by size, erring high.
+  let fileTokens = 0;
+  let binaryBytes = 0;
+  for (const f of [...fileRefs, ...all.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : []))]) {
+    if (!isFileRef(f, me.userId)) continue;
+    if (f.mime === "text/plain") fileTokens += Math.ceil(Math.min(f.size, 200_000) / 2);
+    else if (binaryBytes + f.size <= FILE_BYTES_BUDGET) {
+      binaryBytes += f.size;
+      fileTokens += f.mime === "application/pdf" ? Math.ceil(f.size / 40) + 3_000 : 5_000;
+    }
+  }
+  const plan = planReply(modelsThatMayAnswer(model), inputTokensUpperBound(seen), {
+    // Web searches have a fee each, and the pages they read come back as extra input.
+    extraUsd: search ? Math.max(...modelsThatMayAnswer(model).map((m) => searchCost(m.provider, MAX_SEARCHES))) : 0,
+    extraInputTokens: (search ? MAX_SEARCHES * SEARCH_INPUT_TOKENS : 0) + fileTokens,
+  });
+  const { data: holds, error: holdError } = await admin.rpc("reserve_spend", {
+    p_person: me.userId,
+    p_want: plan.want,
+    p_need: plan.need,
+  });
+  const hold = (holds as { hold_id: string; amount_usd: number }[] | null)?.[0];
+  if (!hold) {
+    return fail(402, holdError?.code === "P0001" ? `${holdError.message}.` : "Couldn't check your spending limit. Try again.");
+  }
+  const release = () =>
+    admin.rpc("settle_spend", {
+      p_hold: hold.hold_id, p_message: null, p_provider: model.provider, p_model: model.id, p_input: 0, p_output: 0, p_cost: 0,
+    });
+  const maxOutput = plan.maxOutput(Number(hold.amount_usd));
+
+  if (!chatId) {
     const { data: chat, error } = await db
       .from("chats")
       .insert({ owner_id: me.userId, title: titleFrom(text || fileRefs[0]?.name || ""), model: model.id })
       .select("id")
       .single<{ id: string }>();
-    if (error || !chat) return fail(500, "Couldn't start a chat. Try again.");
+    if (error || !chat) {
+      await release();
+      return fail(500, "Couldn't start a chat. Try again.");
+    }
     chatId = chat.id;
   }
-
-  const { data: existing } = await db
-    .from("messages")
-    .select("id, chat_id, parent_id, role, content, status, model, created_at")
-    .eq("chat_id", chatId)
-    .order("created_at")
-    .returns<MessageRow[]>();
-  let all = existing ?? [];
 
   // The question being answered.
   let question: MessageRow;
   if (body.regenerate) {
     const q = all.find((m) => m.id === body.regenerate && m.role === "user");
-    if (!q) return fail(404, "That message doesn't exist.");
+    if (!q) {
+      await release();
+      return fail(404, "That message doesn't exist.");
+    }
     question = q;
   } else {
     const parent = activePath(all).at(-1);
@@ -130,6 +195,7 @@ export async function POST(req: NextRequest) {
       })
       .select("id, chat_id, parent_id, role, content, status, model, created_at")
       .single<MessageRow>();
+    if (error || !inserted) await release();
     if (error?.code === "23505") {
       // The same send arrived twice (a retry after a dropped connection). Never answer it twice.
       return fail(409, "Already sent.");
@@ -179,17 +245,6 @@ export async function POST(req: NextRequest) {
   }
   while (turns[0]?.role === "assistant") turns.shift();
 
-  const system = [
-    `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${me.profile.display_name}.`,
-    `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
-    "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
-    body.voice
-      ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
   const abort = new AbortController();
   req.signal.addEventListener("abort", () => abort.abort());
   const encoder = new TextEncoder();
@@ -213,6 +268,7 @@ export async function POST(req: NextRequest) {
       send({ type: "start", chatId: finalChatId, userMessageId: questionId, userMessage: question });
 
       let reply = "";
+      const memory = memoryFilter();
       let used = model;
       let notice: string | undefined;
       let usage: { input: number; output: number } | undefined;
@@ -223,10 +279,14 @@ export async function POST(req: NextRequest) {
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search: body.search === true })) {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput })) {
           if (ev.type === "text") {
-            reply += ev.text;
-            send(ev);
+            // A suggested memory is taken out of the reply and offered separately.
+            const shown = memory.push(ev.text);
+            if (shown) {
+              reply += shown;
+              send({ type: "text", text: shown });
+            }
           } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
           else if (ev.type === "model") used = findModel(ev.id) ?? model;
           else if (ev.type === "searching") {
@@ -250,6 +310,12 @@ export async function POST(req: NextRequest) {
           status = "failed";
           error = e instanceof ProviderError ? e.message : "Something went wrong while answering. Try again.";
         }
+      }
+
+      const tail = memory.end();
+      if (tail) {
+        reply += tail;
+        send({ type: "text", text: tail });
       }
 
       // Stopped replies have no usage report, so estimate about four characters per token.
@@ -286,20 +352,30 @@ export async function POST(req: NextRequest) {
         .single<MessageRow>();
       const now = new Date().toISOString();
       await Promise.all([
-        usage.input || usage.output || cost
-          ? admin.from("usage_events").insert({
-              owner_id: me.userId,
-              message_id: saved?.id ?? null,
-              provider: used.provider,
-              model: used.id,
-              input_tokens: usage.input,
-              output_tokens: usage.output,
-              cost_usd: cost.toFixed(6),
-            })
-          : null,
+        // Swap the hold for what the reply really cost.
+        admin.rpc("settle_spend", {
+          p_hold: hold.hold_id,
+          p_message: saved?.id ?? null,
+          p_provider: used.provider,
+          p_model: used.id,
+          p_input: usage.input,
+          p_output: usage.output,
+          p_cost: Number(cost.toFixed(6)),
+        }),
         admin.from("chats").update({ updated_at: now, model: model.id }).eq("id", finalChatId),
         admin.from("profiles").update({ last_model: model.id }).eq("id", me.userId),
       ]);
+
+      // A suggested memory waits for the person to keep or dismiss it; nothing is used until then.
+      const fact = status === "completed" ? memory.suggestions[0] : undefined;
+      if (saved && fact) {
+        const { data: suggested } = await admin
+          .from("memories")
+          .insert({ owner_id: me.userId, content: fact, status: "suggested", source_message_id: saved.id })
+          .select("id, content")
+          .single<{ id: string; content: string }>();
+        if (suggested) saved.memory = suggested;
+      }
 
       if (error) send({ type: "error", error, message: saved });
       else send({ type: "done", message: saved });
@@ -322,4 +398,21 @@ export async function POST(req: NextRequest) {
       "x-accel-buffering": "no",
     },
   });
+}
+
+/** About how many input tokens the pages from one web search add, erring high. */
+const SEARCH_INPUT_TOKENS = 12_000;
+
+function systemPrompt(name: string, voice: boolean, memories: string[]): string {
+  return [
+    `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
+    `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
+    "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
+    memoryInstructions(name, memories),
+    voice
+      ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }

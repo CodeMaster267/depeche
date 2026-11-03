@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
+import { MAX_OUTPUT } from "@/lib/ai/budget";
 import type { Source } from "@/lib/chat/thread";
 import { webSource } from "@/lib/ai/sources";
 
@@ -39,12 +40,13 @@ export type ReplyRequest = {
   signal: AbortSignal;
   /** Let the model search the web with the provider's own search tool when it decides to. */
   search?: boolean;
+  /** The longest reply allowed, so it fits what was reserved against the person's limit. */
+  maxOutput?: number;
 };
 
 /** A provider error, worded for the person chatting. */
 export class ProviderError extends Error {}
 
-const MAX_OUTPUT = 32_000;
 
 /**
  * When a model is overloaded (Google's free tier often says "high demand"), try again twice, then
@@ -59,6 +61,12 @@ const BUSY_FALLBACK: Record<string, string> = {
   "openai/gpt-oss-20b": "openai/gpt-oss-120b",
   "qwen/qwen3.8-27b": "openai/gpt-oss-120b",
 };
+
+/** Every model that might answer when this one is chosen, so a spending hold covers the dearest. */
+export function modelsThatMayAnswer(model: Model): Model[] {
+  const backup = findModel(BUSY_FALLBACK[model.id]);
+  return backup ? [model, backup] : [model];
+}
 
 /** Groq's free tier says "rate limit reached" (429) when a model's minute or day allowance is used up. */
 export function isRateLimited(e: unknown): boolean {
@@ -164,7 +172,7 @@ const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-
 /** Long searches can pause a Claude turn; it is continued this many times at most. */
 const MAX_CONTINUES = 3;
 
-async function* anthropicReply({ model, apiKey, system, turns, signal, search }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* anthropicReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new Anthropic({ apiKey, maxRetries: 1 });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
@@ -192,7 +200,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search }:
     const stream = client.beta.messages.stream(
       {
         model: model.id,
-        max_tokens: MAX_OUTPUT,
+        max_tokens: maxOutput,
         system,
         messages: messages as never,
         output_config: { effort: "medium" },
@@ -272,7 +280,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search }:
   yield { type: "usage", input, output };
 }
 
-async function* openaiReply({ model, apiKey, system, turns, signal, search }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* openaiReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new OpenAI({ apiKey, maxRetries: 1 });
   const stream = await client.responses.create(
     {
@@ -293,7 +301,7 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search }: Re
             }
           : { role: t.role, content: t.text },
       ),
-      max_output_tokens: MAX_OUTPUT,
+      max_output_tokens: maxOutput,
       store: false,
       stream: true,
       ...(search ? { tools: [{ type: "web_search" as const }], max_tool_calls: MAX_SEARCHES } : {}),
@@ -336,12 +344,14 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search }: Re
 }
 
 /**
- * Groq serves open models through an OpenAI-compatible Chat Completions API. No maximum length is
- * sent, because Groq counts a requested maximum against the free tier's tokens-per-minute allowance.
+ * Groq serves open models through an OpenAI-compatible Chat Completions API. A maximum length is
+ * sent only when a spending hold needs a shorter reply, because Groq counts a requested maximum
+ * against the free tier's tokens-per-minute allowance (Groq's prices are tiny, so a full-length
+ * reply can't take anyone meaningfully past their limit).
  * Reasoning is kept out of the reply text. The GPT-OSS models can search with Groq's browser search,
  * which reports what it ran as `executed_tools` and marks citations in the text like 【3†L4-L9】.
  */
-async function* groqReply({ model, apiKey, system, turns, signal, search }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* groqReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1", maxRetries: 0 });
   const gptOss = model.id.startsWith("openai/gpt-oss");
   // Groq advises low effort when browsing, as higher effort browses much longer.
@@ -352,6 +362,7 @@ async function* groqReply({ model, apiKey, system, turns, signal, search }: Repl
       messages: [{ role: "system", content: system }, ...turns.map((t) => ({ role: t.role, content: groqText(t) }))],
       stream: true,
       stream_options: { include_usage: true },
+      ...(maxOutput < MAX_OUTPUT ? { max_completion_tokens: maxOutput } : {}),
       ...(reasoning as object),
       ...(search && gptOss ? { tools: [{ type: "browser_search" }] as never, tool_choice: "auto" as const } : {}),
     },
@@ -449,7 +460,7 @@ export function stripGroqMarks(text: string): { out: string; rest: string } {
   return { out: body.replace(/【[^】]{0,40}】/g, ""), rest };
 }
 
-async function* googleReply({ model, apiKey, system, turns, signal, search }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* googleReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const ai = new GoogleGenAI({ apiKey });
   const stream = await ai.models.generateContentStream({
     model: model.id,
@@ -462,7 +473,7 @@ async function* googleReply({ model, apiKey, system, turns, signal, search }: Re
     })),
     config: {
       systemInstruction: system,
-      maxOutputTokens: MAX_OUTPUT,
+      maxOutputTokens: maxOutput,
       abortSignal: signal,
       ...(search ? { tools: [{ googleSearch: {} }] } : {}),
     },
@@ -719,7 +730,9 @@ async function* fakeReply({ turns, signal, search, model, system }: ReplyRequest
   }
   // Say which files arrived, so tests can check that attachments reach the model.
   const seen = [...(last?.files ?? []).map((f) => f.name), ...[...(last?.text ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1])];
-  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + FAKE_REPLY.replace("{q}", q);
+  // "favourite colour" makes it suggest a memory, to test memory suggestions.
+  const remember = q.includes("favourite colour") ? "\n\n<remember>Their favourite colour is black.</remember>" : "";
+  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + FAKE_REPLY.replace("{q}", q) + remember;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

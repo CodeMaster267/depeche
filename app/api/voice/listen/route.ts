@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { MAX_AUDIO_BYTES, transcribe, wavSeconds } from "@/lib/voice/speech";
-import { fail, prepare, reason, recordUsage } from "@/lib/voice/server";
+import { fail, prepare, reason, recordUsage, releaseHold, reserveVoice } from "@/lib/voice/server";
 
 export const maxDuration = 60;
 
@@ -21,11 +21,14 @@ export async function POST(req: NextRequest) {
   if (wav.length < 44 || String.fromCharCode(...wav.subarray(0, 4)) !== "RIFF") return fail(400, "That recording didn't come through. Try again.");
   if (wavSeconds(wav) < 0.3) return NextResponse.json({ text: "" });
 
+  const hold = await reserveVoice(me);
+  if (hold instanceof NextResponse) return hold;
   try {
     const t = await transcribe(provider, apiKey, wav, req.signal);
-    await recordUsage(me, provider, t.model, t.input, t.output, t.cost);
+    await recordUsage(hold, provider, t.model, t.input, t.output, t.cost);
     return NextResponse.json({ text: t.text });
   } catch (e) {
+    await releaseHold(hold, provider);
     const why = reason(e);
     return fail(
       502,

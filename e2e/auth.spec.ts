@@ -107,7 +107,7 @@ test.describe("invites and families", () => {
 
     // Sign out, then back in with the username.
     await guest.goto("/account");
-    await guest.getByRole("button", { name: "Sign out" }).click();
+    await guest.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(guest).toHaveURL(/\/sign-in$/);
     await signInWithPassword(guest, username, "amir-password-123");
     await expect(guest.getByRole("heading", { name: "Hi, Amir." })).toBeVisible();
@@ -175,22 +175,40 @@ test.describe("invites and families", () => {
 
     await page.goto("/family");
     await noSidewaysScroll(page);
-    const noor = page.getByRole("listitem").filter({ hasText: "Noor" }).last();
+    const noor = page.getByTestId("member-row").filter({ hasText: "Noor" }).last();
     await noor.getByRole("button", { name: /Noor/ }).click();
     await noor.getByLabel("Monthly limit in dollars").fill("25");
     await noor.getByRole("button", { name: "Save limit" }).click();
     await expect(noor.getByText("Saved.")).toBeVisible();
     await expect(noor.getByText("of $25")).toBeVisible();
 
-    await noor.getByLabel("New password for them").fill("brand-new-pass-456");
-    await noor.getByRole("button", { name: "Reset their password" }).click();
-    await expect(noor.getByText(/New password set/)).toBeVisible();
+    // A temporary password signs Noor out everywhere and works only to choose a new one.
+    await noor.getByRole("button", { name: "Give them a temporary password" }).click();
+    const temp = (await noor.getByTestId("temp-password").textContent())!.trim();
+    expect(temp).toMatch(/^[a-z2-9]{5}-[a-z2-9]{5}-[a-z2-9]{5}$/);
+    await guest.reload();
+    await expect(guest).toHaveURL(/\/sign-in/);
 
     const later = await freshPage(browser, contextOptions);
     await signInWithPassword(later, email, "noor-password-123");
     await expect(later.locator("p[role=alert]")).toBeVisible();
-    await signInWithPassword(later, email, "brand-new-pass-456");
+    await signInWithPassword(later, email, temp);
+    await expect(later).toHaveURL(/\/new-password/);
+    await later.goto("/");
+    await expect(later).toHaveURL(/\/new-password/);
+    await later.getByLabel("New password").fill("brand-new-pass-456");
+    await later.getByRole("button", { name: "Save and continue" }).click();
     await expect(later.getByRole("heading", { name: "Hi, Noor." })).toBeVisible();
+
+    // The temporary password no longer works, and the family's admin log shows what happened.
+    const again = await freshPage(browser, contextOptions);
+    await signInWithPassword(again, email, temp);
+    await expect(again.locator("p[role=alert]")).toBeVisible();
+    await page.goto("/family");
+    await expect(page.getByTestId("admin-log")).toContainText("You gave Noor a temporary password");
+    await expect(page.getByTestId("admin-log")).toContainText("You changed Noor's monthly limit from $10.00 to $25.00");
+    await later.goto("/account");
+    await expect(later.getByTestId("my-log")).toContainText("Hasan gave you a temporary password");
   });
 
   test("the owner starts another family and invites its admin, then sees only its name", async ({ page, browser, contextOptions }) => {

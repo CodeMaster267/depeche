@@ -7,6 +7,7 @@ import { siteOrigin } from "@/lib/auth/session";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { supabaseServer } from "@/lib/supabase/server";
 import { cleanEmail } from "@/lib/validate";
+import { TOO_MANY, allow, blocked, clientIp, failed } from "@/lib/rate-limit";
 
 export type FormState = { error?: string; sentTo?: string } | undefined;
 
@@ -18,6 +19,10 @@ export async function signInWithPassword(_: FormState, form: FormData): Promise<
   const who = String(form.get("identifier") ?? "").trim();
   const password = String(form.get("password") ?? "");
   if (!who || !password) return { error: "Enter your username and password." };
+  // Only wrong passwords count, so signing in correctly is never held up.
+  const ip = await clientIp();
+  const tries: [["signInPerAccount", string], ["signInPerIp", string]] = [["signInPerAccount", who], ["signInPerIp", ip]];
+  if (await blocked(...tries)) return { error: TOO_MANY };
 
   let email = cleanEmail(who);
   if (!email) {
@@ -25,13 +30,30 @@ export async function signInWithPassword(_: FormState, form: FormData): Promise<
     email = typeof data === "string" ? data : null;
   }
   const wrong = { error: "That username or password isn't right." };
-  if (!email) return wrong;
+  if (!email) {
+    await failed(...tries);
+    return wrong;
+  }
 
   const supabase = await supabaseServer();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error || !data.user) return wrong;
+  if (error || !data.user) {
+    await failed(...tries);
+    return wrong;
+  }
   if ((await finishSignIn(supabase, data.user)) !== "ok") return { error: "This account isn't part of a family yet." };
-  redirect("/");
+
+  // A temporary password from the admin works once, for a day, and then only to choose a new one.
+  const { data: p } = await supabaseAdmin()
+    .from("profiles")
+    .select("must_change_password, temp_password_until")
+    .eq("id", data.user.id)
+    .maybeSingle<{ must_change_password: boolean; temp_password_until: string | null }>();
+  if (p?.must_change_password && p.temp_password_until && new Date(p.temp_password_until) < new Date()) {
+    await supabase.auth.signOut();
+    return { error: "That temporary password has expired. Ask your family admin for a new one." };
+  }
+  redirect(p?.must_change_password ? "/new-password" : "/");
 }
 
 /**
@@ -42,6 +64,7 @@ export async function sendEmailLink(_: FormState, form: FormData): Promise<FormS
   if (!isConfigured()) return { error: NOT_READY };
   const email = cleanEmail(form.get("email"));
   if (!email) return { error: "Enter a valid email address." };
+  if (!(await allow(["emailsPerAddress", email], ["emailsPerIp", await clientIp()]))) return { error: TOO_MANY };
   const supabase = await supabaseServer();
   const { error } = await supabase.auth.signInWithOtp({
     email,
@@ -58,9 +81,14 @@ export async function verifyEmailCode(_: FormState, form: FormData): Promise<For
   const email = cleanEmail(form.get("email"));
   const token = String(form.get("code") ?? "").replace(/\D/g, "");
   if (!email || token.length < 6) return { error: "Enter the code from the email.", sentTo: email ?? undefined };
+  const tries: [["codeGuesses", string], ["signInPerIp", string]] = [["codeGuesses", email], ["signInPerIp", await clientIp()]];
+  if (await blocked(...tries)) return { error: TOO_MANY, sentTo: email };
   const supabase = await supabaseServer();
   const { data, error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
-  if (error || !data.user) return { error: "That code didn't work. Check it, or send a new one.", sentTo: email };
+  if (error || !data.user) {
+    await failed(...tries);
+    return { error: "That code didn't work. Check it, or send a new one.", sentTo: email };
+  }
   if ((await finishSignIn(supabase, data.user)) !== "ok") redirect("/sign-in?error=not-invited");
   redirect("/");
 }
