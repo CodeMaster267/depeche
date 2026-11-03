@@ -12,8 +12,8 @@ All of it is free: GitHub Actions minutes on a private repository (about 3 minut
 Vercel Hobby's daily cron.
 
 **Where backups live.** Each night's encrypted file is a private artifact of that night's run
-(GitHub → Actions → Nightly backup → a run → Artifacts). Daily copies are kept 30 days and Sunday
-copies 90 days. Nothing is committed to git. Only people with access to this private repository can
+(GitHub → Actions → Nightly backup → a run → Artifacts). Each copy is kept 30 days, then GitHub deletes it.
+Nothing older is kept, so a chat or memory someone deletes is gone from every backup within 30 days. Nothing is committed to git. Only people with access to this private repository can
 download them, and without the passphrase they are unreadable (AES-256, via `gpg --symmetric`).
 
 **What a backup holds.** Supabase's own dump format (`roles.sql`, `schema.sql`, `data.sql`), so
@@ -25,8 +25,8 @@ and checksums.
 a GitHub issue that mentions Hasan, so GitHub emails him. The next good run closes it.
 
 **Record.** Each verified backup adds a row to `public.backup_runs` (date, size, rows, files,
-restore verified, link to the run). Nobody signed in can read it yet; a Health screen can add a
-policy for the app owner.
+restore verified, link to the run). Each backup, restore test and keep-alive also writes a row to
+`public.system_checks` (ok or not) for the Health screen, once that table exists.
 
 ## Secrets (GitHub → Settings → Secrets and variables → Actions)
 
@@ -36,7 +36,7 @@ policy for the app owner.
 - `SUPABASE_SERVICE_ROLE_KEY`: only once Depeche stores files. Until then it isn't needed; if files
   appear without it, the backup fails and the alert says so.
 
-Changing `BACKUP_PASSPHRASE` only affects new backups. Keep the old one until its backups expire (90 days).
+Changing `BACKUP_PASSPHRASE` only affects new backups. Keep the old one until its backups expire (30 days).
 
 ## Restoring
 

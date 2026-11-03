@@ -35,6 +35,7 @@ jobs:
             sleep 20
           done
           if [ -n "$DB_URL" ]; then psql "$DB_URL" -Atc "select 1" >/dev/null && ok=true; fi
+          scripts/backup/record-check.sh keep_alive "$ok" "$( [ "$ok" = true ] && echo "App and database answered" || echo "No answer from $APP_URL or the database")"
           if [ "$ok" != true ]; then
             scripts/backup/alert.sh open keep-alive-failed "Depeche's database did not answer" \
               "The daily keep-alive could not reach $APP_URL/api/keep-alive or the database. Supabase may have paused the project: open https://supabase.com/dashboard and press Restore if it says Paused. Details: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

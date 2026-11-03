@@ -2,8 +2,9 @@ name: Nightly backup
 
 # Every night: dump the live database (and any Storage files), encrypt it with BACKUP_PASSPHRASE,
 # restore it into a separate empty database and check every table and file, then keep the
-# encrypted file as a private artifact of this run. Daily copies are kept 30 days, Sunday copies
-# 90 days. Nothing readable is stored anywhere, and nothing is committed to git.
+# encrypted file as a private artifact of this run for 30 days, then GitHub deletes it. Nothing
+# older is kept, so anything a person deletes in Depeche is gone from every backup within 30 days.
+# Nothing readable is stored anywhere, and nothing is committed to git.
 #
 # If anything fails, an issue is opened (GitHub emails it to Hasan); the next good run closes it.
 # keep-alive.yml checks every day that this actually ran, and starts it if it didn't.
@@ -49,8 +50,6 @@ jobs:
           fi
           echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
           echo "stamp=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
-          # Sunday copies are kept longer.
-          if [ "$(date -u +%u)" = 7 ]; then echo "keep_days=90" >> "$GITHUB_ENV"; else echo "keep_days=30" >> "$GITHUB_ENV"; fi
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -68,7 +67,7 @@ jobs:
         with:
           name: depeche-backup-${{ env.stamp }}-run${{ github.run_number }}
           path: ${{ runner.temp }}/backup/depeche-backup-${{ env.stamp }}.tar.gz.gpg
-          retention-days: ${{ env.keep_days }}
+          retention-days: 30  # never longer: deleted chats must leave every backup within 30 days
           compression-level: 0
           if-no-files-found: error
       - name: Record the verified backup in the live database
@@ -81,6 +80,12 @@ jobs:
           insert into public.backup_runs (backup_name, started_at, size_bytes, tables, rows, files, restore_verified, run_url)
           values (:'name', :'started', :size, :tables, :rows, :files, true, :'url');
           SQL
+      - name: Show it on the Health screen
+        run: |
+          size=$(wc -c < "$RUNNER_TEMP/backup/depeche-backup-$stamp.tar.gz.gpg")
+          read -r rows files < <(node -e 'const r = require(process.argv[1]); console.log(r.rows, r.files)' "$RUNNER_TEMP/restore-report.json")
+          scripts/backup/record-check.sh backup true "$stamp, $(numfmt --to=iec "$size")B encrypted, kept 30 days"
+          scripts/backup/record-check.sh restore_test true "$stamp: $rows rows and $files file(s) restored into a separate database and matched"
 
   alert:
     needs: backup
@@ -90,8 +95,12 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
     steps:
       - uses: actions/checkout@v4
+      - name: Show the failure on the Health screen
+        run: |
+          scripts/backup/record-check.sh backup false "$(date -u +%Y-%m-%d): backup failed, see $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
       - name: Open an issue (GitHub emails Hasan)
         run: |
           scripts/backup/alert.sh open backup-failed "Last night's backup failed" \
