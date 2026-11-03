@@ -249,10 +249,28 @@ export function encodeWav(chunks: Float32Array[], length: number, rate: number):
 }
 
 /** Sends a recording to be written out as text. */
+const LANGUAGES_KEY = "depeche:voice-languages";
+
+/** The languages this person speaks, main one first: their choice, or the device's languages. */
+export function voiceLanguages(): string[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LANGUAGES_KEY) ?? "null");
+    if (Array.isArray(saved) && saved.length && saved.every((l) => typeof l === "string")) return saved.slice(0, 4);
+  } catch {}
+  const device = (navigator.languages?.length ? navigator.languages : [navigator.language || "en"]).map((l) => l.slice(0, 2).toLowerCase());
+  return [...new Set(device)].slice(0, 4);
+}
+
+export function saveVoiceLanguages(languages: string[]) {
+  try {
+    localStorage.setItem(LANGUAGES_KEY, JSON.stringify(languages.slice(0, 4)));
+  } catch {}
+}
+
 export async function listen(wav: Blob, signal?: AbortSignal): Promise<string> {
   const res = await fetch("/api/voice/listen", {
     method: "POST",
-    headers: { "content-type": "audio/wav", "x-language": navigator.language || "" },
+    headers: { "content-type": "audio/wav", "x-languages": voiceLanguages().join(",") },
     body: wav,
     signal,
   });
@@ -265,30 +283,49 @@ export async function listen(wav: Blob, signal?: AbortSignal): Promise<string> {
  * Reads text aloud: in the family's provider voice when it can, otherwise in the browser's own
  * voice. Resolves when it has finished, or straight away if `signal` aborts.
  */
-export async function say(text: string, signal: AbortSignal, onFallback?: (why: string) => void): Promise<void> {
-  const ctx = shared;
-  if (!speakable(text)) return;
-  let audio: { pcm: ArrayBuffer; rate: number } | null = null;
+/** A reply's audio from the family's provider, or why the device's own voice must read it. */
+export type Voiced = { pcm: ArrayBuffer; rate: number } | { fallback: string };
+
+/** Fetches the spoken audio for some text. Start it early: generating speech takes a few seconds. */
+export async function fetchVoice(text: string, signal: AbortSignal): Promise<Voiced> {
   try {
     const res = await fetch("/api/voice/speak", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
-      // A slow voice service shouldn't stall the conversation: the browser's voice takes over.
-      signal: within(signal, 25_000),
+      // A slow voice service shouldn't stall the conversation: the device's voice takes over.
+      signal: within(signal, 20_000),
     });
-    if (res.ok) audio = { pcm: await res.arrayBuffer(), rate: Number(res.headers.get("x-sample-rate") ?? 24_000) };
-    else onFallback?.(((await res.json().catch(() => ({}))) as { error?: string }).error ?? "The voice service didn't answer.");
+    if (res.ok) {
+      const pcm = await res.arrayBuffer();
+      if (pcm.byteLength > 1) return { pcm, rate: Number(res.headers.get("x-sample-rate") ?? 24_000) };
+    }
+    return { fallback: ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "The voice service didn't answer." };
   } catch {
-    if (signal.aborted) return;
-    onFallback?.("The voice service took too long.");
+    return { fallback: "The voice service took too long." };
   }
+}
+
+/** Plays what `fetchVoice` returned, or reads the text in the device's own voice. */
+export async function playVoice(text: string, voiced: Voiced, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return;
-  if (audio && audio.pcm.byteLength > 1 && ctx) {
+  if ("pcm" in voiced && shared) {
     if (!micOpen()) setAudioSession("playback");
-    return playPcm(ctx, audio.pcm, audio.rate, signal);
+    return playPcm(shared, voiced.pcm, voiced.rate, signal);
   }
   return sayWithBrowser(text, signal);
+}
+
+/**
+ * Reads text aloud: in the family's provider voice when it can, otherwise in the device's own
+ * voice. Resolves when it has finished, or straight away if `signal` aborts.
+ */
+export async function say(text: string, signal: AbortSignal, onFallback?: (why: string) => void): Promise<void> {
+  if (!speakable(text)) return;
+  const voiced = await fetchVoice(text, signal);
+  if (signal.aborted) return;
+  if ("fallback" in voiced) onFallback?.(voiced.fallback);
+  return playVoice(text, voiced, signal);
 }
 
 function playPcm(ctx: AudioContext, bytes: ArrayBuffer, rate: number, signal: AbortSignal): Promise<void> {
