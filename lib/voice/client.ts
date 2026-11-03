@@ -9,8 +9,9 @@ import { speakable } from "@/lib/voice/text";
  *   used both to record and to play.
  * - Audio is recorded as plain 16 kHz WAV, which every provider accepts and every browser can
  *   make, rather than MediaRecorder's formats, which differ between Safari and Chrome.
- * - Voice chat opens the microphone once per conversation and only listens between replies;
- *   home-screen apps on iPhone may ask for permission again every time it is reopened.
+ * - The microphone is let go of before a reply is played. While a page holds the mic, iPhones and
+ *   iPads treat it like a call: sound can go to the built-in speaker instead of headphones, and
+ *   quieter. Safari's audio session is also switched between "play-and-record" and "playback".
  */
 
 let shared: AudioContext | null = null;
@@ -49,18 +50,42 @@ export function unlockAudio(): AudioContext {
 }
 let primedVoice = false;
 
+type AudioSessionType = "auto" | "playback" | "play-and-record";
+
+/**
+ * Tells Safari (16.4 and later) how the page is using sound, so it routes it like media: to the
+ * headphones when they're in, mixed sensibly with other apps. Other browsers ignore it.
+ */
+export function setAudioSession(type: AudioSessionType) {
+  try {
+    const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
+    if (session && session.type !== type) session.type = type;
+  } catch {
+    // Not supported here.
+  }
+}
+
 export function micSupported(): boolean {
   return typeof window !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 }
 
-export function openMicStream(): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
+let openMics = 0;
+const micOpen = () => openMics > 0;
+
+export async function openMicStream(): Promise<MediaStream> {
+  setAudioSession("play-and-record");
+  const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
   });
+  openMics++;
+  return stream;
 }
 
 export function closeMicStream(stream: MediaStream | null | undefined) {
-  for (const t of stream?.getTracks() ?? []) t.stop();
+  if (!stream || stream.getTracks().every((t) => t.readyState === "ended")) return;
+  for (const t of stream.getTracks()) t.stop();
+  openMics = Math.max(0, openMics - 1);
+  if (!openMics) setAudioSession("playback");
 }
 
 export type MicOptions = {
@@ -225,7 +250,12 @@ export function encodeWav(chunks: Float32Array[], length: number, rate: number):
 
 /** Sends a recording to be written out as text. */
 export async function listen(wav: Blob, signal?: AbortSignal): Promise<string> {
-  const res = await fetch("/api/voice/listen", { method: "POST", headers: { "content-type": "audio/wav" }, body: wav, signal });
+  const res = await fetch("/api/voice/listen", {
+    method: "POST",
+    headers: { "content-type": "audio/wav", "x-language": navigator.language || "" },
+    body: wav,
+    signal,
+  });
   const body = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
   if (!res.ok) throw new Error(body.error ?? "Couldn't hear that. Try again.");
   return body.text ?? "";
@@ -254,7 +284,10 @@ export async function say(text: string, signal: AbortSignal, onFallback?: (why: 
     onFallback?.("The voice service took too long.");
   }
   if (signal.aborted) return;
-  if (audio && audio.pcm.byteLength > 1 && ctx) return playPcm(ctx, audio.pcm, audio.rate, signal);
+  if (audio && audio.pcm.byteLength > 1 && ctx) {
+    if (!micOpen()) setAudioSession("playback");
+    return playPcm(ctx, audio.pcm, audio.rate, signal);
+  }
   return sayWithBrowser(text, signal);
 }
 
