@@ -1,10 +1,25 @@
 /** Chat data shared by the server and the browser. */
+
+/** A web page a reply's web search used. Only http(s) links are ever kept. */
+export type Source = { url: string; title: string; domain?: string };
+
 export type MessageRow = {
   id: string;
   chat_id: string;
   parent_id: string | null;
   role: "user" | "assistant" | "system";
-  content: { text?: string; notice?: string; error?: string; cost?: number };
+  content: {
+    text?: string;
+    notice?: string;
+    error?: string;
+    cost?: number;
+    /** Pages the reply's web search found or cited, in the order they were cited. */
+    sources?: Source[];
+    /** How many web searches the reply ran (each one has a fee, included in cost). */
+    searches?: number;
+    /** Google's "Search suggestions" chips (its own HTML), shown in a sandbox as Google requires. */
+    suggestions?: string;
+  };
   status: "pending" | "streaming" | "completed" | "failed" | "stopped";
   model: string | null;
   created_at: string;

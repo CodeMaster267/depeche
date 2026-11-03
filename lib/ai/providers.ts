@@ -2,7 +2,9 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
-import { MODELS, findModel, type Model, type Provider } from "@/lib/ai/models";
+import { MAX_SEARCHES, MODELS, findModel, type Model, type Provider } from "@/lib/ai/models";
+import type { Source } from "@/lib/chat/thread";
+import { webSource } from "@/lib/ai/sources";
 
 /**
  * One streaming interface over the three providers. Depeche stores conversations in its own
@@ -16,7 +18,15 @@ export type StreamEvent =
   | { type: "usage"; input: number; output: number }
   | { type: "notice"; text: string }
   /** Another model answered (the chosen one was busy). */
-  | { type: "model"; id: string };
+  | { type: "model"; id: string }
+  /** The model is searching the web, for this query when the provider says. */
+  | { type: "searching"; query?: string }
+  /** Pages the search found or the reply cited. */
+  | { type: "sources"; sources: Source[] }
+  /** How many searches were run in total (each has a fee). */
+  | { type: "searches"; count: number }
+  /** Google's search suggestions HTML, which its terms require showing with grounded replies. */
+  | { type: "suggestions"; html: string };
 
 export type ReplyRequest = {
   model: Model;
@@ -24,6 +34,8 @@ export type ReplyRequest = {
   system: string;
   turns: Turn[];
   signal: AbortSignal;
+  /** Let the model search the web with the provider's own search tool when it decides to. */
+  search?: boolean;
 };
 
 /** A provider error, worded for the person chatting. */
@@ -62,7 +74,9 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
   if (backup) attempts.push({ model: backup, wait: 0 });
 
   let lastError: unknown;
-  for (const attempt of attempts) {
+  let search = !!req.search;
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
     if (attempt.wait) await pause(attempt.wait, req.signal);
     if (req.signal.aborted) throw new DOMException("Aborted", "AbortError");
     let wrote = false;
@@ -71,7 +85,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
         yield { type: "model", id: attempt.model.id };
         yield { type: "notice", text: `${req.model.name} was busy, so ${attempt.model.name} answered instead.` };
       }
-      const r = { ...req, model: attempt.model };
+      const r = { ...req, model: attempt.model, search };
       const inner = fakeAi()
         ? fakeReply(r, attempt.model.id === req.model.id)
         : r.model.provider === "anthropic" ? anthropicReply(r) : r.model.provider === "openai" ? openaiReply(r) : googleReply(r);
@@ -83,8 +97,18 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
     } catch (e) {
       if (req.signal.aborted) throw e;
       lastError = e;
-      // Retrying after part of a reply was shown would repeat it, and other errors won't go away.
-      if (wrote || !isBusy(e)) break;
+      // Retrying after part of a reply was shown would repeat it.
+      if (wrote) break;
+      // Some keys or models can't search (free tiers, older models): answer without it instead.
+      if (search && !isBusy(e) && status(e) !== 401) {
+        search = false;
+        console.error("[chat] search failed, answering without it", status(e), detail(e));
+        yield { type: "notice", text: "Web search wasn't available for this answer, so it comes from the model's own knowledge." };
+        i--;
+        continue;
+      }
+      // Other errors won't go away.
+      if (!isBusy(e)) break;
     }
   }
   throw new ProviderError(describe(req.model.provider, lastError));
@@ -93,35 +117,104 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
 /** The models that fall back to another Claude model when a safety check declines a request. */
 const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]);
 
-async function* anthropicReply({ model, apiKey, system, turns, signal }: ReplyRequest): AsyncGenerator<StreamEvent> {
+/** Long searches can pause a Claude turn; it is continued this many times at most. */
+const MAX_CONTINUES = 3;
+
+async function* anthropicReply({ model, apiKey, system, turns, signal, search }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new Anthropic({ apiKey, maxRetries: 1 });
   const fallback = FALLBACK_MODELS.has(model.id);
-  const stream = client.beta.messages.stream(
-    {
-      model: model.id,
-      max_tokens: MAX_OUTPUT,
-      system,
-      messages: turns.map((t) => ({ role: t.role, content: t.text })),
-      output_config: { effort: "medium" },
-      ...(fallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as never } : {}),
-    },
-    { signal },
-  );
-  for await (const ev of stream) {
-    if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") yield { type: "text", text: ev.delta.text };
+  type Msg = { role: "user" | "assistant"; content: unknown };
+  const messages: Msg[] = turns.map((t) => ({ role: t.role, content: t.text }));
+  let input = 0;
+  let output = 0;
+  let searches = 0;
+  const cited: Source[] = [];
+  const found: Source[] = [];
+  for (let round = 0; round <= MAX_CONTINUES; round++) {
+    const stream = client.beta.messages.stream(
+      {
+        model: model.id,
+        max_tokens: MAX_OUTPUT,
+        system,
+        messages: messages as never,
+        output_config: { effort: "medium" },
+        ...(search ? { tools: [{ type: "web_search_20250305" as const, name: "web_search" as const, max_uses: MAX_SEARCHES }] } : {}),
+        ...(fallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as never } : {}),
+      },
+      { signal },
+    );
+    // A search's query arrives in pieces; the cited pages of a text block arrive alongside its text.
+    const queryJson = new Map<number, string>();
+    const blockCites = new Map<number, Source[]>();
+    for await (const ev of stream) {
+      if (ev.type === "content_block_start") {
+        const b = ev.content_block;
+        if (b.type === "server_tool_use" && b.name === "web_search") {
+          queryJson.set(ev.index, "");
+          yield { type: "searching" };
+        } else if (b.type === "web_search_tool_result" && Array.isArray(b.content)) {
+          for (const r of b.content) {
+            const src = webSource(r.url, r.title);
+            if (src) found.push(src);
+          }
+        }
+      } else if (ev.type === "content_block_delta") {
+        if (ev.delta.type === "text_delta") yield { type: "text", text: ev.delta.text };
+        else if (ev.delta.type === "input_json_delta" && queryJson.has(ev.index)) {
+          queryJson.set(ev.index, queryJson.get(ev.index) + ev.delta.partial_json);
+        } else if (ev.delta.type === "citations_delta" && ev.delta.citation.type === "web_search_result_location") {
+          const src = webSource(ev.delta.citation.url, ev.delta.citation.title);
+          if (src) blockCites.set(ev.index, [...(blockCites.get(ev.index) ?? []), src]);
+        }
+      } else if (ev.type === "content_block_stop") {
+        if (queryJson.has(ev.index)) {
+          let query: string | undefined;
+          try {
+            query = (JSON.parse(queryJson.get(ev.index) || "{}") as { query?: string }).query;
+          } catch {
+            // The query is only shown, so a malformed one is skipped.
+          }
+          if (query) yield { type: "searching", query: query.slice(0, 200) };
+          queryJson.delete(ev.index);
+        }
+        // Numbered links after the sentence they back up, like [1](https://…).
+        const cites = blockCites.get(ev.index);
+        if (cites?.length) {
+          const marks = new Set<number>();
+          for (const c of cites) {
+            let n = cited.findIndex((x) => x.url === c.url);
+            if (n < 0) n = cited.push(c) - 1;
+            marks.add(n + 1);
+          }
+          yield { type: "text", text: [...marks].map((n) => ` [${n}](${cited[n - 1].url})`).join("") };
+          blockCites.delete(ev.index);
+        }
+      }
+    }
+    const final = await stream.finalMessage();
+    const u = final.usage;
+    input += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    output += u.output_tokens ?? 0;
+    searches += u.server_tool_use?.web_search_requests ?? 0;
+    if (final.stop_reason === "pause_turn" && round < MAX_CONTINUES) {
+      // The search ran long: hand Claude back what it has so far and let it carry on.
+      messages.push({ role: "assistant", content: final.content });
+      continue;
+    }
+    if (final.stop_reason === "refusal") yield { type: "notice", text: "The model declined to answer this." };
+    if (final.stop_reason === "max_tokens") yield { type: "notice", text: "The reply hit its length limit." };
+    break;
   }
-  const final = await stream.finalMessage();
-  const u = final.usage;
-  yield {
-    type: "usage",
-    input: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0),
-    output: u.output_tokens ?? 0,
-  };
-  if (final.stop_reason === "refusal") yield { type: "notice", text: "The model declined to answer this." };
-  if (final.stop_reason === "max_tokens") yield { type: "notice", text: "The reply hit its length limit." };
+  if (search) {
+    // Cited pages first, then the other pages the searches turned up.
+    const sources = [...cited, ...found.filter((f) => !cited.some((c) => c.url === f.url))];
+    if (sources.length) yield { type: "sources", sources };
+    if (searches) yield { type: "searches", count: searches };
+  }
+  yield { type: "usage", input, output };
 }
 
-async function* openaiReply({ model, apiKey, system, turns, signal }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* openaiReply({ model, apiKey, system, turns, signal, search }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new OpenAI({ apiKey, maxRetries: 1 });
   const stream = await client.responses.create(
     {
@@ -131,13 +224,35 @@ async function* openaiReply({ model, apiKey, system, turns, signal }: ReplyReque
       max_output_tokens: MAX_OUTPUT,
       store: false,
       stream: true,
+      ...(search ? { tools: [{ type: "web_search" as const }], max_tool_calls: MAX_SEARCHES } : {}),
     },
     { signal },
   );
+  const sources: Source[] = [];
+  let searches = 0;
   for await (const ev of stream) {
     if (ev.type === "response.output_text.delta") yield { type: "text", text: ev.delta };
-    else if (ev.type === "response.completed" || ev.type === "response.incomplete") {
+    else if (ev.type === "response.output_item.added" && ev.item.type === "web_search_call") yield { type: "searching" };
+    else if (ev.type === "response.output_item.done" && ev.item.type === "web_search_call") {
+      const action = ev.item.action as { type?: string; query?: string; queries?: string[] } | undefined;
+      if (action?.type === "search") {
+        searches++;
+        const query = action.query ?? action.queries?.[0];
+        if (query) yield { type: "searching", query: query.slice(0, 200) };
+      }
+    } else if (ev.type === "response.output_text.annotation.added") {
+      const a = ev.annotation as { type?: string; url?: string; title?: string };
+      const src = a?.type === "url_citation" ? webSource(a.url, a.title) : null;
+      if (src && !sources.some((x) => x.url === src.url)) sources.push(src);
+    } else if (ev.type === "response.completed" || ev.type === "response.incomplete") {
       const u = ev.response.usage;
+      // Searches that only opened or scanned a page aren't billed as searches.
+      const calls = (ev.response.output ?? []).filter(
+        (o) => o.type === "web_search_call" && (o.action as { type?: string } | undefined)?.type === "search",
+      ).length;
+      searches = Math.max(searches, calls);
+      if (sources.length) yield { type: "sources", sources };
+      if (searches) yield { type: "searches", count: searches };
       yield { type: "usage", input: u?.input_tokens ?? 0, output: u?.output_tokens ?? 0 };
       if (ev.type === "response.incomplete") yield { type: "notice", text: "The reply was cut short." };
     } else if (ev.type === "response.failed") {
@@ -148,27 +263,54 @@ async function* openaiReply({ model, apiKey, system, turns, signal }: ReplyReque
   }
 }
 
-async function* googleReply({ model, apiKey, system, turns, signal }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* googleReply({ model, apiKey, system, turns, signal, search }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const ai = new GoogleGenAI({ apiKey });
   const stream = await ai.models.generateContentStream({
     model: model.id,
     contents: turns.map((t) => ({ role: t.role === "assistant" ? "model" : "user", parts: [{ text: t.text }] })),
-    config: { systemInstruction: system, maxOutputTokens: MAX_OUTPUT, abortSignal: signal },
+    config: {
+      systemInstruction: system,
+      maxOutputTokens: MAX_OUTPUT,
+      abortSignal: signal,
+      ...(search ? { tools: [{ googleSearch: {} }] } : {}),
+    },
   });
   let input = 0;
   let output = 0;
+  const sources: Source[] = [];
+  const queries = new Set<string>();
+  let suggestions = "";
   for await (const chunk of stream) {
-    const text = chunk.candidates?.[0]?.content?.parts
+    const candidate = chunk.candidates?.[0];
+    const text = candidate?.content?.parts
       ?.filter((p) => p.text && !p.thought)
       .map((p) => p.text)
       .join("");
     if (text) yield { type: "text", text };
+    const g = candidate?.groundingMetadata;
+    if (g) {
+      for (const q of g.webSearchQueries ?? []) {
+        if (q && !queries.has(q)) {
+          queries.add(q);
+          yield { type: "searching", query: q.slice(0, 200) };
+        }
+      }
+      for (const c of g.groundingChunks ?? []) {
+        const src = webSource(c.web?.uri, c.web?.title, c.web?.domain ?? c.web?.title);
+        if (src && !sources.some((x) => x.url === src.url)) sources.push(src);
+      }
+      if (g.searchEntryPoint?.renderedContent) suggestions = g.searchEntryPoint.renderedContent;
+    }
     const u = chunk.usageMetadata;
     if (u) {
       input = u.promptTokenCount ?? input;
       output = (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0) || output;
     }
   }
+  if (sources.length) yield { type: "sources", sources };
+  // Google bills each search query the model runs.
+  if (queries.size || sources.length) yield { type: "searches", count: Math.max(queries.size, 1) };
+  if (suggestions) yield { type: "suggestions", html: suggestions.slice(0, 20_000) };
   yield { type: "usage", input, output };
 }
 
@@ -318,10 +460,35 @@ This is well documented[^1].
 [^1]: [Quadratic formula](https://en.wikipedia.org/wiki/Quadratic_formula), Wikipedia.
 `.replaceAll("\\`", "`");
 
-async function* fakeReply({ turns, signal }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
+async function* fakeReply({ turns, signal, search, model }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const q = turns.at(-1)?.text.slice(0, 80) ?? "";
   // "busy" in the message makes the chosen model act overloaded, to test retries and the fallback.
   if (chosen && q.includes("busy")) throw Object.assign(new Error("This model is currently experiencing high demand."), { status: 503 });
+  // "latest" with search on makes it search the web first, to test sources and search fees.
+  if (search && q.includes("latest")) {
+    if (q.includes("nosearch")) throw Object.assign(new Error("Search grounding is not supported for this key."), { status: 400 });
+    yield { type: "searching" };
+    await new Promise((r) => setTimeout(r, q.includes("slowly") ? 1500 : 50));
+    yield { type: "searching", query: q.slice(0, 60) };
+    const sources: Source[] = [
+      { url: "https://en.wikipedia.org/wiki/Quadratic_formula", title: "Quadratic formula - Wikipedia" },
+      { url: "https://www.bbc.co.uk/news/science", title: "Science news", domain: "bbc.co.uk" },
+      { url: "https://www.nature.com/news", title: "Nature news" },
+    ];
+    const text = `Here's what I found on the web. The quadratic formula is centuries old [1](${sources[0].url}), and it still appears in the news [2](${sources[1].url}).`;
+    for (let i = 0; i < text.length; i += 24) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      await new Promise((r) => setTimeout(r, 8));
+      yield { type: "text", text: text.slice(i, i + 24) };
+    }
+    yield { type: "sources", sources };
+    yield { type: "searches", count: 2 };
+    if (model.provider === "google") {
+      yield { type: "suggestions", html: '<style>.c{font:14px sans-serif}</style><div class="c"><a href="https://www.google.com/search?q=quadratic">quadratic formula</a><script>parent.document.title="pwned"</script></div>' };
+    }
+    yield { type: "usage", input: 3000, output: 200 };
+    return;
+  }
   const reply = FAKE_REPLY.replace("{q}", q);
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {

@@ -10,9 +10,13 @@ import type { Shell } from "@/lib/chat/load";
 import { deleteChat, pinChat, refreshChat, refreshShell, rememberModel, renameChat } from "@/app/c/actions";
 import { ModelPicker } from "./ModelPicker";
 import { Sidebar } from "./Sidebar";
-import { ArrowUpIcon, ChevronDownIcon, CopyIcon, MenuIcon, MoreIcon, NewChatIcon, RetryIcon, StopIcon } from "./icons";
+import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, RetryIcon, StopIcon } from "./icons";
+import { SearchSuggestions, Searching, Sources } from "./Sources";
+import type { Source } from "@/lib/chat/thread";
 
-type Live = MessageRow & { streaming?: boolean };
+type Live = MessageRow & { streaming?: boolean; queries?: string[]; searchingNow?: boolean };
+
+const SEARCH_PREF = "depeche:web-search";
 
 const draftId = () => `local-${Math.random().toString(36).slice(2)}`;
 
@@ -33,6 +37,30 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // Web search is on unless this person turned it off on this device.
+  const [search, setSearch] = useState(true);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(SEARCH_PREF) === "off") setSearch(false);
+    } catch {
+      // Private browsing can block storage; search simply stays on.
+    }
+  }, []);
+  const [hint, setHint] = useState<string | null>(null);
+  const hintTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const toggleSearch = () => {
+    setHint(search ? "Web search off" : "Web search on: the model searches when it needs to");
+    clearTimeout(hintTimer.current);
+    hintTimer.current = setTimeout(() => setHint(null), 2500);
+    setSearch((on) => {
+      try {
+        localStorage.setItem(SEARCH_PREF, on ? "off" : "on");
+      } catch {
+        // Not remembered, but still switched for now.
+      }
+      return !on;
+    });
+  };
   const abortRef = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
@@ -102,7 +130,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chatId, model: model.id, clientRequestId: crypto.randomUUID(), ...body }),
+        body: JSON.stringify({ chatId, model: model.id, clientRequestId: crypto.randomUUID(), search, ...body }),
         signal: abort.signal,
       });
       if (!res.ok || !res.body) {
@@ -123,7 +151,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
         frame = 0;
         const add = pending;
         pending = "";
-        if (add) patchReply((m) => ({ ...m, content: { ...m.content, text: (m.content.text ?? "") + add } }));
+        if (add) patchReply((m) => ({ ...m, searchingNow: false, content: { ...m.content, text: (m.content.text ?? "") + add } }));
       };
       for (;;) {
         const { value, done } = await reader.read();
@@ -137,6 +165,8 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             | { type: "start"; chatId: string; userMessage: MessageRow }
             | { type: "text"; text: string }
             | { type: "notice"; text: string }
+            | { type: "searching"; query?: string }
+            | { type: "sources"; sources: Source[] }
             | { type: "done" | "error"; message: MessageRow | null; error?: string };
           if (ev.type === "start") {
             if (!chatId) {
@@ -157,6 +187,14 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
           } else if (ev.type === "text") {
             pending += ev.text;
             if (!frame) frame = requestAnimationFrame(flush);
+          } else if (ev.type === "searching") {
+            if (frame) cancelAnimationFrame(frame);
+            flush();
+            const q = ev.query;
+            patchReply((m) => ({ ...m, searchingNow: true, queries: q ? [...(m.queries ?? []), q] : (m.queries ?? []) }));
+          } else if (ev.type === "sources") {
+            const sources = ev.sources;
+            patchReply((m) => ({ ...m, content: { ...m.content, sources } }));
           } else if (ev.type === "notice") {
             patchReply((m) => ({ ...m, content: { ...m.content, notice: ev.text } }));
           } else {
@@ -331,8 +369,16 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             onStop={() => abortRef.current?.abort()}
             busy={busy}
             disabled={!model}
+            search={search}
+            onToggleSearch={toggleSearch}
           />
-          <p className="mt-2 hidden text-center text-[12px] text-mute md:block">Enter to send · Shift + Enter for a new line</p>
+          {hint ? (
+            <p role="status" className="mt-2 text-center text-[12px] text-mute">
+              {hint}
+            </p>
+          ) : (
+            <p className="mt-2 hidden text-center text-[12px] text-mute md:block">Enter to send · Shift + Enter for a new line</p>
+          )}
         </div>
       </div>
 
@@ -349,11 +395,14 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
   return (
     <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
       {text ? <Markdown text={text} streaming={m.streaming} /> : null}
-      {m.streaming ? (
+      {m.streaming && m.searchingNow ? <Searching queries={m.queries ?? []} /> : null}
+      {m.streaming && !m.searchingNow ? (
         <span aria-label="Writing" className="block h-6">
           <span className="stream-cursor" />
         </span>
       ) : null}
+      {!m.streaming && m.content.sources?.length ? <Sources sources={m.content.sources} searches={m.content.searches} /> : null}
+      {!m.streaming && m.content.suggestions ? <SearchSuggestions html={m.content.suggestions} /> : null}
       {m.content.notice ? <p className="text-[14px] text-mute">{m.content.notice}</p> : null}
       {m.status === "stopped" ? <p className="text-[14px] text-mute">Stopped.</p> : null}
       {m.status === "failed" ? (
@@ -402,7 +451,11 @@ function Composer({
   onStop,
   busy,
   disabled,
+  search,
+  onToggleSearch,
 }: {
+  search: boolean;
+  onToggleSearch: () => void;
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
@@ -420,12 +473,22 @@ function Composer({
 
   return (
     <form
-      className="flex items-end gap-2 rounded-[26px] border border-line bg-bg p-2 pl-5 focus-within:border-fg"
+      className="flex items-end gap-1 rounded-[26px] border border-line bg-bg p-2 pl-2 focus-within:border-fg"
       onSubmit={(e) => {
         e.preventDefault();
         onSend();
       }}
     >
+      <button
+        type="button"
+        onClick={onToggleSearch}
+        aria-pressed={search}
+        aria-label="Search the web"
+        title={search ? "Web search on: the model searches when it needs to" : "Web search off"}
+        className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors ${search ? "text-fg" : "text-faint"}`}
+      >
+        {search ? <GlobeIcon /> : <GlobeOffIcon />}
+      </button>
       <textarea
         ref={box}
         value={value}

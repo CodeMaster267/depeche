@@ -75,7 +75,14 @@ const components: Components = {
         {children}
       </a>
     ) : (
-      <a href={href} {...rest} target="_blank" rel="noopener noreferrer nofollow">
+      <a
+        href={href}
+        {...rest}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        // Web search citations are written as numbered links, [1](https://…), and shown small.
+        className={typeof children === "string" && /^\d{1,2}$/.test(children) ? "cite" : undefined}
+      >
         {children}
       </a>
     ),
