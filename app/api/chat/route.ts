@@ -171,6 +171,7 @@ export async function POST(req: NextRequest) {
       send({ type: "start", chatId: finalChatId, userMessageId: questionId, userMessage: question });
 
       let reply = "";
+      let used = model;
       let notice: string | undefined;
       let usage: { input: number; output: number } | undefined;
       let status: MessageRow["status"] = "completed";
@@ -181,6 +182,7 @@ export async function POST(req: NextRequest) {
             reply += ev.text;
             send(ev);
           } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
+          else if (ev.type === "model") used = findModel(ev.id) ?? model;
           else {
             notice = ev.text;
             send(ev);
@@ -199,7 +201,7 @@ export async function POST(req: NextRequest) {
         const inputChars = turns.reduce((n, t) => n + t.text.length, system.length);
         usage = { input: status === "failed" ? 0 : Math.ceil(inputChars / 4), output: Math.ceil(reply.length / 4) };
       }
-      const cost = estimateCost(model, usage.input, usage.output);
+      const cost = estimateCost(used, usage.input, usage.output);
 
       const { data: saved } = await admin
         .from("messages")
@@ -210,8 +212,8 @@ export async function POST(req: NextRequest) {
           role: "assistant",
           content: { text: reply, ...(notice ? { notice } : {}), ...(error ? { error } : {}), cost },
           status,
-          provider: model.provider,
-          model: model.id,
+          provider: used.provider,
+          model: used.id,
         })
         .select("id, chat_id, parent_id, role, content, status, model, created_at")
         .single<MessageRow>();
@@ -221,8 +223,8 @@ export async function POST(req: NextRequest) {
           ? admin.from("usage_events").insert({
               owner_id: me.userId,
               message_id: saved?.id ?? null,
-              provider: model.provider,
-              model: model.id,
+              provider: used.provider,
+              model: used.id,
               input_tokens: usage.input,
               output_tokens: usage.output,
               cost_usd: cost.toFixed(6),

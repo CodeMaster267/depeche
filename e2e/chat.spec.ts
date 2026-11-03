@@ -134,6 +134,21 @@ test.describe("chatting", () => {
   });
 });
 
+test.describe("busy models", () => {
+  test("a busy model is retried, then a lighter one answers and says so", async ({ page }) => {
+    await signInOwner(page);
+    await ensureGoogleKey(page);
+    await page.goto("/");
+    await pickModel(page, "Gemini 3.8 Flash");
+    await send(page, "Are you busy?");
+    const reply = page.getByTestId("reply").last();
+    await expect(reply).not.toHaveAttribute("aria-busy", "true", { timeout: 20_000 });
+    await expect(reply).toContainText("worked answer");
+    await expect(reply.getByText("Gemini 3.8 Flash was busy, so Gemini 3.5 Flash-Lite answered instead.")).toBeVisible();
+    await expect(reply.getByText(/^Flash-Lite · \$/)).toBeVisible();
+  });
+});
+
 test.describe("privacy and limits", () => {
   test("a member can't open someone else's chat, and their limit stops them", async ({ page, browser, contextOptions }) => {
     // The owner starts a chat.
