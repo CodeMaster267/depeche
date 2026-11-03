@@ -19,6 +19,8 @@ type Body = {
   regenerate?: string;
   /** Let the model search the web when it needs to. */
   search?: boolean;
+  /** Sent from voice chat: the reply will be read aloud. */
+  voice?: boolean;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -154,7 +156,12 @@ export async function POST(req: NextRequest) {
         ]
       : []),
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
-  ].join(" ");
+    body.voice
+      ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const abort = new AbortController();
   req.signal.addEventListener("abort", () => abort.abort());

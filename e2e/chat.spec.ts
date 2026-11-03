@@ -139,7 +139,7 @@ test.describe("chatting", () => {
     await expect(page.getByTestId("reply").last()).toContainText("worked answer");
     await page.getByRole("button", { name: "Stop" }).click();
     await expect(page.getByTestId("reply").last().getByText("Stopped.")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Voice chat" })).toBeVisible();
     // Reloading shows the saved, partial reply.
     await page.waitForTimeout(1500);
     await page.reload();
