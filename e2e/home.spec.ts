@@ -33,3 +33,9 @@ test("glitch is switched off for people who ask for reduced motion", async ({ pa
     for (const el of await all.all()) await expect(el).toBeHidden();
   }
 });
+
+test("the wordmark reads \"depeche\" in lower case", async ({ page }) => {
+  await page.goto("/sign-in");
+  const wordmark = page.getByRole("img", { name: "Depeche" });
+  expect(await wordmark.evaluate((el) => getComputedStyle(el).textTransform)).toBe("lowercase");
+});
