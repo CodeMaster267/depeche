@@ -11,7 +11,10 @@ import { webSource } from "@/lib/ai/sources";
  * provider-neutral shape and turns them into each provider's format here, so a chat can switch
  * models halfway through.
  */
-export type Turn = { role: "user" | "assistant"; text: string };
+export type Turn = { role: "user" | "assistant"; text: string; files?: TurnFile[] };
+
+/** An image or PDF sent with a turn, base64 encoded. Text files are put into the turn's text. */
+export type TurnFile = { name: string; mime: string; data: string };
 
 export type StreamEvent =
   | { type: "text"; text: string }
@@ -141,7 +144,21 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search }:
   const client = new Anthropic({ apiKey, maxRetries: 1 });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
-  const messages: Msg[] = turns.map((t) => ({ role: t.role, content: t.text }));
+  const messages: Msg[] = turns.map((t) =>
+    t.files?.length
+      ? {
+          role: t.role,
+          content: [
+            ...t.files.map((f) =>
+              f.mime === "application/pdf"
+                ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data }, title: f.name }
+                : { type: "image", source: { type: "base64", media_type: f.mime, data: f.data } },
+            ),
+            ...(t.text ? [{ type: "text", text: t.text }] : []),
+          ],
+        }
+      : { role: t.role, content: t.text || "(no text)" },
+  );
   let input = 0;
   let output = 0;
   let searches = 0;
@@ -237,7 +254,21 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search }: Re
     {
       model: model.id,
       instructions: system,
-      input: turns.map((t) => ({ role: t.role, content: t.text })),
+      input: turns.map((t) =>
+        t.role === "user" && t.files?.length
+          ? {
+              role: "user" as const,
+              content: [
+                ...t.files.map((f) =>
+                  f.mime === "application/pdf"
+                    ? { type: "input_file" as const, filename: f.name, file_data: `data:application/pdf;base64,${f.data}` }
+                    : { type: "input_image" as const, image_url: `data:${f.mime};base64,${f.data}`, detail: "auto" as const },
+                ),
+                ...(t.text ? [{ type: "input_text" as const, text: t.text }] : []),
+              ],
+            }
+          : { role: t.role, content: t.text },
+      ),
       max_output_tokens: MAX_OUTPUT,
       store: false,
       stream: true,
@@ -284,7 +315,13 @@ async function* googleReply({ model, apiKey, system, turns, signal, search }: Re
   const ai = new GoogleGenAI({ apiKey });
   const stream = await ai.models.generateContentStream({
     model: model.id,
-    contents: turns.map((t) => ({ role: t.role === "assistant" ? "model" : "user", parts: [{ text: t.text }] })),
+    contents: turns.map((t) => ({
+      role: t.role === "assistant" ? "model" : "user",
+      parts: [
+        ...(t.files ?? []).map((f) => ({ inlineData: { mimeType: f.mime, data: f.data } })),
+        ...(t.text || !t.files?.length ? [{ text: t.text }] : []),
+      ],
+    })),
     config: {
       systemInstruction: system,
       maxOutputTokens: MAX_OUTPUT,
@@ -486,7 +523,8 @@ This is well documented[^1].
 `.replaceAll("\\`", "`");
 
 async function* fakeReply({ turns, signal, search, model, system }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
-  const q = turns.at(-1)?.text.slice(0, 80) ?? "";
+  const last = turns.at(-1);
+  const q = last?.text.slice(0, 80) ?? "";
   // Like Gemini, told it can search but given no search tool, it answers with nothing.
   if (!search && system.includes("You can search the web")) {
     yield { type: "usage", input: 100, output: 0 };
@@ -520,7 +558,9 @@ async function* fakeReply({ turns, signal, search, model, system }: ReplyRequest
     yield { type: "usage", input: 3000, output: 200 };
     return;
   }
-  const reply = FAKE_REPLY.replace("{q}", q);
+  // Say which files arrived, so tests can check that attachments reach the model.
+  const seen = [...(last?.files ?? []).map((f) => f.name), ...[...(last?.text ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1])];
+  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + FAKE_REPLY.replace("{q}", q);
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

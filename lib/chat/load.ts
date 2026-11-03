@@ -8,6 +8,7 @@ import { refreshKeyModels, staleKeys, type KeyModels } from "@/lib/ai/key-models
 import { activePath, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 
 export type Shell = {
+  userId: string;
   name: string;
   isAdmin: boolean;
   chats: ChatRow[];
@@ -40,6 +41,7 @@ export async function loadShell(me: Me): Promise<Shell> {
   if (stale.length) after(() => refreshKeyModels(me.profile.family_id, stale.map((k) => k.provider)));
   const { data: last } = await db.from("profiles").select("last_model").eq("id", me.userId).maybeSingle<{ last_model: string | null }>();
   return {
+    userId: me.userId,
     name: me.profile.display_name,
     isAdmin: me.profile.role === "admin",
     chats: chats ?? [],

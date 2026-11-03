@@ -63,3 +63,42 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+
+  bug-fix-rules:
+    name: Bug-fix rules
+    # A fix for a bug report is held to scripts/bugs/policy.ts: what it may touch depends on who sent
+    # the report. Passes for every other pull request. Uses main's copy of the rules, never the PR's.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+      # Only reads the pull request's changes as text; none of its code runs here.
+      - name: Fetch the pull request
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the fix against the rules
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ -f scripts/bugs/check-pr.ts ]; then
+            node scripts/bugs/check-pr.ts
+          else
+            echo "::notice::main has no bug-fix rules yet (this pull request adds them), so there is nothing to check."
+          fi
