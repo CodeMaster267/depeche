@@ -10,12 +10,16 @@ import { supabaseServer } from "@/lib/supabase/server";
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const tokenHash = url.searchParams.get("token_hash");
+  const code = url.searchParams.get("code");
   const type = (url.searchParams.get("type") ?? "email") as EmailOtpType;
   const back = (path: string) => NextResponse.redirect(new URL(path, url.origin));
-  if (!tokenHash) return back("/sign-in?error=link");
+  if (!tokenHash && !code) return back("/sign-in?error=link");
 
   const supabase = await supabaseServer();
-  const { data, error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
+  // Supabase's default email template sends a browser-bound code instead; accept that too.
+  const { data, error } = tokenHash
+    ? await supabase.auth.verifyOtp({ token_hash: tokenHash, type })
+    : await supabase.auth.exchangeCodeForSession(code!);
   if (error || !data.user) return back("/sign-in?error=link");
   return (await finishSignIn(supabase, data.user)) === "ok" ? back("/") : back("/sign-in?error=not-invited");
 }
