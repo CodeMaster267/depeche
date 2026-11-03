@@ -1,0 +1,60 @@
+name: Keep-alive and backup watchdog
+
+# Every day:
+#   1. Touches the live app and database so Supabase's free plan never pauses the project
+#      (Vercel also does this daily, see vercel.json; either one is enough).
+#   2. Checks that a good nightly backup happened in the last 36 hours. GitHub sometimes delays or
+#      skips scheduled runs, so if it didn't, this starts one now and opens an issue.
+
+on:
+  schedule:
+    - cron: "41 15 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      APP_URL: ${{ vars.APP_URL || 'https://depai.vercel.app' }}
+      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wake the app and the database
+        run: |
+          ok=false
+          for i in 1 2 3; do
+            if curl -fsS --max-time 30 "$APP_URL/api/keep-alive"; then ok=true; break; fi
+            sleep 20
+          done
+          if [ -n "$DB_URL" ]; then psql "$DB_URL" -Atc "select 1" >/dev/null && ok=true; fi
+          if [ "$ok" != true ]; then
+            scripts/backup/alert.sh open keep-alive-failed "Depeche's database did not answer" \
+              "The daily keep-alive could not reach $APP_URL/api/keep-alive or the database. Supabase may have paused the project: open https://supabase.com/dashboard and press Restore if it says Paused. Details: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            exit 1
+          fi
+          scripts/backup/alert.sh close keep-alive-failed "Fixed: the database answers again."
+      - name: Check last night's backup actually ran
+        run: |
+          last=$(gh run list --workflow backup.yml --status success --limit 1 --json createdAt --jq '.[0].createdAt // empty')
+          if [ -n "$last" ] && [ $(( $(date -u +%s) - $(date -u -d "$last" +%s) )) -lt $(( 36 * 3600 )) ]; then
+            echo "Last good backup: $last"
+            exit 0
+          fi
+          gh workflow run backup.yml
+          scripts/backup/alert.sh open backup-missing "No backup in the last 36 hours" \
+            "The last good backup was ${last:-never}. GitHub may have skipped the nightly run, so a backup has just been started. If it fails, a separate issue will say why."
+      - name: Close the missing-backup alert once backups are current
+        if: success()
+        run: |
+          last=$(gh run list --workflow backup.yml --status success --limit 1 --json createdAt --jq '.[0].createdAt // empty')
+          if [ -n "$last" ] && [ $(( $(date -u +%s) - $(date -u -d "$last" +%s) )) -lt $(( 36 * 3600 )) ]; then
+            scripts/backup/alert.sh close backup-missing "Fixed: a good backup ran at $last."
+          fi
