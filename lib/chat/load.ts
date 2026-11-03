@@ -6,6 +6,7 @@ import { chooseDefault, modelsFor } from "@/lib/ai/models";
 import { after } from "next/server";
 import { refreshKeyModels, staleKeys, type KeyModels } from "@/lib/ai/key-models";
 import { activePath, type ChatRow, type MessageRow } from "@/lib/chat/thread";
+import { SUMMARY_COLUMNS, type SummaryRow } from "@/lib/chat/summary";
 
 export type Shell = {
   userId: string;
@@ -53,22 +54,35 @@ export async function loadShell(me: Me): Promise<Shell> {
 }
 
 /** One of your chats with the conversation as currently shown, or null if it isn't yours. */
-export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow; messages: MessageRow[] } | null> {
+export async function loadChat(
+  me: Me,
+  chatId: string,
+): Promise<{ chat: ChatRow; messages: MessageRow[]; summaries: SummaryRow[] } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(chatId)) return null;
   const db = await supabaseServer();
   const { data: chat } = await db
     .from("chats")
-    .select("id, title, model, pinned, updated_at")
+    .select("id, title, model, pinned, updated_at, compaction")
     .eq("id", chatId)
     .eq("owner_id", me.userId)
     .maybeSingle<ChatRow>();
   if (!chat) return null;
-  const { data: messages } = await db
-    .from("messages")
-    .select("id, chat_id, parent_id, role, content, status, model, created_at")
-    .eq("chat_id", chatId)
-    .order("created_at")
-    .returns<MessageRow[]>();
+  const [{ data: messages }, { data: summaries }] = await Promise.all([
+    db
+      .from("messages")
+      .select("id, chat_id, parent_id, role, content, status, model, created_at")
+      .eq("chat_id", chatId)
+      .order("created_at")
+      .returns<MessageRow[]>(),
+    // Summaries of this chat's earlier messages (auto-compaction). Only ever the owner's.
+    db
+      .from("chat_summaries")
+      .select(SUMMARY_COLUMNS)
+      .eq("chat_id", chatId)
+      .eq("status", "active")
+      .order("created_at")
+      .returns<SummaryRow[]>(),
+  ]);
   const path = activePath(messages ?? []);
   // Memory suggestions still waiting for an answer, shown under the reply that made them.
   const replies = path.filter((m) => m.role === "assistant").map((m) => m.id);
@@ -85,5 +99,5 @@ export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow;
       if (m) m.memory = { id: w.id, content: w.content };
     }
   }
-  return { chat, messages: path };
+  return { chat, messages: path, summaries: summaries ?? [] };
 }

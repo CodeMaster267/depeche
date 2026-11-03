@@ -29,6 +29,8 @@ export const LIMITS = {
   /** Messages to the AI, per person. */
   messagesPerMinute: { limit: 12, seconds: 60 },
   messagesPerDay: { limit: 400, seconds: 24 * 60 * 60 },
+  /** Chat summaries (auto-compaction and "Redo summary"), per person. */
+  summariesPerHour: { limit: 30, seconds: 60 * 60 },
   /** Voice requests (listening and reading aloud), per person. */
   voicePerMinute: { limit: 30, seconds: 60 },
   /** Bug reports, per person. */

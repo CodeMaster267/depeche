@@ -7,7 +7,9 @@ import { Markdown } from "@/components/markdown/Markdown";
 import { canSearch, findModel } from "@/lib/ai/models";
 import { titleFrom, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
-import { deleteChat, pinChat, refreshChat, refreshShell, rememberModel, renameChat } from "@/app/c/actions";
+import { deleteChat, discardSummary, pinChat, refreshChat, refreshShell, rememberModel, renameChat, setCompaction } from "@/app/c/actions";
+import { activeSummary, type SummaryRow } from "@/lib/chat/summary";
+import { SummaryLine, SummarySheet } from "./SummarySheet";
 import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
@@ -29,11 +31,24 @@ const draftId = () => `local-${Math.random().toString(36).slice(2)}`;
  * The chat screen: your chats on the left (a drawer on phones), the conversation, and the box to
  * write in. Replies stream in from /api/chat as they're written.
  */
-export function ChatApp({ shell: initialShell, chat: initialChat, messages: initial }: { shell: Shell; chat: ChatRow | null; messages: MessageRow[] }) {
+export function ChatApp({
+  shell: initialShell,
+  chat: initialChat,
+  messages: initial,
+  summaries: initialSummaries = [],
+}: {
+  shell: Shell;
+  chat: ChatRow | null;
+  messages: MessageRow[];
+  summaries?: SummaryRow[];
+}) {
   const router = useRouter();
   const [shell, setShell] = useState(initialShell);
   const [chat, setChat] = useState<ChatRow | null>(initialChat);
   const [messages, setMessages] = useState<Live[]>(initial);
+  // Summaries of earlier messages (auto-compaction), and whether the open one is showing.
+  const [summaries, setSummaries] = useState<SummaryRow[]>(initialSummaries);
+  const [viewing, setViewing] = useState<string | null>(null);
   const [modelId, setModelId] = useState<string | null>(
     initialChat?.model && initialShell.modelIds.includes(initialChat.model) ? initialChat.model : initialShell.defaultModel,
   );
@@ -95,6 +110,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       if (found && !abortRef.current) {
         setChat(found.chat);
         setMessages(found.messages);
+        setSummaries(found.summaries);
       }
     }
   }, [chat]);
@@ -178,7 +194,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             | { type: "notice"; text: string }
             | { type: "searching"; query?: string }
             | { type: "sources"; sources: Source[] }
-            | { type: "done" | "error"; message: MessageRow | null; error?: string };
+            | { type: "done" | "error"; message: MessageRow | null; error?: string; compact?: boolean; summary?: SummaryRow };
           if (ev.type === "start") {
             if (!chatId) {
               chatId = ev.chatId;
@@ -215,6 +231,11 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             if (saved) {
               setMessages((list) => list.map((m) => (m.id === replyId ? saved : m)));
               setShell((s) => ({ ...s, spent: s.spent + Number(saved.content.cost ?? 0) }));
+              // A summary made before this reply (the chat had grown well past the point).
+              const made = ev.summary;
+              if (made) setSummaries((list) => [...list.filter((s) => s.id !== made.id), made]);
+              // The chat is long enough to summarise: do it now, in the background.
+              if (ev.compact && chatId) summarise(chatId);
             } else patchReply((m) => ({ ...m, streaming: false, status: "failed", content: { ...m.content, error: ev.error } }));
           }
         }
@@ -240,6 +261,27 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       }));
     }
   }
+
+  async function summarise(chatId: string, redo?: string): Promise<string | null> {
+    const res = await fetch("/api/chat/compact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chatId, ...(redo ? { redo } : {}) }),
+      keepalive: !redo,
+    }).catch(() => null);
+    const out = (await res?.json().catch(() => null)) as { summary?: SummaryRow; skipped?: string; error?: string } | null;
+    const made = out?.summary;
+    if (made) {
+      setSummaries((list) => [...list.filter((s) => s.id !== redo && s.id !== made.id), made]);
+      if (redo) setViewing(made.id);
+      return null;
+    }
+    return out?.error ?? (out?.skipped ? `Couldn't summarise: ${out.skipped}.` : "Couldn't summarise. Try again.");
+  }
+
+  // Where the model starts reading word for word: after the newest summary on the shown path.
+  const applied = chat?.compaction !== "off" ? activeSummary(messages, summaries) : null;
+  const shownSummary = viewing ? summaries.find((s) => s.id === viewing) : undefined;
 
   const send = () => {
     const text = draft.trim();
@@ -350,7 +392,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
                 )}
               </div>
             ) : null}
-            {messages.map((m) =>
+            {messages.map((m, i) => [
               m.role === "user" ? (
                 <div key={m.id} className="flex flex-col items-end gap-2">
                   {m.content.files?.length ? <MessageFiles files={m.content.files} /> : null}
@@ -371,7 +413,10 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
                 />
               ),
-            )}
+              applied && applied.index === i && i < messages.length - 1 ? (
+                <SummaryLine key={`summary-${applied.summary.id}`} onOpen={() => setViewing(applied.summary.id)} />
+              ) : null,
+            ])}
           </div>
         </div>
 
@@ -421,6 +466,23 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
           onSend={(t) => sendText(t, true)}
           onStop={() => abortRef.current?.abort()}
           onClose={() => setVoiceOpen(false)}
+        />
+      ) : null}
+      {shownSummary && chat ? (
+        <SummarySheet
+          summary={shownSummary}
+          onClose={() => setViewing(null)}
+          onRedo={() => summarise(chat.id, shownSummary.id)}
+          onDiscard={async () => {
+            await discardSummary(shownSummary.id);
+            setSummaries((list) => list.filter((s) => s.id !== shownSummary.id));
+            setViewing(null);
+          }}
+          onTurnOff={async () => {
+            await setCompaction(chat.id, false);
+            setChat({ ...chat, compaction: "off" });
+            setViewing(null);
+          }}
         />
       ) : null}
       {picking ? <ModelPicker available={shell.modelIds} current={modelId} onPick={pickModel} onClose={() => setPicking(false)} /> : null}
@@ -671,6 +733,19 @@ function ChatMenu({ chat, onChange, onDeleted }: { chat: ChatRow; onChange: (c: 
               }}
             >
               {chat.pinned ? "Unpin" : "Pin"}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full px-4 py-2.5 text-left hover:bg-soft"
+              onClick={async () => {
+                setOpen(false);
+                const on = chat.compaction === "off";
+                onChange({ ...chat, compaction: on ? "auto" : "off" });
+                await setCompaction(chat.id, on);
+              }}
+            >
+              {chat.compaction === "off" ? "Turn on summaries" : "Turn off summaries"}
             </button>
             <button
               type="button"

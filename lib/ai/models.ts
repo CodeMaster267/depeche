@@ -15,6 +15,8 @@ export type Model = {
   short: string;
   tags: string[];
   price: { input: number; output: number };
+  /** The model's context window in tokens, when known (auto-compaction keeps chats well inside it). */
+  context?: number;
 };
 
 export const PROVIDERS: { id: Provider; name: string; keyUrl: string; keyHint: string }[] = [

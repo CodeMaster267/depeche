@@ -579,6 +579,15 @@ This is well documented[^1].
 async function* fakeReply({ turns, signal, search, model, system }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const last = turns.at(-1);
   const q = last?.text.slice(0, 80) ?? "";
+  // Asked to summarise a chat (auto-compaction): a short summary naming the first message, and facts.
+  if (system.startsWith("You summarise conversations for Depeche")) {
+    const first = /\[[^\]]+\]\n([^\n]{0,60})/.exec(last?.text ?? "")?.[1] ?? "";
+    const reply = `<summary>Earlier in this chat they talked about "${first}" and more.</summary>\n<facts>\n- The secret number is 4417.\n</facts>`;
+    await new Promise((r) => setTimeout(r, q.includes("slowly") ? 1500 : 30));
+    yield { type: "text", text: reply };
+    yield { type: "usage", input: Math.ceil((last?.text.length ?? 0) / 4), output: 60 };
+    return;
+  }
   // Like Gemini, told it can search but given no search tool, it answers with nothing.
   if (!search && system.includes("You can search the web")) {
     yield { type: "usage", input: 100, output: 0 };

@@ -29,7 +29,15 @@ export type MessageRow = {
   memory?: { id: string; content: string };
 };
 
-export type ChatRow = { id: string; title: string; model: string | null; pinned: boolean; updated_at: string };
+export type ChatRow = {
+  id: string;
+  title: string;
+  model: string | null;
+  pinned: boolean;
+  updated_at: string;
+  /** Auto-compaction for this chat ("auto" unless turned off). Only loaded for the open chat. */
+  compaction?: "auto" | "off";
+};
 
 /**
  * Messages are never edited or deleted: a regenerated reply is a new message with the same parent.
