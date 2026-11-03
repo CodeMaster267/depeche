@@ -1,22 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, closeMicStream, listen, openMicStream, say, startSpeaking, stopSpeaking, unlockAudio } from "@/lib/voice/client";
+import { Mic, closeMicStream, listen, openMicStream, say, startSpeaking, stopSpeaking, unlockAudio, within } from "@/lib/voice/client";
 import { readyToSpeak, speakable } from "@/lib/voice/text";
 import { micProblem } from "./VoiceButtons";
+import { CloseIcon, MicIcon, MicOffIcon } from "./icons";
 
 export type VoiceMessage = { id: string; role: string; content: { text?: string; error?: string }; status: string; streaming?: boolean };
 
-type Phase = "starting" | "listening" | "hearing" | "thinking" | "speaking" | "paused";
+type Phase = "starting" | "listening" | "hearing" | "thinking" | "speaking" | "paused" | "muted";
 
 const LABEL: Record<Phase, string> = {
   starting: "Starting…",
   listening: "Listening",
-  hearing: "Listening",
-  thinking: "Thinking",
+  hearing: "Writing out what you said…",
+  thinking: "Thinking…",
   speaking: "Speaking",
   paused: "Tap to talk",
+  muted: "Muted",
 };
+
+/** How long each step may take before voice chat gives up and says so, instead of hanging. */
+const HEAR_TIMEOUT_MS = 30_000;
+const ANSWER_TIMEOUT_MS = 60_000;
 
 /**
  * Hands-free voice chat, over the open chat. It listens until you stop talking, sends what you
@@ -43,6 +49,11 @@ export function VoiceMode({
   const [level, setLevel] = useState(0);
   const [note, setNote] = useState<string | null>(null);
   const [said, setSaid] = useState("");
+  const [muted, setMutedState] = useState(false);
+  const mutedRef = useRef(false);
+  /** Where the latest answer sits in the chat, so its captions stay up until you speak again. */
+  const [answerAt, setAnswerAt] = useState<number | null>(null);
+  const captions = useRef<HTMLDivElement>(null);
   const phaseRef = useRef<Phase>("starting");
   const setPhase = (p: Phase) => {
     phaseRef.current = p;
@@ -72,6 +83,12 @@ export function VoiceMode({
   const startListening = useCallback(async () => {
     if (!open.current) return;
     mic.current?.cancel();
+    mic.current = null;
+    if (mutedRef.current) {
+      setLevel(0);
+      setNote(null);
+      return setPhase("muted");
+    }
     setNote(null);
     setPhase("listening");
     try {
@@ -86,7 +103,7 @@ export function VoiceMode({
         onLevel: setLevel,
         onAutoStop: (heard) => (heard ? hear() : pause("Didn't hear anything. Tap to talk.")),
       }, stream.current);
-      if (!open.current) mic.current.cancel();
+      if (!open.current || mutedRef.current) mic.current.cancel();
     } catch (e) {
       console.warn("[voice] microphone", (e as Error)?.name, (e as Error)?.message);
       pause(micProblem(e));
@@ -111,9 +128,11 @@ export function VoiceMode({
     setPhase("hearing");
     let text = "";
     try {
-      text = (await listen(wav)).trim();
+      text = (await listen(wav, within(undefined, HEAR_TIMEOUT_MS))).trim();
     } catch (e) {
-      return pause(e instanceof Error ? e.message : "Couldn't hear that.");
+      const late = ["TimeoutError", "AbortError"].includes((e as Error)?.name);
+      console.warn("[voice] writing out", (e as Error)?.name, (e as Error)?.message);
+      return pause(late ? "Writing out what you said took too long. Tap to try again." : e instanceof Error ? e.message : "Couldn't hear that.");
     }
     if (!open.current) return;
     if (!text) {
@@ -123,11 +142,20 @@ export function VoiceMode({
     empties.current = 0;
     setSaid(text);
     base.current = messagesRef.current.length;
+    setAnswerAt(base.current + 1);
     spoken.current = 0;
     queue.current = [];
     sending.current = true;
     setPhase("thinking");
     sendRef.current(text);
+    // If no answer starts arriving, say so rather than flicker forever.
+    const sentAt = base.current;
+    setTimeout(() => {
+      if (!open.current || !sending.current || base.current !== sentAt || phaseRef.current !== "thinking") return;
+      if (reply()?.content.text) return;
+      sending.current = false;
+      pause("No answer came back. Tap to try again.");
+    }, ANSWER_TIMEOUT_MS);
   };
 
   const pump = async () => {
@@ -146,7 +174,7 @@ export function VoiceMode({
     setPhase("speaking");
     const c = startSpeaking();
     speech.current = c;
-    await say(next, c.signal);
+    await say(next, c.signal, (why) => setNote(`Using this device's voice instead. ${why}`));
     if (speech.current === c) speech.current = null;
     if (!c.signal.aborted) pump();
   };
@@ -193,6 +221,26 @@ export function VoiceMode({
     };
   }, [startListening]);
 
+  // Keep the newest words of the answer in view.
+  const answer = answerAt !== null && messages[answerAt]?.role === "assistant" ? messages[answerAt] : undefined;
+  const answerText = answer ? speakable(answer.content.text ?? "") : "";
+  useEffect(() => {
+    const el = captions.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [answerText, said]);
+
+  const toggleMute = () => {
+    unlockAudio();
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setMutedState(next);
+    const p = phaseRef.current;
+    if (next) {
+      // Stop listening now; anything being said still finishes.
+      if (p === "listening" || p === "paused" || p === "starting") startListening();
+    } else if (p === "muted" || p === "paused") startListening();
+  };
+
   const tap = () => {
     unlockAudio();
     const p = phaseRef.current;
@@ -211,45 +259,80 @@ export function VoiceMode({
       return;
     }
     if (p === "paused") startListening();
+    if (p === "muted") toggleMute();
   };
 
   const scale = phase === "listening" ? 1 + level * 0.5 : 1;
+  const hint =
+    phase === "listening"
+      ? "Talk, then pause."
+      : phase === "speaking" || phase === "thinking"
+        ? "Tap the circle to interrupt."
+        : phase === "muted"
+          ? "Your microphone is off. Tap Unmute to talk."
+          : "";
   return (
     <div role="dialog" aria-modal="true" aria-label="Voice chat" className="enter-glitch fixed inset-0 z-50 flex flex-col bg-bg">
-      <div className="flex justify-end px-4" style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}>
-        <button type="button" onClick={onClose} className="press rounded-full border border-line px-4 py-2 text-[15px]">
-          End
-        </button>
-      </div>
-      <div className="flex flex-1 flex-col items-center justify-center gap-10 px-8">
+      <div className="flex flex-col items-center gap-5 px-6" style={{ paddingTop: "max(2.5rem, calc(env(safe-area-inset-top) + 1.5rem))" }}>
         <button
           type="button"
           onClick={tap}
           data-phase={phase}
           aria-label={
-            phase === "speaking" || phase === "thinking" ? "Interrupt" : phase === "paused" ? "Tap to talk" : "Send now"
+            phase === "speaking" || phase === "thinking" ? "Interrupt" : phase === "muted" ? "Unmute" : phase === "paused" ? "Tap to talk" : "Send now"
           }
-          className={`voice-orb flex h-44 w-44 items-center justify-center rounded-full bg-fg ${phase === "thinking" || phase === "hearing" ? "voice-orb-busy" : ""} ${phase === "speaking" ? "voice-orb-speaking" : ""} ${phase === "paused" ? "opacity-30" : ""}`}
+          className={`voice-orb h-28 w-28 shrink-0 rounded-full bg-fg ${phase === "thinking" || phase === "hearing" ? "voice-orb-busy" : ""} ${phase === "speaking" ? "voice-orb-speaking" : ""} ${phase === "paused" || phase === "muted" ? "opacity-30" : ""}`}
           style={{ transform: `scale(${scale})` }}
         />
-        <div className="flex min-h-[7rem] max-w-[34rem] flex-col items-center gap-3 text-center">
-          <p aria-live="polite" className="text-[20px] font-semibold">
+        <div className="flex flex-col items-center gap-1 text-center">
+          <p aria-live="polite" className="text-[19px] font-semibold">
             {LABEL[phase]}
           </p>
           {note ? (
-            <p role="alert" className="text-[15px] text-mute">
+            <p role="alert" className="max-w-[30rem] text-[15px] text-mute">
               {note}
             </p>
-          ) : said ? (
-            <p className="line-clamp-3 text-[15px] text-mute">“{said}”</p>
-          ) : (
-            <p className="text-[15px] text-mute">Talk, then pause. Tap the circle to interrupt.</p>
-          )}
+          ) : hint ? (
+            <p className="text-[15px] text-mute">{hint}</p>
+          ) : null}
         </div>
       </div>
-      <p className="px-8 text-center text-[12px] text-faint" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
-        Saved in this chat like typed messages. Voice works while Depeche is open.
-      </p>
+
+      {/* Captions: what you said, then the answer as it is written and read out. */}
+      <div ref={captions} className="mx-auto mt-6 flex min-h-0 w-full max-w-[40rem] flex-1 flex-col gap-4 overflow-y-auto px-6 pb-4" data-testid="voice-captions">
+        {said ? (
+          <div className="flex justify-end">
+            <p data-testid="voice-you" className="max-w-[85%] rounded-[20px] bg-inv px-4 py-2.5 text-[16px] leading-snug text-on-inv">
+              {said}
+            </p>
+          </div>
+        ) : null}
+        {answerText ? (
+          <p data-testid="voice-answer" className="whitespace-pre-wrap text-[18px] leading-relaxed">
+            {answerText}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="flex items-center justify-center gap-10 px-6 pt-2" style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}>
+        <button
+          type="button"
+          onClick={toggleMute}
+          aria-pressed={muted}
+          aria-label={muted ? "Unmute" : "Mute"}
+          className={`press flex h-14 w-14 items-center justify-center rounded-full border ${muted ? "border-fg bg-fg text-bg" : "border-line"}`}
+        >
+          {muted ? <MicOffIcon /> : <MicIcon />}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="End voice chat"
+          className="press flex h-14 w-14 items-center justify-center rounded-full border border-line"
+        >
+          <CloseIcon />
+        </button>
+      </div>
     </div>
   );
 }

@@ -29,14 +29,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ text: t.text });
   } catch (e) {
     await releaseHold(hold, provider);
-    const why = reason(e);
-    return fail(
-      502,
-      why === "busy"
-        ? "Voice is busy or out of free requests for now. Wait a minute, or type instead."
-        : why === "key"
-          ? "Your family's key wasn't accepted for voice. Ask your family admin to check it."
-          : "Couldn't make out that recording. Try again.",
-    );
+    return fail(502, reason(provider, e).message);
   }
 }

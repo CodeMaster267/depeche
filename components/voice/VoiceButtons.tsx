@@ -63,6 +63,7 @@ export function DictateButton({ onText, onError, disabled }: { onText: (t: strin
       mic.current = await Mic.open(ctx, { onLevel: setLevel, onAutoStop: () => finish() });
       setState("recording");
     } catch (e) {
+      console.warn("[voice] microphone", (e as Error)?.name, (e as Error)?.message);
       onError(micProblem(e));
     }
   };

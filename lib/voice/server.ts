@@ -83,12 +83,39 @@ export async function releaseHold(hold: string, provider: Provider) {
   await recordUsage(hold, provider, "none", 0, 0, 0);
 }
 
-/** A short reason code for the browser. Logged for debugging; never includes the key. */
-export function reason(e: unknown): "busy" | "key" | "failed" {
+/** The provider's own words, unwrapped from the JSON some SDKs nest them in. Never includes the key. */
+function detail(e: unknown): string {
+  let msg = e instanceof Error ? e.message : String(e ?? "");
+  for (let i = 0; i < 3; i++) {
+    try {
+      const parsed = JSON.parse(msg.slice(msg.indexOf("{"))) as { error?: { message?: string }; message?: string };
+      const inner = parsed.error?.message ?? parsed.message;
+      if (typeof inner !== "string" || inner === msg) break;
+      msg = inner;
+    } catch {
+      break;
+    }
+  }
+  return msg.replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+/** What went wrong, for the person: a plain sentence plus what the provider itself said. */
+export function reason(provider: Provider, e: unknown): { code: "busy" | "key" | "failed"; message: string } {
   const status = (e as { status?: unknown })?.status;
-  const msg = e instanceof Error ? e.message : String(e ?? "");
-  console.error("[voice]", typeof status === "number" ? status : "", msg.slice(0, 240));
-  if (status === 429 || /quota|rate limit|resource.?exhausted/i.test(msg)) return "busy";
-  if (status === 401 || status === 403 || /api key|permission/i.test(msg)) return "key";
-  return "failed";
+  const said = detail(e);
+  console.error("[voice]", provider, typeof status === "number" ? status : "", said);
+  const name = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" }[provider];
+  const code =
+    status === 429 || /quota|rate limit|resource.?exhausted/i.test(said)
+      ? "busy"
+      : status === 401 || status === 403 || /api key|permission/i.test(said)
+        ? "key"
+        : "failed";
+  const plain =
+    code === "busy"
+      ? `${name} says your family's key is out of free requests or busy for now. Wait a minute, or type instead.`
+      : code === "key"
+        ? `${name} didn't accept your family's key for voice. Ask your family admin to check it.`
+        : `${name} couldn't do voice just now. Try again.`;
+  return { code, message: said ? `${plain} (${name} said: "${said}")` : plain };
 }

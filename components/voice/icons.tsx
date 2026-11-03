@@ -34,3 +34,14 @@ export const StopSpeakingIcon = (p: P) => (
     <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor" stroke="none" />
   </svg>
 );
+export const MicOffIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M9 9v2.5a3 3 0 0 0 5.1 2.1M15 10.5V6.5a3 3 0 0 0-5.7-1.3" />
+    <path d="M5.5 11.5a6.5 6.5 0 0 0 10.9 4.8M18.3 13.4a6.5 6.5 0 0 0 .2-1.9M12 18v2.5M4 4l16 16" />
+  </svg>
+);
+export const CloseIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+);
