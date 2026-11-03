@@ -1,0 +1,83 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { INVITE_DAYS } from "@/lib/config";
+import { friendly, requireMe, siteOrigin } from "@/lib/auth/session";
+import { supabaseAdmin } from "@/lib/supabase/admin";
+import { newInviteToken } from "@/lib/tokens";
+import { cleanEmail, cleanName, passwordProblem } from "@/lib/validate";
+
+export type ActionState = { error?: string; ok?: string; link?: string } | undefined;
+
+async function makeInvite(actor: string, family: string, name: string, email: string, role: "member" | "admin") {
+  const { token, hash } = newInviteToken();
+  const expires = new Date(Date.now() + INVITE_DAYS * 86_400_000).toISOString();
+  const { error } = await supabaseAdmin().rpc("create_invite", {
+    p_actor: actor,
+    p_family: family,
+    p_email: email,
+    p_display_name: name,
+    p_role: role,
+    p_token_hash: hash,
+    p_expires_at: expires,
+  });
+  if (error) return { error: friendly(error) };
+  return { link: `${await siteOrigin()}/invite/${token}` };
+}
+
+export async function inviteMember(_: ActionState, form: FormData): Promise<ActionState> {
+  const me = await requireMe();
+  const name = cleanName(form.get("name"));
+  const email = cleanEmail(form.get("email"));
+  if (!name || !email) return { error: "Enter their name and email address." };
+  const res = await makeInvite(me.userId, me.profile.family_id, name, email, "member");
+  revalidatePath("/family");
+  return "link" in res ? { ...res, ok: `Invite for ${name} is ready. Send them this link:` } : res;
+}
+
+export async function createFamily(_: ActionState, form: FormData): Promise<ActionState> {
+  const me = await requireMe();
+  const family = cleanName(form.get("family"), 80);
+  const name = cleanName(form.get("name"));
+  const email = cleanEmail(form.get("email"));
+  if (!family || !name || !email) return { error: "Enter the family's name, and its admin's name and email." };
+  const admin = supabaseAdmin();
+  const { data: famId, error } = await admin.rpc("create_family", { p_actor: me.userId, p_name: family });
+  if (error || !famId) return { error: friendly(error) };
+  const res = await makeInvite(me.userId, famId as string, name, email, "admin");
+  revalidatePath("/family");
+  return "link" in res ? { ...res, ok: `${family} is ready. Send ${name} this link to become its admin:` } : res;
+}
+
+export async function revokeInvite(inviteId: string): Promise<void> {
+  const me = await requireMe();
+  await supabaseAdmin().rpc("revoke_invite", { p_actor: me.userId, p_invite: inviteId });
+  revalidatePath("/family");
+}
+
+export async function setCap(memberId: string, _: ActionState, form: FormData): Promise<ActionState> {
+  const me = await requireMe();
+  const cap = Number(String(form.get("cap") ?? "").replace(/[$,\s]/g, ""));
+  if (!Number.isFinite(cap) || cap < 0 || cap > 100000) return { error: "Enter an amount in dollars." };
+  const { error } = await supabaseAdmin().rpc("set_member_cap", {
+    p_actor: me.userId,
+    p_member: memberId,
+    p_cap: Math.round(cap * 100) / 100,
+  });
+  if (error) return { error: friendly(error) };
+  revalidatePath("/family");
+  return { ok: "Saved." };
+}
+
+export async function resetPassword(memberId: string, _: ActionState, form: FormData): Promise<ActionState> {
+  const me = await requireMe();
+  const password = String(form.get("password") ?? "");
+  const problem = passwordProblem(password);
+  if (problem) return { error: problem };
+  const admin = supabaseAdmin();
+  const { data: allowed } = await admin.rpc("is_admin_of", { actor: me.userId, person: memberId });
+  if (allowed !== true) return { error: "Only this family's admin can reset passwords." };
+  const { error } = await admin.auth.admin.updateUserById(memberId, { password });
+  if (error) return { error: "Couldn't set that password. Try a different one." };
+  return { ok: "New password set. Tell them in person, and they can change it in Account." };
+}

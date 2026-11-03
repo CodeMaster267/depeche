@@ -37,6 +37,16 @@ everything else. The glitch (red/cyan channel split plus displaced slices) appea
 sign-in title card, the streaming indicator and transitions, never on text people read, and is off
 under reduced motion. Mockups: `/mnt/project-files/depeche/screens/` in the project.
 
+## Sign-in
+
+- Open sign-up is **off** in Supabase. Auth accounts are created only by the server: when someone
+  opens a valid invite, or when the owner runs `/setup`. An auth account alone grants nothing;
+  `lib/auth/finish.ts` turns a proven email into a profile (open invite, or first-time owner) and
+  signs everyone else out.
+- Email sign-in uses a link to `/auth/confirm?token_hash=…` plus a 6-digit code (template in
+  `supabase/templates/`), so it works in the iPhone home-screen app. Google returns to `/auth/callback`.
+- Usernames are looked up on the server (`email_for_username`), never exposed to the browser.
+
 ## Working here
 
 - `npm test` runs the database privacy suite against an in-memory Postgres (PGlite) set up like
@@ -44,8 +54,8 @@ under reduced motion. Mockups: `/mnt/project-files/depeche/screens/` in the proj
   Any schema change needs matching tests in `tests/db/`.
 - `npm run typecheck`, `npm run build` must pass. CI runs all three on every PR.
 - **Test every UI change in Chrome and Safari.** `npm run test:e2e` runs Playwright against
-  Chromium and WebKit, each on desktop and on a phone (Pixel 7, iPhone 15). Report both results.
-  Claude's cloud container has only Chromium (WebKit cannot be downloaded there), so locally run
-  `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npx playwright test --project=chrome-desktop --project=chrome-android`
-  and read the WebKit result from the CI `e2e` job. Say which browser ran where.
+  Chromium and WebKit, each on desktop and on a phone (Pixel 7, iPhone 15), against a real local
+  Supabase (`npm run db:start`, needs Docker; emails land in Mailpit). The `setup` project wipes the
+  local data and does first-time owner setup before the rest. Report results for both browsers.
+  Claude's cloud container can run both browsers and Docker (start `dockerd` if it isn't running).
 - Migrations are forward-only SQL files in `supabase/migrations/`, named by timestamp.

@@ -1,0 +1,12 @@
+<!-- Depeche sign-in email. Paste this into Supabase: Authentication → Emails → Magic Link. -->
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; color: #0a0a0a; max-width: 440px;">
+  <p style="font-size: 22px; font-weight: 900; letter-spacing: 0.02em; margin: 0 0 24px;">DEPECHE</p>
+  <p style="font-size: 16px; margin: 0 0 24px;">Tap the button to sign in.</p>
+  <p style="margin: 0 0 24px;">
+    <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email"
+       style="display: inline-block; background: #0a0a0a; color: #ffffff; padding: 14px 22px; border-radius: 14px; font-size: 16px; font-weight: 600; text-decoration: none;">Sign in to Depeche</a>
+  </p>
+  <p style="font-size: 15px; color: #707070; margin: 0 0 8px;">Or type this code on the sign-in page:</p>
+  <p style="font-size: 28px; font-weight: 700; letter-spacing: 0.2em; margin: 0 0 24px;">{{ .Token }}</p>
+  <p style="font-size: 13px; color: #a3a3a3; margin: 0;">If you didn't ask to sign in, ignore this email.</p>
+</div>
