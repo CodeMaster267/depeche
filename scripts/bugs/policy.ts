@@ -31,7 +31,7 @@ export const ALWAYS_BLOCKED = [
   "scripts/",
   "app/report/",
   "tests/db/",
-  "supabase/migrations/20261103030000_bug_reports.sql",
+  "supabase/migrations/20261103070000_bug_reports.sql",
   "CLAUDE.md",
   ".npmrc",
   ".env",
