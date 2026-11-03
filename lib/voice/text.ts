@@ -30,7 +30,8 @@ export function speakable(markdown: string): string {
  */
 export function readyToSpeak(text: string, done: boolean, first: boolean): { ready: string; rest: string } {
   if (done) return { ready: text, rest: "" };
-  const min = first ? 40 : 400;
+  // Small pieces start speaking sooner; each is voiced while the one before it plays.
+  const min = first ? 40 : 180;
   if (text.length < min) return { ready: "", rest: text };
   // The last sentence end after the minimum length, outside any unfinished code block.
   const fences = text.split("```").length - 1;
