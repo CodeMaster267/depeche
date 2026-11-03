@@ -150,11 +150,6 @@ export async function POST(req: NextRequest) {
   const system = [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${me.profile.display_name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
-    ...(body.search === true
-      ? [
-          "You can search the web. Search when the question needs current, local or specific facts you might not know; otherwise answer directly without searching.",
-        ]
-      : []),
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
     body.voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."

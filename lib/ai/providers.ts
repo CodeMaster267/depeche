@@ -85,7 +85,8 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
         yield { type: "model", id: attempt.model.id };
         yield { type: "notice", text: `${req.model.name} was busy, so ${attempt.model.name} answered instead.` };
       }
-      const r = { ...req, model: attempt.model, search };
+      // Telling a model it can search without giving it the tool makes some reply with nothing.
+      const r = { ...req, model: attempt.model, search, system: search ? `${req.system} ${SEARCH_HINT}` : req.system };
       const inner = fakeAi()
         ? fakeReply(r, attempt.model.id === req.model.id)
         : r.model.provider === "anthropic" ? anthropicReply(r) : r.model.provider === "openai" ? openaiReply(r) : googleReply(r);
@@ -103,12 +104,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       if (search && !isBusy(e) && status(e) !== 401) {
         search = false;
         console.error("[chat] search failed, answering without it", status(e), detail(e));
-        const said = detail(e);
-        const name = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" }[attempt.model.provider];
-        yield {
-          type: "notice",
-          text: `Web search wasn't available for this answer, so it comes from the model's own knowledge.${said ? ` (${name} said: "${said}")` : ""}`,
-        };
+        yield { type: "notice", text: searchUnavailable(attempt.model.provider, e) };
         i--;
         continue;
       }
@@ -117,6 +113,22 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
     }
   }
   throw new ProviderError(describe(req.model.provider, lastError));
+}
+
+const SEARCH_HINT =
+  "You can search the web. Search when the question needs current, local or specific facts you might not know; otherwise answer directly without searching.";
+
+/** Why a search couldn't run, worded for the person chatting. */
+function searchUnavailable(provider: Provider, e: unknown): string {
+  const name = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" }[provider];
+  const said = detail(e);
+  const base = "Web search wasn't available, so this answer comes from the model's own knowledge and may be out of date.";
+  if (status(e) === 429 || /quota|rate limit|resource.?exhausted/i.test(said)) {
+    return provider === "google"
+      ? `${base} Google's search allowance for your family's key is used up. Free Google keys include little or no web search.`
+      : `${base} ${name} says the key's limit is reached for now.`;
+  }
+  return said ? `${base} (${name} said: "${said}")` : base;
 }
 
 /** The models that fall back to another Claude model when a safety check declines a request. */
@@ -473,13 +485,19 @@ This is well documented[^1].
 [^1]: [Quadratic formula](https://en.wikipedia.org/wiki/Quadratic_formula), Wikipedia.
 `.replaceAll("\\`", "`");
 
-async function* fakeReply({ turns, signal, search, model }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
+async function* fakeReply({ turns, signal, search, model, system }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const q = turns.at(-1)?.text.slice(0, 80) ?? "";
+  // Like Gemini, told it can search but given no search tool, it answers with nothing.
+  if (!search && system.includes("You can search the web")) {
+    yield { type: "usage", input: 100, output: 0 };
+    return;
+  }
   // "busy" in the message makes the chosen model act overloaded, to test retries and the fallback.
   if (chosen && q.includes("busy")) throw Object.assign(new Error("This model is currently experiencing high demand."), { status: 503 });
   // "latest" with search on makes it search the web first, to test sources and search fees.
   if (search && q.includes("latest")) {
     if (q.includes("nosearch")) throw Object.assign(new Error("Search grounding is not supported for this key."), { status: 400 });
+    if (q.includes("noquota")) throw Object.assign(new Error("You exceeded your current quota, please check your plan and billing details."), { status: 429 });
     yield { type: "searching" };
     await new Promise((r) => setTimeout(r, q.includes("slowly") ? 1500 : 50));
     yield { type: "searching", query: q.slice(0, 60) };
