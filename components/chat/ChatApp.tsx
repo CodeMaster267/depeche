@@ -8,6 +8,8 @@ import { findModel } from "@/lib/ai/models";
 import { titleFrom, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
 import { deleteChat, pinChat, refreshChat, refreshShell, rememberModel, renameChat } from "@/app/c/actions";
+import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
+import { VoiceMode } from "@/components/voice/VoiceMode";
 import { ModelPicker } from "./ModelPicker";
 import { Sidebar } from "./Sidebar";
 import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, RetryIcon, StopIcon } from "./icons";
@@ -61,12 +63,15 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       return !on;
     });
   };
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
 
   const model = findModel(modelId);
   const noModels = shell.modelIds.length === 0;
+  // Listening needs a provider that understands audio (OpenAI or Google); Claude has none.
+  const canListen = shell.modelIds.some((id) => ["openai", "google"].includes(findModel(id)?.provider ?? ""));
 
   // Keep the newest text in view while a reply streams, unless the person scrolled up to read.
   useLayoutEffect(() => {
@@ -103,7 +108,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     rememberModel(id).catch(() => {});
   };
 
-  async function run(body: { text?: string; regenerate?: string }, optimistic: Live[]) {
+  async function run(body: { text?: string; regenerate?: string; voice?: boolean }, optimistic: Live[]) {
     if (!model) return;
     setBanner(null);
     setBusy(true);
@@ -234,6 +239,11 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     const text = draft.trim();
     if (!text || busy || !model) return;
     setDraft("");
+    sendText(text);
+  };
+
+  const sendText = (text: string, voice = false) => {
+    if (!text || busy || !model) return;
     const mine: Live = {
       id: draftId(),
       chat_id: chat?.id ?? "",
@@ -244,7 +254,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       model: null,
       created_at: new Date().toISOString(),
     };
-    run({ text }, [mine]);
+    run(voice ? { text, voice } : { text }, [mine]);
   };
 
   const regenerate = (questionId: string) => {
@@ -371,6 +381,10 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             disabled={!model}
             search={search}
             onToggleSearch={toggleSearch}
+            voice={canListen && !!model}
+            onVoice={() => setVoiceOpen(true)}
+            onDictated={(t) => setDraft((d) => (d.trim() ? `${d.trimEnd()} ${t}` : t))}
+            onVoiceError={setBanner}
           />
           {hint ? (
             <p role="status" className="mt-2 text-center text-[12px] text-mute">
@@ -382,6 +396,16 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
         </div>
       </div>
 
+      {voiceOpen ? (
+        <VoiceMode
+          messages={messages}
+          busy={busy}
+          banner={banner}
+          onSend={(t) => sendText(t, true)}
+          onStop={() => abortRef.current?.abort()}
+          onClose={() => setVoiceOpen(false)}
+        />
+      ) : null}
       {picking ? <ModelPicker available={shell.modelIds} current={modelId} onPick={pickModel} onClose={() => setPicking(false)} /> : null}
     </div>
   );
@@ -432,6 +456,7 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
                 <RetryIcon />
               </button>
             ) : null}
+            {text ? <ReadAloudButton text={text} /> : null}
             {copied ? <span className="text-[13px]">Copied</span> : null}
           </span>
           <span className="font-mono text-[12px]">
@@ -453,6 +478,10 @@ function Composer({
   disabled,
   search,
   onToggleSearch,
+  voice,
+  onVoice,
+  onDictated,
+  onVoiceError,
 }: {
   search: boolean;
   onToggleSearch: () => void;
@@ -462,6 +491,10 @@ function Composer({
   onStop: () => void;
   busy: boolean;
   disabled: boolean;
+  voice: boolean;
+  onVoice: () => void;
+  onDictated: (text: string) => void;
+  onVoiceError: (msg: string) => void;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -506,10 +539,13 @@ function Composer({
         disabled={disabled}
         className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
       />
+      {voice ? <DictateButton onText={onDictated} onError={onVoiceError} disabled={disabled} /> : null}
       {busy ? (
         <button type="button" onClick={onStop} aria-label="Stop" className="press glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full">
           <StopIcon />
         </button>
+      ) : voice && !value.trim() ? (
+        <VoiceChatButton onOpen={onVoice} disabled={disabled} />
       ) : (
         <button
           type="submit"

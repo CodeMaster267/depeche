@@ -527,3 +527,28 @@ body {
   color: var(--mute);
 }
 .md a.cite:hover { color: var(--fg); border-color: var(--fg); }
+/*
+ * Voice chat. A plain black (or white) circle that swells with your voice while listening,
+ * breathes while speaking, and flickers with the red/cyan glitch while thinking. With reduced
+ * motion it only fades.
+ */
+.voice-orb { transition: transform 90ms linear, opacity 200ms ease; }
+.voice-orb-speaking { animation: voice-breathe 1.6s ease-in-out infinite; }
+.voice-orb-busy { animation: voice-glitch 1.2s steps(1, end) infinite; }
+@keyframes voice-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.07); }
+}
+@keyframes voice-glitch {
+  0%, 100% { box-shadow: none; translate: 0; }
+  18% { box-shadow: -6px 0 0 #ff1e3c, 6px 0 0 #00e5ff; translate: 2px 0; }
+  22% { box-shadow: none; translate: 0; }
+  58% { box-shadow: 5px 0 0 #ff1e3c, -5px 0 0 #00e5ff; translate: -2px 0; }
+  62% { box-shadow: none; translate: 0; }
+}
+.voice-dots { display: inline-block; width: 18px; height: 4px; background: radial-gradient(circle, currentColor 1.6px, transparent 2px) 0 50% / 6px 4px repeat-x; animation: voice-dots 0.9s linear infinite; }
+@keyframes voice-dots { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .voice-orb { transition: opacity 200ms ease; transform: none !important; }
+  .voice-orb-speaking, .voice-orb-busy, .voice-dots { animation: none; }
+}

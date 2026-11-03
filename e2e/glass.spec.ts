@@ -52,8 +52,10 @@ test("New chat is a glass pill and Send is plain smoky glass", async ({ page }) 
   const errors = watchErrors(page);
   await signInWithPassword(page, OWNER.email, OWNER.password);
   await page.getByRole("heading", { name: "Hi, Hasan." }).waitFor();
-  await expect(page.getByRole("button", { name: "Send" })).toHaveClass(/\bglass\b/);
-  await expect(page.getByRole("button", { name: "Send" }).locator(".glass-code")).toHaveCount(0);
+  // With an empty box the round button starts voice chat (when the family has a key that can listen).
+  const round = page.getByRole("button", { name: /^(Send|Voice chat)$/ });
+  await expect(round).toHaveClass(/\bglass\b/);
+  await expect(round.locator(".glass-code")).toHaveCount(0);
   const isPhone = (page.viewportSize()?.width ?? 1000) < 768;
   if (isPhone) await page.getByRole("button", { name: "Open menu" }).click();
   const newChat = page.getByRole("link", { name: "New chat" }).filter({ has: page.locator(".glass-code"), visible: true });
