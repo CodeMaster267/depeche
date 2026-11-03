@@ -65,57 +65,90 @@ body {
 }
 
 /*
- * Glitch: red and cyan channels split apart plus two displaced slices.
- * Used on the sign-in title card only. It shivers once on load, then holds still.
- * Never applied to text people read. Off entirely with reduced motion.
+ * Glitch, modelled on Hasan's reference photo: red and cyan channels pulled apart, thin horizontal
+ * slices knocked sideways (some smeared into streaks), light streak lines and a few pixel shards.
+ * Used on the title card only. It shudders on load, then holds still. Never applied to text people
+ * read. Off entirely with reduced motion. Positions live in components/Wordmark.tsx.
  */
 .glitch {
+  --split: 0.05em;
+  --red: #ff1e3c;
+  --cyan: #00e5ff;
   position: relative;
   display: inline-block;
   isolation: isolate;
 }
 .glitch .layer {
   display: block;
+  position: relative;
   white-space: nowrap;
+}
+.glitch .base {
+  display: block;
 }
 .glitch .slice {
   position: absolute;
   inset: 0;
+  transform: translateX(var(--dx));
+  animation: glitch-jolt 900ms steps(6, end) both;
 }
 .glitch .ch {
   position: absolute;
   inset: 0;
   mix-blend-mode: screen;
 }
-.glitch .r { color: #ff1e3c; transform: translateX(-3px); }
-.glitch .c { color: #00e5ff; transform: translateX(3px); }
+.glitch .r { color: var(--red); transform: translateX(calc(var(--split) * -1)); }
+.glitch .c { color: var(--cyan); transform: translateX(var(--split)); }
 .glitch .w { position: relative; color: var(--fg); mix-blend-mode: normal; }
 @media (prefers-color-scheme: dark) {
   .glitch .w { mix-blend-mode: screen; }
 }
-.glitch .base {
-  display: block;
-  clip-path: polygon(0 0, 100% 0, 100% 28%, 0 28%, 0 41%, 100% 41%, 100% 62%, 0 62%, 0 70%, 100% 70%, 100% 100%, 0 100%);
+/* Light mode: the colour fringes sit behind dark letters, so multiply keeps them crisp. */
+@media (prefers-color-scheme: light) {
+  .glitch .r, .glitch .c { mix-blend-mode: multiply; opacity: 0.9; }
 }
-.glitch .s1 { clip-path: inset(28% 0 59% 0); transform: translateX(16px); }
-.glitch .s1 .r { transform: translateX(-8px); }
-.glitch .s1 .c { transform: translateX(8px); }
-.glitch .s2 { clip-path: inset(62% 0 30% 0); transform: translateX(-9px); }
-.glitch .s2 .r { transform: translateX(-6px); }
-.glitch .s2 .c { transform: translateX(6px); }
 
-@keyframes glitch-settle {
-  0% { transform: translateX(28px); opacity: 0.4; }
-  30% { transform: translateX(-12px); opacity: 1; }
-  60% { transform: translateX(22px); }
-  100% { transform: translateX(16px); }
+/* Smeared bands: stretched sideways and softened, like motion streaks in the reference. */
+.glitch .slice.streak .layer {
+  transform: scaleX(1.06);
+  transform-origin: 30% 50%;
+  filter: blur(0.018em);
+  opacity: 0.85;
 }
-.glitch .s1 { animation: glitch-settle 700ms steps(5, end) both; }
+
+.glitch .streak-line {
+  position: absolute;
+  height: max(1px, 0.02em);
+  pointer-events: none;
+  opacity: 0.85;
+}
+.glitch .streak-line.r { background: linear-gradient(90deg, transparent, var(--red) 30%, var(--red) 70%, transparent); }
+.glitch .streak-line.c { background: linear-gradient(90deg, transparent, var(--cyan) 30%, var(--cyan) 70%, transparent); }
+.glitch .streak-line.w { background: linear-gradient(90deg, transparent, var(--fg) 30%, var(--fg) 70%, transparent); opacity: 0.6; }
+
+.glitch .shard {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0.9;
+}
+.glitch .shard.r { background: var(--red); }
+.glitch .shard.c { background: var(--cyan); }
+.glitch .shard.w { background: var(--fg); opacity: 0.7; }
+
+@keyframes glitch-jolt {
+  0% { transform: translateX(calc(var(--dx) * -3)); opacity: 0.3; }
+  20% { transform: translateX(calc(var(--dx) * 2.5)); opacity: 1; }
+  40% { transform: translateX(calc(var(--dx) * -1.5)); }
+  60% { transform: translateX(calc(var(--dx) * 1.8)); }
+  80% { transform: translateX(calc(var(--dx) * 0.6)); }
+  100% { transform: translateX(var(--dx)); }
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .glitch .s1,
-  .glitch .s2 { display: none; }
-  .glitch .base { clip-path: none; }
+  .glitch .slice,
+  .glitch .streak-line,
+  .glitch .shard { display: none; }
+  .glitch .base { clip-path: none !important; }
   .glitch .r,
   .glitch .c { transform: none; }
 }

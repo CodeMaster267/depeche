@@ -27,6 +27,9 @@ for (const scheme of ["light", "dark"] as const) {
 test("glitch is switched off for people who ask for reduced motion", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/sign-in");
-  await expect(page.locator(".glitch .s1")).toBeHidden();
-  await expect(page.locator(".glitch .s2")).toBeHidden();
+  for (const part of [".slice", ".shard", ".streak-line"]) {
+    const all = page.locator(`.glitch ${part}`);
+    expect(await all.count()).toBeGreaterThan(0);
+    for (const el of await all.all()) await expect(el).toBeHidden();
+  }
 });
