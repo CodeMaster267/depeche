@@ -2,13 +2,13 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
-import { MAX_SEARCHES, MODELS, findModel, type Model, type Provider } from "@/lib/ai/models";
+import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
 import { MAX_OUTPUT } from "@/lib/ai/budget";
 import type { Source } from "@/lib/chat/thread";
 import { webSource } from "@/lib/ai/sources";
 
 /**
- * One streaming interface over the three providers. Depeche stores conversations in its own
+ * One streaming interface over the providers. Depeche stores conversations in its own
  * provider-neutral shape and turns them into each provider's format here, so a chat can switch
  * models halfway through.
  */
@@ -56,12 +56,21 @@ const BUSY_FALLBACK: Record<string, string> = {
   "gemini-3.8-flash": "gemini-3.5-flash-lite",
   "gemini-4-argon": "gemini-3.8-flash",
   "gemini-3.5-flash-lite": "gemini-3.8-flash",
+  // Groq's free-tier limits are per model, so a sibling model can answer when one is used up.
+  "openai/gpt-oss-120b": "openai/gpt-oss-20b",
+  "openai/gpt-oss-20b": "openai/gpt-oss-120b",
+  "qwen/qwen3.8-27b": "openai/gpt-oss-120b",
 };
 
 /** Every model that might answer when this one is chosen, so a spending hold covers the dearest. */
 export function modelsThatMayAnswer(model: Model): Model[] {
   const backup = findModel(BUSY_FALLBACK[model.id]);
   return backup ? [model, backup] : [model];
+}
+
+/** Groq's free tier says "rate limit reached" (429) when a model's minute or day allowance is used up. */
+export function isRateLimited(e: unknown): boolean {
+  return status(e) === 429 || /rate limit/i.test(detail(e));
 }
 
 export function isBusy(e: unknown): boolean {
@@ -85,7 +94,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
   if (backup) attempts.push({ model: backup, wait: 0 });
 
   let lastError: unknown;
-  let search = !!req.search;
+  let search = !!req.search && canSearch(req.model);
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
     if (attempt.wait) await pause(attempt.wait, req.signal);
@@ -94,13 +103,20 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
     try {
       if (attempt.model.id !== req.model.id) {
         yield { type: "model", id: attempt.model.id };
-        yield { type: "notice", text: `${req.model.name} was busy, so ${attempt.model.name} answered instead.` };
+        const why = isRateLimited(lastError) ? "reached its free-tier limit" : "was busy";
+        yield { type: "notice", text: `${req.model.name} ${why}, so ${attempt.model.name} answered instead.` };
       }
       // Telling a model it can search without giving it the tool makes some reply with nothing.
       const r = { ...req, model: attempt.model, search, system: search ? `${req.system} ${SEARCH_HINT}` : req.system };
       const inner = fakeAi()
         ? fakeReply(r, attempt.model.id === req.model.id)
-        : r.model.provider === "anthropic" ? anthropicReply(r) : r.model.provider === "openai" ? openaiReply(r) : googleReply(r);
+        : r.model.provider === "anthropic"
+          ? anthropicReply(r)
+          : r.model.provider === "openai"
+            ? openaiReply(r)
+            : r.model.provider === "groq"
+              ? groqReply(r)
+              : googleReply(r);
       for await (const ev of inner) {
         if (ev.type === "text") wrote = true;
         yield ev;
@@ -112,11 +128,19 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       // Retrying after part of a reply was shown would repeat it.
       if (wrote) break;
       // Some keys or models can't search (free tiers, older models): answer without it instead.
-      if (search && !isBusy(e) && status(e) !== 401) {
+      const groqLimit = attempt.model.provider === "groq" && isRateLimited(e);
+      if (search && !isBusy(e) && !groqLimit && status(e) !== 401) {
         search = false;
         console.error("[chat] search failed, answering without it", status(e), detail(e));
         yield { type: "notice", text: searchUnavailable(attempt.model.provider, e) };
         i--;
+        continue;
+      }
+      // A used-up Groq allowance won't come back in a few seconds: go straight to the sibling model.
+      if (groqLimit) {
+        const next = attempts.findIndex((a, j) => j > i && a.model.id !== attempt.model.id);
+        if (next < 0) break;
+        i = next - 1;
         continue;
       }
       // Other errors won't go away.
@@ -131,7 +155,7 @@ const SEARCH_HINT =
 
 /** Why a search couldn't run, worded for the person chatting. */
 function searchUnavailable(provider: Provider, e: unknown): string {
-  const name = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" }[provider];
+  const name = PROVIDER_NAME[provider];
   const said = detail(e);
   const base = "Web search wasn't available, so this answer comes from the model's own knowledge and may be out of date.";
   if (status(e) === 429 || /quota|rate limit|resource.?exhausted/i.test(said)) {
@@ -319,6 +343,123 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
   }
 }
 
+/**
+ * Groq serves open models through an OpenAI-compatible Chat Completions API. A maximum length is
+ * sent only when a spending hold needs a shorter reply, because Groq counts a requested maximum
+ * against the free tier's tokens-per-minute allowance (Groq's prices are tiny, so a full-length
+ * reply can't take anyone meaningfully past their limit).
+ * Reasoning is kept out of the reply text. The GPT-OSS models can search with Groq's browser search,
+ * which reports what it ran as `executed_tools` and marks citations in the text like 【3†L4-L9】.
+ */
+async function* groqReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
+  const client = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1", maxRetries: 0 });
+  const gptOss = model.id.startsWith("openai/gpt-oss");
+  // Groq advises low effort when browsing, as higher effort browses much longer.
+  const reasoning = gptOss ? { include_reasoning: false, reasoning_effort: search ? "low" : "medium" } : { reasoning_format: "hidden" };
+  const stream = await client.chat.completions.create(
+    {
+      model: model.id,
+      messages: [{ role: "system", content: system }, ...turns.map((t) => ({ role: t.role, content: groqText(t) }))],
+      stream: true,
+      stream_options: { include_usage: true },
+      ...(maxOutput < MAX_OUTPUT ? { max_completion_tokens: maxOutput } : {}),
+      ...(reasoning as object),
+      ...(search && gptOss ? { tools: [{ type: "browser_search" }] as never, tool_choice: "auto" as const } : {}),
+    },
+    { signal },
+  );
+  if (turns.at(-1)?.files?.length) {
+    yield { type: "notice", text: `${model.name} reads text only, so it couldn't see the attached image or PDF. Pick a Gemini, GPT or Claude model for those.` };
+  }
+  let input = 0;
+  let output = 0;
+  let wroteText = false;
+  let finish = "";
+  let held = "";
+  const sources: Source[] = [];
+  const seenTools = new Set<string>();
+  let searches = 0;
+  for await (const chunk of stream) {
+    const choice = chunk.choices?.[0];
+    const delta = choice?.delta as { content?: string | null; executed_tools?: GroqTool[] } | undefined;
+    for (const tool of delta?.executed_tools ?? []) {
+      const ev = groqTool(tool, seenTools, sources);
+      if (ev.searched) {
+        searches++;
+        yield { type: "searching", ...(ev.query ? { query: ev.query } : {}) };
+      }
+    }
+    if (delta?.content) {
+      // Drop Groq's citation marks, holding back a mark until it is complete.
+      const { out, rest } = stripGroqMarks(held + delta.content);
+      held = rest;
+      if (out) {
+        wroteText = true;
+        yield { type: "text", text: out };
+      }
+    }
+    if (choice?.finish_reason) finish = choice.finish_reason;
+    // Groq reports usage on the last chunk, in its own field on older API versions.
+    const u = chunk.usage ?? (chunk as { x_groq?: { usage?: typeof chunk.usage } }).x_groq?.usage;
+    if (u) {
+      input = u.prompt_tokens ?? input;
+      output = u.completion_tokens ?? output;
+    }
+  }
+  if (held) {
+    wroteText = true;
+    yield { type: "text", text: held };
+  }
+  if (!wroteText) yield { type: "notice", text: "The model sent back an empty reply. Try again." };
+  if (finish === "length") yield { type: "notice", text: "The reply hit its length limit." };
+  if (sources.length) yield { type: "sources", sources };
+  if (searches) yield { type: "searches", count: searches };
+  yield { type: "usage", input, output };
+}
+
+/** Groq's models read text only: images and PDFs are named in the text instead of sent. */
+function groqText(t: Turn): string {
+  const names = (t.files ?? []).map((f) => `[Attached ${f.name}, which this model can't open]`);
+  return [t.text, ...names].filter(Boolean).join("\n\n");
+}
+
+type GroqTool = {
+  index?: number;
+  type?: string;
+  arguments?: string;
+  search_results?: { results?: { title?: string; url?: string }[] };
+};
+
+/** Reads one of Groq's executed tools: whether it was a search (billed) and the pages it found. */
+export function groqTool(tool: GroqTool, seen: Set<string>, sources: Source[]): { searched: boolean; query?: string } {
+  for (const r of tool.search_results?.results ?? []) {
+    const src = webSource(r.url, r.title);
+    if (src && !sources.some((x) => x.url === src.url)) sources.push(src);
+  }
+  // A tool can be reported more than once as it runs; count each one once.
+  const key = `${tool.index ?? ""}|${tool.type ?? ""}|${tool.arguments ?? ""}`;
+  if (seen.has(key)) return { searched: false };
+  seen.add(key);
+  let args: { query?: unknown; q?: unknown } = {};
+  try {
+    args = JSON.parse(tool.arguments || "{}");
+  } catch {
+    // Only shown, so a malformed query is skipped.
+  }
+  const query = typeof args.query === "string" ? args.query : typeof args.q === "string" ? args.q : undefined;
+  // Opening or scrolling a page isn't a search; only searches carry a query.
+  const searched = /search/i.test(tool.type ?? "") && (!!query || !tool.arguments);
+  return { searched, query: query?.slice(0, 200) };
+}
+
+/** Removes Groq browser-search citation marks (【3†L4-L9】), returning any unfinished mark separately. */
+export function stripGroqMarks(text: string): { out: string; rest: string } {
+  const open = text.lastIndexOf("【");
+  const rest = open >= 0 && !text.includes("】", open) && text.length - open < 40 ? text.slice(open) : "";
+  const body = rest ? text.slice(0, open) : text;
+  return { out: body.replace(/【[^】]{0,40}】/g, ""), rest };
+}
+
 async function* googleReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const ai = new GoogleGenAI({ apiKey });
   const stream = await ai.models.generateContentStream({
@@ -412,18 +553,27 @@ function describe(provider: Provider, e: unknown): string {
   const said = detail(e);
   // Logged for debugging in Vercel; never includes the key.
   console.error(`[chat] ${provider} error`, status(e), said);
-  const name = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" }[provider];
+  const name = PROVIDER_NAME[provider];
   return said ? `${text} (${name} said: "${said}")` : text;
 }
 
 function friendlyError(provider: Provider, e: unknown): string {
-  const name = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" }[provider];
+  const name = PROVIDER_NAME[provider];
   const code = status(e);
   const msg = detail(e);
   if (code === 401 || code === 403 || /api key|unauthori[sz]ed|permission/i.test(msg))
     return `${name} didn't accept your family's key. Ask your family admin to check it in Family settings.`;
   if (provider === "google" && (code === 429 || /quota|rate limit|resource.?exhausted/i.test(msg)))
     return "Google's limit for this key is reached for now. Free keys allow only a few messages a minute and some models not at all. Wait a minute, or pick a Flash model.";
+  if (provider === "groq" && (code === 413 || /request too large/i.test(msg)))
+    return "This chat is too long for Groq's free tier, which takes only about 8,000 tokens (roughly 6,000 words) a minute. Start a new chat, or pick another model.";
+  if (provider === "groq" && (code === 429 || /rate limit/i.test(msg))) {
+    const wait = /try again in ([\d.]+)(m?s)/i.exec(msg);
+    const when = wait ? ` Try again in ${wait[2] === "ms" ? "a second" : `${Math.ceil(Number(wait[1]))} seconds`}.` : " Wait a minute and try again.";
+    return /per day|\(RPD\)|\(TPD\)/i.test(msg)
+      ? "Groq's free-tier allowance for today is used up on these models. Pick another model, or try again tomorrow."
+      : `Groq's free tier allows only so much a minute, and that's used up.${when}`;
+  }
   if (code === 429 || /quota|rate limit|credit|billing/i.test(msg))
     return `${name} says the key is out of credit or busy. Try again in a minute, or ask your family admin to check billing.`;
   if (isBusy(e)) return `${name}'s servers are very busy right now, even after a few tries. Wait a minute, or pick another model.`;
@@ -456,6 +606,10 @@ export async function listKeyModels(provider: Provider, key: string): Promise<st
       for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
     } else if (provider === "openai") {
       const res = await fetch("https://api.openai.com/v1/models", { signal, headers: { authorization: `Bearer ${key}` } });
+      if (!res.ok) return res.status === 401 || res.status === 403 ? null : ours;
+      for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
+    } else if (provider === "groq") {
+      const res = await fetch("https://api.groq.com/openai/v1/models", { signal, headers: { authorization: `Bearer ${key}` } });
       if (!res.ok) return res.status === 401 || res.status === 403 ? null : ours;
       for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
     } else {
@@ -539,6 +693,14 @@ async function* fakeReply({ turns, signal, search, model, system }: ReplyRequest
     return;
   }
   // "busy" in the message makes the chosen model act overloaded, to test retries and the fallback.
+  // "ratelimit" makes a Groq model act as if its free-tier allowance is used up; "ratelimitall" does
+  // the same for the model that steps in, to test the fallback and the final error.
+  if (model.provider === "groq" && (q.includes("ratelimitall") || (chosen && q.includes("ratelimit")))) {
+    throw Object.assign(
+      new Error(`Rate limit reached for model \`${model.id}\` in organization \`org_test\` service tier \`on_demand\` on requests per minute (RPM): Limit 30, Used 30, Requested 1. Please try again in 2.5s.`),
+      { status: 429 },
+    );
+  }
   if (chosen && q.includes("busy")) throw Object.assign(new Error("This model is currently experiencing high demand."), { status: 503 });
   // "latest" with search on makes it search the web first, to test sources and search fees.
   if (search && q.includes("latest")) {

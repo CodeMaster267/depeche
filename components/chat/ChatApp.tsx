@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
-import { findModel } from "@/lib/ai/models";
+import { canSearch, findModel } from "@/lib/ai/models";
 import { titleFrom, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
 import { deleteChat, pinChat, refreshChat, refreshShell, rememberModel, renameChat } from "@/app/c/actions";
@@ -73,6 +73,8 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   const pinnedToBottom = useRef(true);
 
   const model = findModel(modelId);
+  // Some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
+  const searchable = canSearch(model);
   const noModels = shell.modelIds.length === 0;
   // Listening needs a provider that understands audio (OpenAI or Google); Claude has none.
   const canListen = shell.modelIds.some((id) => ["openai", "google"].includes(findModel(id)?.provider ?? ""));
@@ -139,7 +141,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chatId, model: model.id, clientRequestId: crypto.randomUUID(), search, ...body }),
+        body: JSON.stringify({ chatId, model: model.id, clientRequestId: crypto.randomUUID(), search: search && canSearch(model), ...body }),
         signal: abort.signal,
       });
       if (!res.ok || !res.body) {
@@ -393,7 +395,8 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             onStop={() => abortRef.current?.abort()}
             busy={busy}
             disabled={!model}
-            search={search}
+            search={search && searchable}
+            searchable={searchable}
             onToggleSearch={toggleSearch}
             voice={canListen && !!model}
             onVoice={() => setVoiceOpen(true)}
@@ -496,6 +499,7 @@ function Composer({
   busy,
   disabled,
   search,
+  searchable,
   onToggleSearch,
   voice,
   onVoice,
@@ -503,6 +507,7 @@ function Composer({
   onVoiceError,
 }: {
   search: boolean;
+  searchable: boolean;
   onToggleSearch: () => void;
   attachments: Pending[];
   onAttach: (files: File[]) => void;
@@ -576,10 +581,11 @@ function Composer({
         <button
           type="button"
           onClick={onToggleSearch}
+          disabled={!searchable}
           aria-pressed={search}
           aria-label="Search the web"
-          title={search ? "Web search on: the model searches when it needs to" : "Web search off"}
-          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors ${search ? "text-fg" : "text-faint"}`}
+          title={!searchable ? "This model can't search the web" : search ? "Web search on: the model searches when it needs to" : "Web search off"}
+          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${search ? "text-fg" : "text-faint"}`}
         >
           {search ? <GlobeIcon /> : <GlobeOffIcon />}
         </button>
