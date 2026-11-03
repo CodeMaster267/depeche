@@ -1,0 +1,39 @@
+/** Chat data shared by the server and the browser. */
+export type MessageRow = {
+  id: string;
+  chat_id: string;
+  parent_id: string | null;
+  role: "user" | "assistant" | "system";
+  content: { text?: string; notice?: string; error?: string; cost?: number };
+  status: "pending" | "streaming" | "completed" | "failed" | "stopped";
+  model: string | null;
+  created_at: string;
+};
+
+export type ChatRow = { id: string; title: string; model: string | null; pinned: boolean; updated_at: string };
+
+/**
+ * Messages are never edited or deleted: a regenerated reply is a new message with the same parent.
+ * The conversation shown is the path from the newest message back to the first.
+ */
+export function activePath(messages: MessageRow[]): MessageRow[] {
+  if (!messages.length) return [];
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  const newest = messages.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+  const path: MessageRow[] = [];
+  for (let m: MessageRow | undefined = newest; m; m = m.parent_id ? byId.get(m.parent_id) : undefined) {
+    path.push(m);
+    if (path.length > messages.length) break; // a cycle would be a bug; never loop forever
+  }
+  return path.reverse();
+}
+
+/** A short title from the first message: the first line, cut at a word boundary. */
+export function titleFrom(text: string): string {
+  const line = text.trim().split("\n")[0].replace(/\s+/g, " ");
+  if (line.length <= 60) return line || "New chat";
+  const cut = line.slice(0, 60);
+  return (cut.slice(0, cut.lastIndexOf(" ") > 30 ? cut.lastIndexOf(" ") : 60) + "…").trim();
+}
+
+export const MAX_MESSAGE_CHARS = 100_000;

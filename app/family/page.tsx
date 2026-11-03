@@ -3,7 +3,8 @@ import { redirect } from "next/navigation";
 import { AppHeader, Page, Section } from "@/components/AppHeader";
 import { requireMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
-import { CreateFamilyForm, InviteForm, MemberRow, RevokeButton } from "./forms";
+import { PROVIDERS } from "@/lib/ai/models";
+import { CreateFamilyForm, InviteForm, MemberRow, ProviderKeyRow, RevokeButton } from "./forms";
 
 export const metadata: Metadata = { title: "Family · Depeche" };
 
@@ -24,7 +25,7 @@ export default async function Family() {
   monthStart.setUTCDate(1);
   monthStart.setUTCHours(0, 0, 0, 0);
 
-  const [{ data: family }, { data: members }, { data: invites }, { data: usage }, { data: families }] = await Promise.all([
+  const [{ data: family }, { data: members }, { data: invites }, { data: usage }, { data: families }, { data: keys }] = await Promise.all([
     supabase.from("families").select("name").eq("id", me.profile.family_id).single<{ name: string }>(),
     supabase
       .from("profiles")
@@ -42,6 +43,11 @@ export default async function Family() {
     me.profile.is_app_owner
       ? supabase.from("families").select("id, name").neq("id", me.profile.family_id).order("created_at")
       : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+    supabase
+      .from("provider_keys")
+      .select("provider, last4, updated_at")
+      .eq("family_id", me.profile.family_id)
+      .returns<{ provider: string; last4: string; updated_at: string }[]>(),
   ]);
 
   const spent = new Map<string, number>();
@@ -59,6 +65,24 @@ export default async function Family() {
             You can see members&apos; chat titles and spending, never what they write.
           </p>
         </div>
+
+        <Section title="AI providers">
+          <p className="text-[15px] text-mute">
+            Everyone in your family chats using these keys. Keys are encrypted and never shown again.
+          </p>
+          <ul className="flex flex-col divide-y divide-line rounded-2xl border border-line">
+            {PROVIDERS.map((p) => (
+              <ProviderKeyRow
+                key={p.id}
+                provider={p.id}
+                name={p.name}
+                keyUrl={p.keyUrl}
+                hint={p.keyHint}
+                saved={(keys ?? []).find((k) => k.provider === p.id)}
+              />
+            ))}
+          </ul>
+        </Section>
 
         <Section title="Members">
           <ul className="flex flex-col divide-y divide-line rounded-2xl border border-line">

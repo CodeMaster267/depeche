@@ -4,9 +4,11 @@ A private, invite-only AI chat app for a few families and friend groups.
 
 ## Status
 
-Step 3 of 9 (sign-in and families): sign in with an email link or code, Google, or a username and
-password; first-time owner setup; invite links; family page for admins (members, spending limits,
-password resets); account page. Nothing is deployed yet.
+Live at https://depai.vercel.app. Sign-in and families are done, and so is the chat: family admins
+add OpenAI, Anthropic and Google keys (encrypted on the server), everyone picks a model and chats
+with streaming replies that render Markdown, tables, code, LaTeX, Mermaid diagrams, images and
+sources. Chats sync across devices, stay private to each person, and stop at each person's monthly
+limit.
 
 ## Running it
 
@@ -20,6 +22,13 @@ npm run dev         # http://localhost:3000 (local emails: http://127.0.0.1:5432
 
 Never commit real keys. In production they live in Vercel's environment variables.
 
+Locally, `.env.local` sets `DEPECHE_FAKE_AI=1`, so replies come from a built-in stand-in and no
+provider is called. Any key starting with `test-` is accepted. This never works on Vercel.
+
+Provider keys are encrypted with AES-256-GCM. The encryption key is `DEPECHE_ENCRYPTION_KEY` if it
+is set in Vercel, and otherwise derived from the Supabase secret key. Rotating the Supabase secret key
+without setting `DEPECHE_ENCRYPTION_KEY` first means admins re-enter their provider keys.
+
 ## Where things are
 
 | Path | What |
@@ -30,5 +39,8 @@ Never commit real keys. In production they live in Vercel's environment variable
 | `lib/supabase/` | Supabase clients for the browser, the signed-in server, and the service role |
 | `lib/auth/` | Who is signed in, and turning a proven email into a profile (invite or owner setup) |
 | `supabase/templates/` | The sign-in email (link plus code). Paste into Supabase → Authentication → Emails |
+| `lib/ai/` | The model list with prices, and streaming from each provider |
+| `app/api/chat/` | Sends a message and streams the reply; saves the reply and its cost |
+| `components/chat/`, `components/markdown/` | The chat screen, and how replies are rendered |
 | `e2e/` | Browser tests against the local Supabase |
 | `CLAUDE.md` | The rules any code change must follow |

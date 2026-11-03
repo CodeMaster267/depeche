@@ -6,6 +6,9 @@ import { friendly, requireMe, siteOrigin } from "@/lib/auth/session";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { newInviteToken } from "@/lib/tokens";
 import { cleanEmail, cleanName, passwordProblem } from "@/lib/validate";
+import { encryptSecret, toBytea } from "@/lib/crypto";
+import { checkKey } from "@/lib/ai/providers";
+import type { Provider } from "@/lib/ai/models";
 
 export type ActionState = { error?: string; ok?: string; link?: string } | undefined;
 
@@ -80,4 +83,39 @@ export async function resetPassword(memberId: string, _: ActionState, form: Form
   const { error } = await admin.auth.admin.updateUserById(memberId, { password });
   if (error) return { error: "Couldn't set that password. Try a different one." };
   return { ok: "New password set. Tell them in person, and they can change it in Account." };
+}
+
+const PROVIDER_IDS = ["anthropic", "openai", "google"] as const;
+
+/**
+ * Saves a family's provider key. It is checked with the provider, encrypted here on the server,
+ * and stored by a database function that confirms the person is a family admin. It is never sent
+ * back to any browser; admins see only its last four characters.
+ */
+export async function saveProviderKey(provider: string, _: ActionState, form: FormData): Promise<ActionState> {
+  const me = await requireMe();
+  if (!PROVIDER_IDS.includes(provider as Provider)) return { error: "Unknown provider." };
+  if (me.profile.role !== "admin") return { error: "Only a family admin can add keys." };
+  const key = String(form.get("key") ?? "").trim();
+  if (key.length < 20 || key.length > 400 || /\s/.test(key)) return { error: "That doesn't look like a key. Copy it again." };
+  if (!(await checkKey(provider as Provider, key))) {
+    return { error: "The provider didn't accept that key. Check it's copied in full and that billing is set up." };
+  }
+  const { error } = await supabaseAdmin().rpc("save_provider_key", {
+    p_actor: me.userId,
+    p_provider: provider,
+    p_ciphertext: toBytea(encryptSecret(key)),
+    p_last4: key.slice(-4),
+  });
+  if (error) return { error: friendly(error) };
+  revalidatePath("/family");
+  revalidatePath("/");
+  return { ok: "Key saved. Its models are ready for everyone in your family." };
+}
+
+export async function removeProviderKey(provider: string): Promise<void> {
+  const me = await requireMe();
+  await supabaseAdmin().rpc("remove_provider_key", { p_actor: me.userId, p_provider: provider });
+  revalidatePath("/family");
+  revalidatePath("/");
 }

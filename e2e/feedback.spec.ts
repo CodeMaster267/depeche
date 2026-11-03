@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { OWNER, signInWithPassword, watchErrors } from "./helpers";
+import { OWNER, menuLink, signInWithPassword, watchErrors } from "./helpers";
 
 test("buttons flash the moment they are pressed", async ({ page }) => {
   await page.goto("/sign-in");
@@ -26,7 +26,8 @@ test("reduced motion gets a plain dip instead of the glitch flash", async ({ pag
 test("header links look like buttons and mark the current page", async ({ page }) => {
   const errors = watchErrors(page);
   await signInWithPassword(page, OWNER.email, OWNER.password);
-  const account = page.getByRole("link", { name: "Account" });
+  await page.getByRole("heading", { name: "Hi, Hasan." }).waitFor();
+  const account = await menuLink(page, "Account");
   await expect(account).toHaveClass(/nav-pill/);
   const border = await account.evaluate((el) => getComputedStyle(el).borderTopWidth);
   expect(border).toBe("1px");
@@ -40,7 +41,8 @@ test("header links look like buttons and mark the current page", async ({ page }
 
 test("a glitching wordmark shows while the next page loads", async ({ page }) => {
   await signInWithPassword(page, OWNER.email, OWNER.password);
-  const family = page.getByRole("link", { name: "Family" });
+  await page.getByRole("heading", { name: "Hi, Hasan." }).waitFor();
+  const family = await menuLink(page, "Family");
   await family.waitFor();
   await page.waitForTimeout(1000); // let the link prefetch finish
   let release!: () => void;

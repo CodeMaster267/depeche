@@ -1,9 +1,12 @@
 import { Wordmark } from "@/components/Wordmark";
-import { AppHeader, Page } from "@/components/AppHeader";
+import { ChatApp } from "@/components/chat/ChatApp";
 import { isConfigured } from "@/lib/config";
 import { requireMe } from "@/lib/auth/session";
+import { loadShell } from "@/lib/chat/load";
 
-/** Home. Chats arrive in the next step; for now this confirms who is signed in. */
+export const dynamic = "force-dynamic";
+
+/** Home is a new chat. */
 export default async function Home() {
   if (!isConfigured()) {
     // Before Supabase is connected, show the title card so a fresh deployment visibly works.
@@ -21,15 +24,6 @@ export default async function Home() {
   }
 
   const me = await requireMe();
-  return (
-    <>
-      <AppHeader isAdmin={me.profile.role === "admin"} />
-      <Page>
-        <div className="flex flex-col gap-2 pt-10">
-          <h1 className="text-[34px] font-semibold tracking-tight">Hi, {me.profile.display_name}.</h1>
-          <p className="text-[17px] text-mute">You&apos;re signed in. Chats arrive in the next update.</p>
-        </div>
-      </Page>
-    </>
-  );
+  const shell = await loadShell(me);
+  return <ChatApp key="new" shell={shell} chat={null} messages={[]} />;
 }

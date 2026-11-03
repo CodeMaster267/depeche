@@ -80,3 +80,10 @@ export function watchErrors(page: Page): string[] {
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   return errors;
 }
+
+/** A link in the chats menu: always shown on wide screens, behind the menu button on phones. */
+export async function menuLink(page: Page, name: string) {
+  const open = page.getByRole("button", { name: "Open menu" });
+  if (await open.isVisible()) await open.click();
+  return page.getByRole("link", { name, exact: true });
+}

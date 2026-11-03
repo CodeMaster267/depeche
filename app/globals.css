@@ -154,6 +154,116 @@ body {
 }
 
 /*
+ * Replies. Calm, readable, black and white: hierarchy comes from weight, size and space.
+ */
+.md {
+  font-size: 17px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.md > * + * { margin-top: 0.85em; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: 650; letter-spacing: -0.01em; line-height: 1.3; margin-top: 1.4em; }
+.md h1 { font-size: 1.45em; }
+.md h2 { font-size: 1.25em; }
+.md h3 { font-size: 1.1em; }
+.md strong { font-weight: 650; }
+.md a { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.md ul { list-style: disc; padding-left: 1.4em; }
+.md ol { list-style: decimal; padding-left: 1.4em; }
+.md li + li { margin-top: 0.3em; }
+.md li > ul, .md li > ol { margin-top: 0.3em; }
+.md li::marker { color: var(--mute); }
+.md ul.contains-task-list { list-style: none; padding-left: 0.2em; }
+.md input[type="checkbox"] { accent-color: var(--fg); margin-right: 0.5em; }
+.md blockquote { border-left: 2px solid var(--fg); padding-left: 1em; color: var(--mute); }
+.md hr { border: 0; border-top: 1px solid var(--line); }
+.md img { max-width: 100%; height: auto; border-radius: 14px; border: 1px solid var(--line); }
+.md :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+}
+
+.md-table { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; -webkit-overflow-scrolling: touch; }
+.md-table table { width: 100%; border-collapse: collapse; font-size: 15px; font-variant-numeric: tabular-nums; }
+.md-table th { text-align: left; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); background: var(--soft); }
+.md-table th, .md-table td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.md-table tr:last-child td { border-bottom: 0; }
+
+.md-code, .md-diagram { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.md-code-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 14px; font-size: 13px; color: var(--mute); background: var(--soft); border-bottom: 1px solid var(--line);
+}
+.md-code-bar button { color: var(--mute); }
+.md-code-bar button:hover { color: var(--fg); }
+.md-code pre, .md-diagram pre {
+  overflow-x: auto; padding: 14px 16px; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.6; -webkit-overflow-scrolling: touch;
+}
+.md-diagram-svg { display: flex; justify-content: center; padding: 16px; overflow-x: auto; }
+.md-diagram-svg svg { max-width: 100%; height: auto; }
+
+/* Code highlighting without colour: keywords bold, strings plain, comments quiet. */
+.hljs-keyword, .hljs-built_in, .hljs-selector-tag, .hljs-title.function_, .hljs-section { font-weight: 650; }
+.hljs-comment, .hljs-quote, .hljs-meta { color: var(--mute); font-style: italic; }
+.hljs-string, .hljs-number, .hljs-literal, .hljs-attr { color: var(--fg); }
+.hljs-variable, .hljs-params, .hljs-punctuation, .hljs-operator { color: var(--fg); }
+.hljs-deletion { text-decoration: line-through; }
+.hljs-addition { text-decoration: underline; }
+
+/* Maths: display equations scroll on their own instead of pushing the page sideways. */
+.md .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.md .katex { font-size: 1.06em; }
+
+/* Footnotes become the reply's sources. */
+.md section[data-footnotes] { border-top: 1px solid var(--line); padding-top: 0.9em; font-size: 15px; }
+.md section[data-footnotes] h3 { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); margin-top: 0; }
+.md section[data-footnotes] ol { margin-top: 0.5em; }
+.md section[data-footnotes] li::marker { font-variant-numeric: tabular-nums; }
+.md sup a[data-footnote-ref] {
+  display: inline-block; min-width: 1.35em; padding: 0 0.3em; margin-left: 0.1em;
+  border: 1px solid var(--fg); border-radius: 5px; font-size: 0.75em; line-height: 1.35; text-align: center; text-decoration: none;
+}
+.md a[data-footnote-backref] { text-decoration: none; color: var(--mute); }
+
+/*
+ * Streaming indicator: a small block that flickers with the red/cyan glitch while a reply is
+ * being written. Decorative only; with reduced motion it is a still block.
+ */
+.stream-cursor {
+  display: inline-block; width: 0.55em; height: 1.05em; vertical-align: -0.15em; margin-left: 2px;
+  background: var(--fg); position: relative;
+  animation: cursor-glitch 1.1s steps(1, end) infinite;
+}
+@keyframes cursor-glitch {
+  0%, 100% { box-shadow: none; transform: none; opacity: 1; }
+  20% { box-shadow: -2px 0 0 #ff1e3c, 2px 0 0 #00e5ff; transform: translateX(1px); }
+  24% { box-shadow: none; transform: none; }
+  55% { opacity: 0.35; }
+  60% { box-shadow: 2px 0 0 #ff1e3c, -2px 0 0 #00e5ff; opacity: 1; transform: translateX(-1px) skewX(-8deg); }
+  64% { box-shadow: none; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stream-cursor { animation: none; }
+}
+
+/* Screen transitions: a brief channel-split shimmer on the panel that appears. Off with reduced motion. */
+.enter-glitch { animation: enter-glitch 260ms ease-out both; }
+@keyframes enter-glitch {
+  0% { opacity: 0; transform: translateY(8px); filter: drop-shadow(-3px 0 0 rgba(255, 30, 60, 0.6)) drop-shadow(3px 0 0 rgba(0, 229, 255, 0.6)); }
+  60% { opacity: 1; filter: drop-shadow(-1px 0 0 rgba(255, 30, 60, 0.3)) drop-shadow(1px 0 0 rgba(0, 229, 255, 0.3)); }
+  100% { opacity: 1; transform: none; filter: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .enter-glitch { animation: none; }
+}
+.md-diagram-svg svg [filter] { filter: none; }
+.md-diagram-svg svg .node rect, .md-diagram-svg svg .node polygon { filter: none !important; }
+
+/*
  * Press feedback (components/Press.tsx). Every button and button-like link flashes for a moment
  * when tapped: the edges split into red and cyan and the box jolts sideways, like a frame of the
  * glitch. Only the box moves; the label's letters are never split. Reduced motion: a plain dip.

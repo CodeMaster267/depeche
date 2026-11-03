@@ -1,9 +1,18 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { Button, Field, Kept, Notice, keepOnError } from "@/components/ui";
 import { MIN_PASSWORD } from "@/lib/validate";
-import { createFamily, inviteMember, resetPassword, revokeInvite, setCap, type ActionState } from "./actions";
+import {
+  createFamily,
+  inviteMember,
+  removeProviderKey,
+  resetPassword,
+  revokeInvite,
+  saveProviderKey,
+  setCap,
+  type ActionState,
+} from "./actions";
 
 /** Shows a fresh invite link with Copy and, where the device supports it, Share. */
 function InviteLink({ state }: { state: ActionState }) {
@@ -126,6 +135,88 @@ export function MemberRow({ member, spent, isMe }: { member: Member; spent: numb
             </form>
           ) : null}
         </div>
+      ) : null}
+    </li>
+  );
+}
+
+type KeyInfo = { provider: string; last4: string; updated_at: string };
+
+/** One provider's row in "AI providers": add a key, or replace or remove the saved one. */
+export function ProviderKeyRow({
+  provider,
+  name,
+  keyUrl,
+  hint,
+  saved,
+}: {
+  provider: string;
+  name: string;
+  keyUrl: string;
+  hint: string;
+  saved?: KeyInfo;
+}) {
+  const [editing, setEditing] = useState(!saved);
+  const [state, action, pending] = useActionState(saveProviderKey.bind(null, provider), undefined);
+  useEffect(() => {
+    if (state?.ok) setEditing(false);
+  }, [state]);
+  const showForm = editing || !saved;
+  return (
+    <li className="flex flex-col gap-3 px-4 py-4" data-testid={`provider-${provider}`}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="min-w-0">
+          <span className="block text-[17px]">{name}</span>
+          <span className="block text-[13px] text-mute">
+            {saved ? (
+              <>
+                Added · ends in <span className="font-mono">{saved.last4}</span>
+              </>
+            ) : (
+              "Not added"
+            )}
+          </span>
+        </span>
+        {saved && !editing ? (
+          <span className="flex shrink-0 gap-4 text-[15px]">
+            <button type="button" className="text-mute underline underline-offset-4" onClick={() => setEditing(true)}>
+              Replace
+            </button>
+            <form action={removeProviderKey.bind(null, provider)}>
+              <button className="text-mute underline underline-offset-4">Remove</button>
+            </form>
+          </span>
+        ) : null}
+      </div>
+      {showForm ? (
+        <form action={action} className="flex flex-col gap-2">
+          <Field
+            label={`${name} API key`}
+            name="key"
+            type="password"
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            required
+            hint={hint}
+          />
+          {state?.error ? <Notice tone="error">{state.error}</Notice> : null}
+          <div className="flex gap-3">
+            <Button variant="secondary" disabled={pending}>
+              {pending ? "Checking…" : "Save key"}
+            </Button>
+            {saved ? (
+              <Button type="button" variant="secondary" onClick={() => setEditing(false)}>
+                Cancel
+              </Button>
+            ) : null}
+          </div>
+          <a href={keyUrl} target="_blank" rel="noreferrer" className="px-1 text-[13px] text-mute underline underline-offset-4">
+            Get a key from {name.split(" (")[0]}
+          </a>
+        </form>
+      ) : state?.ok ? (
+        <Notice>{state.ok}</Notice>
       ) : null}
     </li>
   );

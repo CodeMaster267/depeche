@@ -1,0 +1,65 @@
+import "server-only";
+import type { Me } from "@/lib/auth/session";
+import { supabaseServer } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/admin";
+import { chooseDefault, modelsFor } from "@/lib/ai/models";
+import { activePath, type ChatRow, type MessageRow } from "@/lib/chat/thread";
+
+export type Shell = {
+  name: string;
+  isAdmin: boolean;
+  chats: ChatRow[];
+  modelIds: string[];
+  defaultModel: string | null;
+  spent: number;
+  cap: number;
+};
+
+/** Everything the chat screen needs around the conversation: your chats, models and spending. */
+export async function loadShell(me: Me): Promise<Shell> {
+  const db = await supabaseServer();
+  const [{ data: chats }, { data: providers }, { data: spent }] = await Promise.all([
+    // Admins can read their members' chat titles, so ask only for your own.
+    db
+      .from("chats")
+      .select("id, title, model, pinned, updated_at")
+      .eq("owner_id", me.userId)
+      .is("archived_at", null)
+      .order("updated_at", { ascending: false })
+      .limit(500)
+      .returns<ChatRow[]>(),
+    db.rpc("family_providers"),
+    supabaseAdmin().rpc("month_spend", { p_person: me.userId }),
+  ]);
+  const models = modelsFor((providers as string[] | null) ?? []);
+  const { data: last } = await db.from("profiles").select("last_model").eq("id", me.userId).maybeSingle<{ last_model: string | null }>();
+  return {
+    name: me.profile.display_name,
+    isAdmin: me.profile.role === "admin",
+    chats: chats ?? [],
+    modelIds: models.map((m) => m.id),
+    defaultModel: chooseDefault(models, last?.last_model)?.id ?? null,
+    spent: Number(spent ?? 0),
+    cap: Number(me.profile.monthly_cap_usd),
+  };
+}
+
+/** One of your chats with the conversation as currently shown, or null if it isn't yours. */
+export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow; messages: MessageRow[] } | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(chatId)) return null;
+  const db = await supabaseServer();
+  const { data: chat } = await db
+    .from("chats")
+    .select("id, title, model, pinned, updated_at")
+    .eq("id", chatId)
+    .eq("owner_id", me.userId)
+    .maybeSingle<ChatRow>();
+  if (!chat) return null;
+  const { data: messages } = await db
+    .from("messages")
+    .select("id, chat_id, parent_id, role, content, status, model, created_at")
+    .eq("chat_id", chatId)
+    .order("created_at")
+    .returns<MessageRow[]>();
+  return { chat, messages: activePath(messages ?? []) };
+}
