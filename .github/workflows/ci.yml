@@ -96,4 +96,9 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: node scripts/bugs/check-pr.ts
+        run: |
+          if [ -f scripts/bugs/check-pr.ts ]; then
+            node scripts/bugs/check-pr.ts
+          else
+            echo "::notice::main has no bug-fix rules yet (this pull request adds them), so there is nothing to check."
+          fi
