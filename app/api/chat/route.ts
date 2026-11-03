@@ -3,9 +3,9 @@ import { getMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
-import { estimateCost, findModel } from "@/lib/ai/models";
+import { estimateCost, findModel, searchCost } from "@/lib/ai/models";
 import { ProviderError, streamReply, type Turn } from "@/lib/ai/providers";
-import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow } from "@/lib/chat/thread";
+import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
 export const maxDuration = 300;
@@ -17,6 +17,8 @@ type Body = {
   model?: string;
   /** Answer this existing message again instead of sending a new one. */
   regenerate?: string;
+  /** Let the model search the web when it needs to. */
+  search?: boolean;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -28,6 +30,7 @@ const HISTORY_CHARS = 600_000;
 /**
  * Sends a message and streams the reply as newline-separated JSON events:
  *   {type:"start", chatId, userMessageId}  {type:"text", text}  {type:"notice", text}
+ *   {type:"searching", query?}  {type:"sources", sources}
  *   {type:"done", message}  or  {type:"error", error, message}
  *
  * The person's own message is written with their session, so row-level security checks it. The
@@ -145,6 +148,11 @@ export async function POST(req: NextRequest) {
   const system = [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${me.profile.display_name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
+    ...(body.search === true
+      ? [
+          "You can search the web. Search when the question needs current, local or specific facts you might not know; otherwise answer directly without searching.",
+        ]
+      : []),
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
   ].join(" ");
 
@@ -174,18 +182,32 @@ export async function POST(req: NextRequest) {
       let used = model;
       let notice: string | undefined;
       let usage: { input: number; output: number } | undefined;
+      let sources: Source[] = [];
+      let searches = 0;
+      let queried = 0;
+      let suggestions = "";
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal })) {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search: body.search === true })) {
           if (ev.type === "text") {
             reply += ev.text;
             send(ev);
           } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
           else if (ev.type === "model") used = findModel(ev.id) ?? model;
-          else {
-            notice = ev.text;
+          else if (ev.type === "searching") {
+            if (ev.query) queried++;
             send(ev);
+          }
+          else if (ev.type === "sources") {
+            sources = ev.sources.slice(0, 30);
+            send({ type: "sources", sources });
+          } else if (ev.type === "searches") searches = ev.count;
+          else if (ev.type === "suggestions") suggestions = ev.html;
+          else {
+            // More than one note can apply (a busy model and no search), so they add up.
+            notice = notice ? `${notice} ${ev.text}` : ev.text;
+            send({ type: "notice", text: notice });
           }
         }
       } catch (e) {
@@ -201,7 +223,10 @@ export async function POST(req: NextRequest) {
         const inputChars = turns.reduce((n, t) => n + t.text.length, system.length);
         usage = { input: status === "failed" ? 0 : Math.ceil(inputChars / 4), output: Math.ceil(reply.length / 4) };
       }
-      const cost = estimateCost(used, usage.input, usage.output);
+      // A reply stopped mid-search gets no report, so count the searches seen instead (erring high).
+      searches = Math.max(searches, queried);
+      // Each web search has a fee on top of tokens, so it counts toward the monthly limit too.
+      const cost = estimateCost(used, usage.input, usage.output) + searchCost(used.provider, searches);
 
       const { data: saved } = await admin
         .from("messages")
@@ -210,7 +235,15 @@ export async function POST(req: NextRequest) {
           owner_id: me.userId,
           parent_id: questionId,
           role: "assistant",
-          content: { text: reply, ...(notice ? { notice } : {}), ...(error ? { error } : {}), cost },
+          content: {
+            text: reply,
+            ...(notice ? { notice } : {}),
+            ...(error ? { error } : {}),
+            ...(sources.length ? { sources } : {}),
+            ...(searches ? { searches } : {}),
+            ...(suggestions ? { suggestions } : {}),
+            cost,
+          },
           status,
           provider: used.provider,
           model: used.id,
@@ -219,7 +252,7 @@ export async function POST(req: NextRequest) {
         .single<MessageRow>();
       const now = new Date().toISOString();
       await Promise.all([
-        usage.input || usage.output
+        usage.input || usage.output || cost
           ? admin.from("usage_events").insert({
               owner_id: me.userId,
               message_id: saved?.id ?? null,

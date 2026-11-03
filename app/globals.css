@@ -510,3 +510,20 @@ body {
 @media (hover: none) {
   .press:active:not(:disabled) { transform: none; }
 }
+
+/* A numbered web search citation inside a reply, like [1]. */
+.md a.cite {
+  display: inline-block;
+  min-width: 1.45em;
+  margin: 0 0.1em;
+  padding: 0 0.35em;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.72em;
+  line-height: 1.5;
+  text-align: center;
+  text-decoration: none;
+  vertical-align: 0.15em;
+  color: var(--mute);
+}
+.md a.cite:hover { color: var(--fg); border-color: var(--fg); }

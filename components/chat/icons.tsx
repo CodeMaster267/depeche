@@ -82,3 +82,17 @@ export const SidebarIcon = (p: P) => (
     <path d="M9.5 4.5v15" />
   </svg>
 );
+export const GlobeIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5S9.6 5.8 12 3.5z" />
+  </svg>
+);
+export const GlobeOffIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5S9.6 5.8 12 3.5z" />
+    <path d="M4 4l16 16" strokeWidth={2.4} stroke="var(--bg)" />
+    <path d="M4 4l16 16" />
+  </svg>
+);

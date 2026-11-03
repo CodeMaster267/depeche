@@ -77,3 +77,18 @@ export function chooseDefault(available: Model[], last?: string | null): Model |
     available[0]
   );
 }
+
+/**
+ * Each provider's fee per web search, in dollars (checked 3 Nov 2026): Anthropic and OpenAI charge
+ * $10 per 1,000 searches, Google $14 per 1,000 search queries. Google's monthly free allowance is
+ * ignored so estimates err high. The pages a search reads are billed as ordinary input tokens,
+ * which the providers already include in their usage reports.
+ */
+export const SEARCH_PRICE: Record<Provider, number> = { anthropic: 0.01, openai: 0.01, google: 0.014 };
+
+/** The most searches one reply may run, which bounds what a single reply's searching can cost. */
+export const MAX_SEARCHES = 5;
+
+export function searchCost(provider: Provider, searches: number): number {
+  return Math.max(0, searches) * SEARCH_PRICE[provider];
+}
