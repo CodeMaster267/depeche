@@ -568,7 +568,9 @@ async function* fakeReply({ turns, signal, search, model, system }: ReplyRequest
   }
   // Say which files arrived, so tests can check that attachments reach the model.
   const seen = [...(last?.files ?? []).map((f) => f.name), ...[...(last?.text ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1])];
-  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + FAKE_REPLY.replace("{q}", q);
+  // "favourite colour" makes it suggest a memory, to test memory suggestions.
+  const remember = q.includes("favourite colour") ? "\n\n<remember>Their favourite colour is black.</remember>" : "";
+  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + FAKE_REPLY.replace("{q}", q) + remember;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

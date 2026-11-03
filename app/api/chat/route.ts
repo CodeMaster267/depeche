@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
 import { MAX_SEARCHES, estimateCost, findModel, searchCost } from "@/lib/ai/models";
 import { ProviderError, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
+import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
 import { MAX_FILES_PER_MESSAGE, UPLOAD_BUCKET, isFileRef, type FileRef } from "@/lib/chat/files";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
@@ -105,7 +106,20 @@ export async function POST(req: NextRequest) {
   // The monthly limit is a hard one: reserve the most this reply could cost before anything is
   // spent, counting other replies still being written. The reply is then kept short enough to fit.
   const search = body.search === true;
-  const system = systemPrompt(me.profile.display_name, Boolean(body.voice));
+  // What the person asked Depeche to remember. Their own rows only, read as them.
+  const { data: remembered } = await db
+    .from("memories")
+    .select("content")
+    .eq("owner_id", me.userId)
+    .eq("status", "active")
+    .order("updated_at", { ascending: false })
+    .limit(MEMORY_PROMPT_LIMIT)
+    .returns<{ content: string }[]>();
+  const system = systemPrompt(
+    me.profile.display_name,
+    Boolean(body.voice),
+    (remembered ?? []).map((m) => m.content),
+  );
   let historyChars = 0;
   const seen = [system, text];
   for (const m of [...all].reverse()) {
@@ -254,6 +268,7 @@ export async function POST(req: NextRequest) {
       send({ type: "start", chatId: finalChatId, userMessageId: questionId, userMessage: question });
 
       let reply = "";
+      const memory = memoryFilter();
       let used = model;
       let notice: string | undefined;
       let usage: { input: number; output: number } | undefined;
@@ -266,8 +281,12 @@ export async function POST(req: NextRequest) {
       try {
         for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput })) {
           if (ev.type === "text") {
-            reply += ev.text;
-            send(ev);
+            // A suggested memory is taken out of the reply and offered separately.
+            const shown = memory.push(ev.text);
+            if (shown) {
+              reply += shown;
+              send({ type: "text", text: shown });
+            }
           } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
           else if (ev.type === "model") used = findModel(ev.id) ?? model;
           else if (ev.type === "searching") {
@@ -291,6 +310,12 @@ export async function POST(req: NextRequest) {
           status = "failed";
           error = e instanceof ProviderError ? e.message : "Something went wrong while answering. Try again.";
         }
+      }
+
+      const tail = memory.end();
+      if (tail) {
+        reply += tail;
+        send({ type: "text", text: tail });
       }
 
       // Stopped replies have no usage report, so estimate about four characters per token.
@@ -341,6 +366,17 @@ export async function POST(req: NextRequest) {
         admin.from("profiles").update({ last_model: model.id }).eq("id", me.userId),
       ]);
 
+      // A suggested memory waits for the person to keep or dismiss it; nothing is used until then.
+      const fact = status === "completed" ? memory.suggestions[0] : undefined;
+      if (saved && fact) {
+        const { data: suggested } = await admin
+          .from("memories")
+          .insert({ owner_id: me.userId, content: fact, status: "suggested", source_message_id: saved.id })
+          .select("id, content")
+          .single<{ id: string; content: string }>();
+        if (suggested) saved.memory = suggested;
+      }
+
       if (error) send({ type: "error", error, message: saved });
       else send({ type: "done", message: saved });
       try {
@@ -367,11 +403,12 @@ export async function POST(req: NextRequest) {
 /** About how many input tokens the pages from one web search add, erring high. */
 const SEARCH_INPUT_TOKENS = 12_000;
 
-function systemPrompt(name: string, voice: boolean): string {
+function systemPrompt(name: string, voice: boolean, memories: string[]): string {
   return [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
+    memoryInstructions(name, memories),
     voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."
       : "",

@@ -25,6 +25,8 @@ export type MessageRow = {
   status: "pending" | "streaming" | "completed" | "failed" | "stopped";
   model: string | null;
   created_at: string;
+  /** A memory this reply suggested that the person hasn't kept or dismissed yet. */
+  memory?: { id: string; content: string };
 };
 
 export type ChatRow = { id: string; title: string; model: string | null; pinned: boolean; updated_at: string };

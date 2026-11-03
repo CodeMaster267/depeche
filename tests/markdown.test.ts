@@ -44,3 +44,22 @@ describe("modelsFor", () => {
     expect(ids([{ provider: "google", models: [] }])).toHaveLength(3);
   });
 });
+
+describe("memory suggestions in a streamed reply", () => {
+  it("are taken out of the text, even when the tag arrives in pieces", async () => {
+    const { memoryFilter } = await import("@/lib/chat/memory");
+    const f = memoryFilter();
+    const chunks = ["Noted, I'll keep that in mind.\n\n<rem", "ember>Hasan is vege", "tarian.</reme", "mber>"];
+    const shown = chunks.map((c) => f.push(c)).join("") + f.end();
+    expect(shown).toBe("Noted, I'll keep that in mind.\n\n");
+    expect(f.suggestions).toEqual(["Hasan is vegetarian."]);
+  });
+
+  it("leave ordinary angle brackets alone", async () => {
+    const { memoryFilter } = await import("@/lib/chat/memory");
+    const f = memoryFilter();
+    const shown = ["Use a < b and <re", "d> tags, then <"].map((c) => f.push(c)).join("") + f.end();
+    expect(shown).toBe("Use a < b and <red> tags, then <");
+    expect(f.suggestions).toEqual([]);
+  });
+});
