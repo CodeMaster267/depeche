@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/components/Wordmark";
 import { TitleCardPage, Notice } from "@/components/ui";
-import { isConfigured } from "@/lib/config";
+import { isConfigured, missingSettings } from "@/lib/config";
 import { getMe } from "@/lib/auth/session";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { SignInForms } from "./SignInForms";
@@ -31,7 +31,13 @@ export default async function SignIn({ searchParams }: { searchParams: Promise<{
         <Wordmark glitch />
       </h1>
       <p className="mb-6 text-[17px] text-mute">Invite only. Sign in to continue.</p>
-      {error && ERRORS[error] ? <Notice tone="error">{ERRORS[error]}</Notice> : null}
+      {!isConfigured() ? (
+        <Notice tone="error">
+          Depeche isn&apos;t fully set up yet. Missing in Vercel: {missingSettings().join(", ")}. Add them, then redeploy.
+        </Notice>
+      ) : error && ERRORS[error] ? (
+        <Notice tone="error">{ERRORS[error]}</Notice>
+      ) : null}
       <SignInForms />
       <p className="mt-10 text-center text-[13px] text-faint">No account yet? Ask your family admin for an invite.</p>
     </TitleCardPage>
