@@ -51,9 +51,12 @@ test.describe("web search", () => {
 
     // The sources open into a numbered list.
     const sources = reply.getByTestId("sources");
-    const toggle = sources.getByRole("button", { name: /3 sources/ });
-    await expect(toggle).toContainText("bbc.co.uk");
+    const toggle = sources.getByRole("button", { name: "Searched the web · 3 sources" });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await toggle.click();
+    // The searches it ran are listed above the pages.
+    await expect(sources.getByText(/^“What's the latest on quadratics/)).toBeVisible();
+    await expect(sources.getByText("bbc.co.uk")).toBeVisible();
     await expect(sources.getByRole("link", { name: /Quadratic formula - Wikipedia/ })).toHaveAttribute("rel", /noopener/);
     await expect(sources.getByText("2 web searches, included in the cost below.")).toBeVisible();
 

@@ -58,6 +58,8 @@ test("a photo and a text file are sent with a message, and only their owner can 
   const reply = page.getByTestId("reply").last();
   await expect(reply).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
   await expect(reply).toContainText("I can see dot.png, notes.md.");
+  // Short lines say which files the reply looked at.
+  await expect(reply.getByTestId("activity-read")).toHaveText(["Viewed dot.png", "Read notes.md"]);
 
   // After a reload the photo shows from private storage, and the text file is listed.
   await page.reload();

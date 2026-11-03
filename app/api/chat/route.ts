@@ -9,6 +9,7 @@ import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/cha
 import { MAX_FILES_PER_MESSAGE, UPLOAD_BUCKET, isFileRef, type FileRef } from "@/lib/chat/files";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
+import { MAX_QUERIES, MAX_REASONING_CHARS, thinkingClock } from "@/lib/chat/activity";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
@@ -40,7 +41,7 @@ const FILE_BYTES_BUDGET = 30 * 1024 * 1024;
 /**
  * Sends a message and streams the reply as newline-separated JSON events:
  *   {type:"start", chatId, userMessageId}  {type:"text", text}  {type:"notice", text}
- *   {type:"searching", query?}  {type:"sources", sources}
+ *   {type:"thinking", text}  {type:"searching", query?}  {type:"sources", sources}
  *   {type:"done", message}  or  {type:"error", error, message}
  *
  * The person's own message is written with their session, so row-level security checks it. The
@@ -276,11 +277,24 @@ export async function POST(req: NextRequest) {
       let searches = 0;
       let queried = 0;
       let suggestions = "";
+      let reasoning = "";
+      const clock = thinkingClock();
+      const queries: string[] = [];
+      // The files sent with the question, shown as "Read report.pdf".
+      const read = (question.content.files ?? []).filter((f) => isFileRef(f, me.userId)).map((f) => f.name.slice(0, 200));
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
         for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput })) {
-          if (ev.type === "text") {
+          if (ev.type !== "thinking") clock.stopped();
+          if (ev.type === "thinking") {
+            clock.thinking();
+            if (reasoning.length < MAX_REASONING_CHARS) {
+              const add = ev.text.slice(0, MAX_REASONING_CHARS - reasoning.length);
+              reasoning += add;
+              send({ type: "thinking", text: add });
+            }
+          } else if (ev.type === "text") {
             // A suggested memory is taken out of the reply and offered separately.
             const shown = memory.push(ev.text);
             if (shown) {
@@ -290,7 +304,10 @@ export async function POST(req: NextRequest) {
           } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
           else if (ev.type === "model") used = findModel(ev.id) ?? model;
           else if (ev.type === "searching") {
-            if (ev.query) queried++;
+            if (ev.query) {
+              queried++;
+              if (queries.length < MAX_QUERIES && !queries.includes(ev.query)) queries.push(ev.query);
+            }
             send(ev);
           }
           else if (ev.type === "sources") {
@@ -312,6 +329,7 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      clock.stopped();
       const tail = memory.end();
       if (tail) {
         reply += tail;
@@ -342,6 +360,9 @@ export async function POST(req: NextRequest) {
             ...(sources.length ? { sources } : {}),
             ...(searches ? { searches } : {}),
             ...(suggestions ? { suggestions } : {}),
+            ...(reasoning.trim() ? { reasoning, thoughtMs: clock.ms } : {}),
+            ...(queries.length ? { queries } : {}),
+            ...(read.length ? { read } : {}),
             cost,
           },
           status,
