@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Wordmark } from "@/components/Wordmark";
 import { NavLink } from "@/components/Press";
+import { GlassCode } from "@/components/Glass";
 import type { ChatRow } from "@/lib/chat/thread";
 import { CloseIcon, PlusIcon, SearchIcon } from "./icons";
 
@@ -68,9 +69,11 @@ export function Sidebar({
       <Link
         href="/"
         onClick={onNavigate}
-        className="press flex h-12 items-center gap-3 rounded-2xl border border-line px-4 text-[16px] font-medium"
+        className="press glass glass-pill flex h-12 items-center justify-center gap-2.5 px-4 text-[16px] font-medium"
       >
-        <PlusIcon /> New chat
+        <GlassCode seed="new chat" />
+        <PlusIcon />
+        <span>New chat</span>
       </Link>
       <label className="flex h-11 items-center gap-2 rounded-2xl bg-soft px-4 text-mute">
         <SearchIcon />
