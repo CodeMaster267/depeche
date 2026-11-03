@@ -1,0 +1,112 @@
+name: Nightly backup
+
+# Every night: dump the live database (and any Storage files), encrypt it with BACKUP_PASSPHRASE,
+# restore it into a separate empty database and check every table and file, then keep the
+# encrypted file as a private artifact of this run. Daily copies are kept 30 days, Sunday copies
+# 90 days. Nothing readable is stored anywhere, and nothing is committed to git.
+#
+# If anything fails, an issue is opened (GitHub emails it to Hasan); the next good run closes it.
+# keep-alive.yml checks every day that this actually ran, and starts it if it didn't.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL            already set, shared with database.yml
+#   BACKUP_PASSPHRASE          a long password, also saved in Hasan's password manager. Without it
+#                              the backups cannot be opened, so it must be kept somewhere safe.
+#   SUPABASE_SERVICE_ROLE_KEY  only needed once the app stores files (images, documents)
+#
+# To restore: see docs/backups.md.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - name: Check the secrets are set
+        run: |
+          missing=""
+          [ -n "$DB_URL" ] || missing="$missing SUPABASE_DB_URL"
+          [ -n "$BACKUP_PASSPHRASE" ] || missing="$missing BACKUP_PASSPHRASE"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing. No backup was made."
+            exit 1
+          fi
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          echo "stamp=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+          # Sunday copies are kept longer.
+          if [ "$(date -u +%u)" = 7 ]; then echo "keep_days=90" >> "$GITHUB_ENV"; else echo "keep_days=30" >> "$GITHUB_ENV"; fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Back up and encrypt
+        run: scripts/backup/backup.sh "$RUNNER_TEMP/backup"
+      - name: Start a separate, empty database
+        run: echo "RESTORE_DB=$(scripts/backup/scratch-db.sh)" >> "$GITHUB_ENV"
+      - name: Restore the encrypted file into it and check every table and file
+        run: RESTORE_REPORT="$RUNNER_TEMP/restore-report.json" scripts/backup/restore.sh "$RUNNER_TEMP/backup/depeche-backup-$stamp.tar.gz.gpg" "$RESTORE_DB"
+      - name: Keep the encrypted backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: depeche-backup-${{ env.stamp }}-run${{ github.run_number }}
+          path: ${{ runner.temp }}/backup/depeche-backup-${{ env.stamp }}.tar.gz.gpg
+          retention-days: ${{ env.keep_days }}
+          compression-level: 0
+          if-no-files-found: error
+      - name: Record the verified backup in the live database
+        run: |
+          size=$(wc -c < "$RUNNER_TEMP/backup/depeche-backup-$stamp.tar.gz.gpg")
+          read -r tables rows files < <(node -e 'const r = require(process.argv[1]); console.log(r.tables, r.rows, r.files)' "$RUNNER_TEMP/restore-report.json")
+          psql "$DB_URL" -v ON_ERROR_STOP=1 --quiet \
+            -v name="depeche-backup-$stamp" -v started="$started_at" -v size="$size" -v tables="$tables" \
+            -v rows="$rows" -v files="$files" -v url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" <<'SQL'
+          insert into public.backup_runs (backup_name, started_at, size_bytes, tables, rows, files, restore_verified, run_url)
+          values (:'name', :'started', :size, :tables, :rows, :files, true, :'url');
+          SQL
+
+  alert:
+    needs: backup
+    if: failure() || cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open an issue (GitHub emails Hasan)
+        run: |
+          scripts/backup/alert.sh open backup-failed "Last night's backup failed" \
+            "The nightly backup on $(date -u +%Y-%m-%d) failed, so no new copy was saved. Older copies are still kept. Details: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+  all-clear:
+    needs: backup
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Close any open backup alert
+        run: |
+          scripts/backup/alert.sh close backup-failed "Fixed: tonight's backup worked and its restore test passed ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."

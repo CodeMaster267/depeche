@@ -43,4 +43,5 @@ without setting `DEPECHE_ENCRYPTION_KEY` first means admins re-enter their provi
 | `app/api/chat/` | Sends a message and streams the reply; saves the reply and its cost |
 | `components/chat/`, `components/markdown/` | The chat screen, and how replies are rendered |
 | `e2e/` | Browser tests against the local Supabase |
+| `scripts/backup/`, `docs/backups.md` | Nightly encrypted backups with a restore test, and the keep-alive that stops Supabase pausing |
 | `CLAUDE.md` | The rules any code change must follow |
