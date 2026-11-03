@@ -662,6 +662,12 @@ $$
 | Discriminant | $(-7)^2 - 4(2)(3)$ | 25 |
 | Roots | $(7 \pm 5)/4$ | 3 and 0.5 |
 
+| Method | When it works | Effort | Exact answer | Notes |
+| --- | --- | --- | --- | --- |
+| **Quadratic formula** | Always, for any real coefficients | Low | Yes | The dependable default when factoring isn't obvious |
+| Completing the square | Always | Medium | Yes | Shows where the formula comes from |
+| Graphing | Approximate roots only | Low | No | Useful for checking an answer by eye |
+
 \`\`\`python
 import math
 
