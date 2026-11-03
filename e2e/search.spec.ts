@@ -112,6 +112,15 @@ test.describe("web search", () => {
     const reply = page.getByTestId("reply").last();
     await expect(reply).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
     await expect(reply).toContainText("worked answer");
-    await expect(reply.getByText(/Web search wasn't available for this answer/)).toBeVisible();
+    await expect(reply.getByText(/Web search wasn't available, so this answer comes from the model's own knowledge/)).toBeVisible();
+  });
+
+  test("a Google key whose search allowance is used up still gets a full answer", async ({ page }) => {
+    await start(page);
+    await send(page, "latest noquota question");
+    const reply = page.getByTestId("reply").last();
+    await expect(reply).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
+    await expect(reply).toContainText("worked answer");
+    await expect(reply.getByText(/Google's search allowance for your family's key is used up/)).toBeVisible();
   });
 });
