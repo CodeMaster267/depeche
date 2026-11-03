@@ -86,20 +86,57 @@ void main() {
   o = vec4(next, 0.0, 0.0, 1.0);
 }`;
 
-const TEXT = `#version 300 es
+/** One texel per letter: what it shows and how bright, worked out once per letter, not per pixel. */
+const LETTERS = `#version 300 es
 precision highp float;
-uniform sampler2D cur, prev, state, atlas;
+uniform sampler2D cur, prev, state;
 uniform vec2 simSize;
 uniform vec2 view;      // canvas size, CSS px
-uniform float dpr;
 uniform vec2 cell;      // letter cell, CSS px
-uniform vec2 atlasGrid; // columns, rows of the glyph atlas
 uniform float standBase, standCount;
-uniform vec3 ink;
 uniform float rest;     // opacity of a letter at rest
 uniform vec4 clearRects[${MAX_CLEAR}]; // x0, y0, x1, y1 in CSS px from the top left
 uniform int clearCount;
 ${WARP}
+out vec4 o;
+
+void main() {
+  ivec2 ci = ivec2(gl_FragCoord.xy); // column, row from the top
+  vec4 st = texelFetch(state, ci, 0);
+  float g = floor(st.r * 255.0 + 0.5);
+  if (g < 0.5) { o = vec4(0.0); return; }
+  float seed = floor(st.g * 255.0 + 0.5);
+
+  vec2 centre = (vec2(ci) + 0.5) * cell;
+  float clear = 1.0;
+  for (int i = 0; i < ${MAX_CLEAR}; i++) {
+    if (i >= clearCount) break;
+    vec4 r = clearRects[i];
+    vec2 d = max(max(r.xy - centre, centre - r.zw), 0.0);
+    clear *= smoothstep(0.0, ${FEATHER.toFixed(1)}, length(d));
+  }
+
+  // The simulation runs bottom-up, like GL.
+  vec2 sc = vec2(centre.x, view.y - centre.y) / ${CELL.toFixed(1)};
+  float now = texture(cur, sc / simSize).r;
+  float before = texture(prev, (warp(sc - 0.5) + 0.5) / simSize).r;
+  // Rising: flip to a stand-in, further along the faster it rises. Strong: full ink.
+  float k = mod(floor(clamp((now - before - 0.01) / 0.99 * 5.0, 0.0, 1.0) * 5.654), 8.0);
+  float lit = smoothstep(0.3, 0.8, now);
+  float shown = k > 0.0 ? standBase + mod(seed + k * 5.0, standCount) : g;
+  float level = mix(rest, 1.0, max(lit, k > 0.0 ? 0.7 : 0.0)) * clear;
+  o = vec4(shown / 255.0, level, k > 0.0 ? 1.0 : 0.0, 1.0);
+}`;
+
+/** Draws each letter from the glyph atlas; flipping letters get the red/cyan split. */
+const TEXT = `#version 300 es
+precision highp float;
+uniform sampler2D letters, atlas;
+uniform vec2 view;      // canvas size, CSS px
+uniform float dpr;
+uniform vec2 cell;      // letter cell, CSS px
+uniform vec2 atlasGrid; // columns, rows of the glyph atlas
+uniform vec3 ink;
 out vec4 o;
 
 float glyph(float g, vec2 lp) {
@@ -111,41 +148,21 @@ float glyph(float g, vec2 lp) {
 void main() {
   vec2 px = vec2(gl_FragCoord.x, view.y * dpr - gl_FragCoord.y) / dpr; // top-down CSS px
   vec2 ci = floor(px / cell);
-  vec4 st = texelFetch(state, ivec2(ci), 0);
-  float g = floor(st.r * 255.0 + 0.5);
-  if (g < 0.5) { o = vec4(0.0); return; }
-  float seed = floor(st.g * 255.0 + 0.5);
-
-  vec2 centre = (ci + 0.5) * cell;
-  float clear = 1.0;
-  for (int i = 0; i < ${MAX_CLEAR}; i++) {
-    if (i >= clearCount) break;
-    vec4 r = clearRects[i];
-    vec2 d = max(max(r.xy - centre, centre - r.zw), 0.0);
-    clear *= smoothstep(0.0, ${FEATHER.toFixed(1)}, length(d));
-  }
-  if (clear <= 0.0) { o = vec4(0.0); return; }
-
-  // The simulation runs bottom-up, like GL.
-  vec2 sc = vec2(centre.x, view.y - centre.y) / ${CELL.toFixed(1)};
-  float now = texture(cur, sc / simSize).r;
-  float before = texture(prev, (warp(sc - 0.5) + 0.5) / simSize).r;
-  float k = mod(floor(clamp((now - before - 0.01) / 0.99 * 5.0, 0.0, 1.0) * 5.654), 8.0);
-  float lit = smoothstep(0.3, 0.8, now);
-
+  vec4 st = texelFetch(letters, ivec2(ci), 0);
+  if (st.g <= 0.0) { o = vec4(0.0); return; }
+  float shown = floor(st.r * 255.0 + 0.5);
   vec2 lp = (px - ci * cell) / cell;
-  float shown = k > 0.0 ? standBase + mod(seed + k * 5.0, standCount) : g;
   float c = glyph(shown, lp);
   vec3 col = ink * c;
   float a = c;
-  if (k > 0.0) {
+  if (st.b > 0.5) {
     float off = 1.5 / cell.x;
     float l = max(glyph(shown, lp + vec2(off, 0.0)) - c, 0.0);
     float r = max(glyph(shown, lp - vec2(off, 0.0)) - c, 0.0);
     col += vec3(${RED.join(", ")}) * l + vec3(${CYAN.join(", ")}) * r;
     a = min(1.0, c + l + r);
   }
-  o = vec4(col, a) * mix(rest, 1.0, max(lit, k > 0.0 ? 0.7 : 0.0)) * clear;
+  o = vec4(col, a) * st.g;
 }`;
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram | null {
@@ -187,17 +204,19 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
   if (!gl) return null;
   if (!gl.getExtension("EXT_color_buffer_float") && !gl.getExtension("EXT_color_buffer_half_float")) return null;
   const sim = compile(gl, VERT, SIM);
+  const letters = compile(gl, VERT, LETTERS);
   const text = compile(gl, VERT, TEXT);
-  if (!sim || !text) return null;
+  if (!sim || !letters || !text) return null;
 
   const loc = (p: WebGLProgram, n: string) => gl.getUniformLocation(p, n);
   const U = {
     sim: Object.fromEntries(["prev", "size", "seg", "radius", "phase", "warpK"].map((n) => [n, loc(sim, n)])),
-    text: Object.fromEntries(
-      ["cur", "prev", "state", "atlas", "simSize", "view", "dpr", "cell", "atlasGrid", "standBase", "standCount", "ink", "rest", "clearRects", "clearCount", "phase", "warpK"].map(
-        (n) => [n, loc(text, n)],
+    letters: Object.fromEntries(
+      ["cur", "prev", "state", "simSize", "view", "cell", "standBase", "standCount", "rest", "clearRects", "clearCount", "phase", "warpK"].map(
+        (n) => [n, loc(letters, n)],
       ),
     ),
+    text: Object.fromEntries(["letters", "atlas", "view", "dpr", "cell", "atlasGrid", "ink"].map((n) => [n, loc(text, n)])),
   };
 
   // One triangle that covers the whole target.
@@ -219,6 +238,8 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
   };
   const targets = [0, 1].map(() => ({ tex: texture(gl.LINEAR), fbo: gl.createFramebuffer()! }));
   const stateTex = texture(gl.NEAREST);
+  const lettersTarget = { tex: texture(gl.NEAREST), fbo: gl.createFramebuffer()! };
+  let gridCols = 1, gridRows = 1;
   const atlasTex = texture(gl.LINEAR);
 
   // Glyphs: index 0 is "no letter"; the field's own letters, then the stand-ins in one run.
@@ -269,7 +290,7 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
 
   /** Fills the grid with the text, each row starting at a different place so it never looks tiled. */
   const buildField = () => {
-    const cols = Math.ceil(w / cellW) + 1, rows = Math.ceil(h / LINE) + 1;
+    const cols = (gridCols = Math.ceil(w / cellW) + 1), rows = (gridRows = Math.ceil(h / LINE) + 1);
     const src = opts.text;
     const data = new Uint8Array(cols * rows * 4);
     for (let r = 0; r < rows; r++) {
@@ -283,6 +304,11 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     gl.bindTexture(gl.TEXTURE_2D, stateTex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, cols, rows, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.bindTexture(gl.TEXTURE_2D, lettersTarget.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, cols, rows, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, lettersTarget.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lettersTarget.tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   };
 
   const clearSim = () => {
@@ -354,32 +380,46 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     cur = 1 - cur;
   };
 
+  const bind = (unit: number, tex: WebGLTexture, at: WebGLUniformLocation | null) => {
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(at, unit);
+  };
+
   const draw = () => {
+    // 1. Each letter's state, one texel per letter.
+    const L = U.letters;
+    gl.useProgram(letters);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, lettersTarget.fbo);
+    gl.viewport(0, 0, gridCols, gridRows);
+    bind(0, targets[cur].tex, L.cur);
+    bind(1, targets[1 - cur].tex, L.prev);
+    bind(2, stateTex, L.state);
+    gl.uniform2f(L.simSize, simW, simH);
+    gl.uniform2f(L.view, w, h);
+    gl.uniform2f(L.cell, cellW, LINE);
+    gl.uniform1f(L.standBase, standBase);
+    gl.uniform1f(L.standCount, STANDINS.length);
+    gl.uniform1f(L.rest, rest);
+    gl.uniform4fv(L.clearRects, clearRects);
+    gl.uniform1i(L.clearCount, clearCount);
+    setWarp(L);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // 2. The letters themselves, from the atlas.
+    const T = U.text;
     gl.useProgram(text);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    const bind = (unit: number, tex: WebGLTexture, name: string) => {
-      gl.activeTexture(gl.TEXTURE0 + unit);
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.uniform1i(U.text[name], unit);
-    };
-    bind(0, targets[cur].tex, "cur");
-    bind(1, targets[1 - cur].tex, "prev");
-    bind(2, stateTex, "state");
-    bind(3, atlasTex, "atlas");
-    gl.uniform2f(U.text.simSize, simW, simH);
-    gl.uniform2f(U.text.view, w, h);
-    gl.uniform1f(U.text.dpr, canvas.width / w);
-    gl.uniform2f(U.text.cell, cellW, LINE);
-    gl.uniform2f(U.text.atlasGrid, atlasCols, atlasRows);
-    gl.uniform1f(U.text.standBase, standBase);
-    gl.uniform1f(U.text.standCount, STANDINS.length);
-    gl.uniform3f(U.text.ink, ink[0], ink[1], ink[2]);
-    gl.uniform1f(U.text.rest, rest);
-    gl.uniform4fv(U.text.clearRects, clearRects);
-    gl.uniform1i(U.text.clearCount, clearCount);
-    setWarp(U.text);
+    bind(0, lettersTarget.tex, T.letters);
+    bind(1, atlasTex, T.atlas);
+    gl.uniform2f(T.view, w, h);
+    gl.uniform1f(T.dpr, canvas.width / w);
+    gl.uniform2f(T.cell, cellW, LINE);
+    gl.uniform2f(T.atlasGrid, atlasCols, atlasRows);
+    gl.uniform3f(T.ink, ink[0], ink[1], ink[2]);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   };
 
@@ -387,6 +427,7 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
   let mouse = { x: 0, y: 0 }, last = { x: 0, y: 0 };
   let fresh = true, lastMove = 0, lastStep = 0, lastPaint = 0, target = 0, speed = 0;
   let raf = 0;
+  let painted = false; // whether the grid holds anything since it was last cleared
 
   const frame = (now: number) => {
     raf = requestAnimationFrame(frame);
@@ -406,12 +447,16 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     // Grid cells, bottom-up.
     step([last.x / CELL, (h - last.y) / CELL, mouse.x / CELL, (h - mouse.y) / CELL], radius);
     last = { ...mouse };
-    if (radius > 0) lastPaint = now;
+    if (radius > 0) {
+      lastPaint = now;
+      painted = true;
+    }
     draw();
     // A full-strength cell falls below visibility in about 200 steps (3 s); then rest.
-    if (now - lastPaint > 3500 && speed < 0.01) {
+    if ((!painted || now - lastPaint > 3500) && speed < 0.01) {
       cancelAnimationFrame(raf);
       raf = 0;
+      painted = false;
       clearSim();
       draw();
       canvas.dataset.ripple = "ready";

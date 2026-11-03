@@ -73,12 +73,13 @@ test("new chat: the field sits behind an empty chat on desktop, clear of the gre
   await expect(field).toHaveCount(1);
   // The field stays inside the conversation area: the composer and header sit outside it.
   const box = (await field.boundingBox())!;
-  const composer = (await page.getByRole("textbox").first().boundingBox())!;
+  const composer = (await page.locator("textarea").last().boundingBox())!;
   expect(box.y + box.height).toBeLessThanOrEqual(composer.y + 1);
   if (await canRun(page)) {
     await expect(field).toHaveAttribute("data-ripple", "ready");
     await sweep(page);
     await expect(field).toHaveAttribute("data-ripple", "moving");
+    await page.screenshot({ path: test.info().outputPath("new-chat-ripple.png") });
   }
   // The greeting stays on top of the field.
   const top = await hi.evaluate((el) => {
