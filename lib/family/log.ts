@@ -8,7 +8,7 @@ export type LogRow = {
   created_at: string;
 };
 
-const PROVIDER_NAMES: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" };
+const PROVIDER_NAMES: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google", groq: "Groq" };
 const money = (v: unknown) => `$${Number(v ?? 0).toFixed(2)}`;
 
 export function describeLog(row: LogRow, names: Map<string, string>, me: string): string {
