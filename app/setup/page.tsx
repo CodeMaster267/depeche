@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/components/Wordmark";
 import { TitleCardPage, Notice } from "@/components/ui";
-import { isConfigured } from "@/lib/config";
+import { isConfigured, missingSettings } from "@/lib/config";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { SetupForm } from "./SetupForm";
 
@@ -14,7 +14,7 @@ export default async function Setup() {
   if (!isConfigured()) {
     return (
       <TitleCardPage>
-        <Notice tone="error">Depeche isn't connected to its database yet.</Notice>
+        <Notice tone="error">Depeche isn&apos;t fully set up yet. Missing in Vercel: {missingSettings().join(", ")}.</Notice>
       </TitleCardPage>
     );
   }
