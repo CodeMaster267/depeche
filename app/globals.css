@@ -1,0 +1,121 @@
+@import "tailwindcss";
+
+/*
+ * Depeche design tokens. Strict black and white; no accent colour.
+ * The only colour anywhere is the red/cyan channel split inside the glitch effect.
+ */
+:root {
+  --bg: #ffffff;
+  --fg: #0a0a0a;
+  --mute: #707070;
+  --faint: #a3a3a3;
+  --line: #e8e8e8;
+  --soft: #f5f5f5;
+  --inv: #0a0a0a;
+  --on-inv: #ffffff;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --fg: #f2f2f2;
+    --mute: #8c8c8c;
+    --faint: #555555;
+    --line: #1f1f1f;
+    --soft: #0e0e0e;
+    --inv: #f2f2f2;
+    --on-inv: #000000;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-mute: var(--mute);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-soft: var(--soft);
+  --color-inv: var(--inv);
+  --color-on-inv: var(--on-inv);
+  --font-sans: var(--font-geist), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-display: var(--font-archivo), system-ui, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Wordmark. Wide, heavy, uppercase. */
+.wordmark {
+  font-family: var(--font-display);
+  font-stretch: 125%;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+
+/*
+ * Glitch: red and cyan channels split apart plus two displaced slices.
+ * Used on the sign-in title card only. It shivers once on load, then holds still.
+ * Never applied to text people read. Off entirely with reduced motion.
+ */
+.glitch {
+  position: relative;
+  display: inline-block;
+  isolation: isolate;
+}
+.glitch .layer {
+  display: block;
+  white-space: nowrap;
+}
+.glitch .slice {
+  position: absolute;
+  inset: 0;
+}
+.glitch .ch {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+}
+.glitch .r { color: #ff1e3c; transform: translateX(-3px); }
+.glitch .c { color: #00e5ff; transform: translateX(3px); }
+.glitch .w { position: relative; color: var(--fg); mix-blend-mode: normal; }
+@media (prefers-color-scheme: dark) {
+  .glitch .w { mix-blend-mode: screen; }
+}
+.glitch .base {
+  display: block;
+  clip-path: polygon(0 0, 100% 0, 100% 28%, 0 28%, 0 41%, 100% 41%, 100% 62%, 0 62%, 0 70%, 100% 70%, 100% 100%, 0 100%);
+}
+.glitch .s1 { clip-path: inset(28% 0 59% 0); transform: translateX(16px); }
+.glitch .s1 .r { transform: translateX(-8px); }
+.glitch .s1 .c { transform: translateX(8px); }
+.glitch .s2 { clip-path: inset(62% 0 30% 0); transform: translateX(-9px); }
+.glitch .s2 .r { transform: translateX(-6px); }
+.glitch .s2 .c { transform: translateX(6px); }
+
+@keyframes glitch-settle {
+  0% { transform: translateX(28px); opacity: 0.4; }
+  30% { transform: translateX(-12px); opacity: 1; }
+  60% { transform: translateX(22px); }
+  100% { transform: translateX(16px); }
+}
+.glitch .s1 { animation: glitch-settle 700ms steps(5, end) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .glitch .s1,
+  .glitch .s2 { display: none; }
+  .glitch .base { clip-path: none; }
+  .glitch .r,
+  .glitch .c { transform: none; }
+}
