@@ -18,6 +18,7 @@ import { Sidebar } from "./Sidebar";
 import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions, Searching, Sources } from "./Sources";
 import type { Source } from "@/lib/chat/thread";
+import { RippleField } from "@/components/RippleField";
 
 type Live = MessageRow & { streaming?: boolean; queries?: string[]; searchingNow?: boolean };
 
@@ -321,15 +322,17 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
 
         <div
           ref={scroller}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
           onScroll={(e) => {
             const el = e.currentTarget;
             pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           }}
         >
-          <div className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
+          {/* An empty new chat gets the letterflip field behind it (desktop only), clear of the greeting. */}
+          {messages.length === 0 ? <RippleField clear="[data-ripple-clear] > *" /> : null}
+          <div className="relative mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
             {messages.length === 0 ? (
-              <div className="flex flex-col gap-2 pt-[12vh]">
+              <div data-ripple-clear className="flex flex-col gap-2 pt-[12vh]">
                 <h2 className="text-[34px] font-semibold tracking-tight">Hi, {shell.name}.</h2>
                 {noModels ? (
                   <p className="text-[17px] text-mute">
