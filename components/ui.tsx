@@ -1,5 +1,6 @@
 "use client";
 
+import { useFormStatus } from "react-dom";
 import { createContext, useContext, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
 
 /** Small building blocks for Depeche's forms: black and white, large touch targets. */
@@ -55,10 +56,15 @@ export function Button({
     secondary: "border border-line bg-bg text-fg",
     quiet: "text-mute underline underline-offset-4 h-auto",
   }[variant];
+  // Inside a form, show that the server is working until it answers.
+  const { pending } = useFormStatus();
+  const busy = pending && props.type !== "button";
   return (
     <button
+      aria-busy={busy || undefined}
+      data-busy={busy ? "" : undefined}
       {...props}
-      className={`inline-flex h-14 w-full items-center justify-center gap-3 rounded-2xl px-5 text-[17px] font-semibold transition-opacity disabled:opacity-50 ${look} ${className}`}
+      className={`press inline-flex h-14 w-full items-center justify-center gap-3 rounded-2xl px-5 text-[17px] font-semibold transition-opacity disabled:opacity-50 ${look} ${className}`}
     >
       {children}
     </button>

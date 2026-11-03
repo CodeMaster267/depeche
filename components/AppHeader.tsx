@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Wordmark } from "@/components/Wordmark";
+import { NavLink } from "@/components/Press";
 
 /** Top bar for signed-in pages. The wordmark stays clean here; the glitch is for the title card. */
 export function AppHeader({ isAdmin }: { isAdmin: boolean }) {
@@ -8,12 +9,12 @@ export function AppHeader({ isAdmin }: { isAdmin: boolean }) {
       className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-bg/90 px-5 py-3 backdrop-blur"
       style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
     >
-      <Link href="/" className="text-[20px]" aria-label="Depeche home">
+      <Link href="/" className="press text-[20px]" aria-label="Depeche home">
         <Wordmark />
       </Link>
-      <nav className="flex items-center gap-5 text-[15px] text-mute">
-        {isAdmin ? <Link href="/family">Family</Link> : null}
-        <Link href="/account">Account</Link>
+      <nav className="flex items-center gap-2 text-[15px]">
+        {isAdmin ? <NavLink href="/family">Family</NavLink> : null}
+        <NavLink href="/account">Account</NavLink>
       </nav>
     </header>
   );
