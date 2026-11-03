@@ -21,7 +21,7 @@ import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIc
 import { SearchSuggestions, Searching, Sources } from "./Sources";
 import type { Source } from "@/lib/chat/thread";
 
-type Live = MessageRow & { streaming?: boolean; queries?: string[]; searchingNow?: boolean };
+type Live = MessageRow & { streaming?: boolean; queries?: string[]; searchingNow?: boolean; searchingWhere?: "web" | "chat" };
 
 const SEARCH_PREF = "depeche:web-search";
 
@@ -192,7 +192,7 @@ export function ChatApp({
             | { type: "start"; chatId: string; userMessage: MessageRow }
             | { type: "text"; text: string }
             | { type: "notice"; text: string }
-            | { type: "searching"; query?: string }
+            | { type: "searching"; query?: string; where?: "chat" }
             | { type: "sources"; sources: Source[] }
             | { type: "done" | "error"; message: MessageRow | null; error?: string; compact?: boolean; summary?: SummaryRow };
           if (ev.type === "start") {
@@ -218,7 +218,14 @@ export function ChatApp({
             if (frame) cancelAnimationFrame(frame);
             flush();
             const q = ev.query;
-            patchReply((m) => ({ ...m, searchingNow: true, queries: q ? [...(m.queries ?? []), q] : (m.queries ?? []) }));
+            const where = ev.where === "chat" ? "chat" : "web";
+            patchReply((m) => ({
+              ...m,
+              searchingNow: true,
+              searchingWhere: where,
+              // A new kind of search starts its own list, so the line never names the wrong one.
+              queries: [...(m.searchingWhere === where ? (m.queries ?? []) : []), ...(q ? [q] : [])],
+            }));
           } else if (ev.type === "sources") {
             const sources = ev.sources;
             patchReply((m) => ({ ...m, content: { ...m.content, sources } }));
@@ -498,7 +505,7 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
   return (
     <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
       {text ? <Markdown text={text} streaming={m.streaming} /> : null}
-      {m.streaming && m.searchingNow ? <Searching queries={m.queries ?? []} /> : null}
+      {m.streaming && m.searchingNow ? <Searching queries={m.queries ?? []} where={m.searchingWhere} /> : null}
       {m.streaming && !m.searchingNow ? (
         <span aria-label="Writing" className="block h-6">
           <span className="stream-cursor" />

@@ -1,9 +1,10 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { GoogleGenAI } from "@google/genai";
+import { FunctionCallingConfigMode, GoogleGenAI, type Part } from "@google/genai";
 import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
 import { MAX_OUTPUT } from "@/lib/ai/budget";
+import { CHAT_SEARCH_TOOL, MAX_CHAT_SEARCHES, type ChatSearch } from "@/lib/chat/search";
 import { GROQ_VISION_MODEL, groqReply } from "@/lib/ai/groq";
 import type { Source } from "@/lib/chat/thread";
 import { webSource } from "@/lib/ai/sources";
@@ -24,8 +25,8 @@ export type StreamEvent =
   | { type: "notice"; text: string }
   /** Another model answered (the chosen one was busy). */
   | { type: "model"; id: string }
-  /** The model is searching the web, for this query when the provider says. */
-  | { type: "searching"; query?: string }
+  /** The model is searching the web (or, with where "chat", this chat), for this query when known. */
+  | { type: "searching"; query?: string; where?: "chat" }
   /** Pages the search found or the reply cited. */
   | { type: "sources"; sources: Source[] }
   /** How many searches were run in total (each has a fee). */
@@ -43,6 +44,11 @@ export type ReplyRequest = {
   search?: boolean;
   /** The longest reply allowed, so it fits what was reserved against the person's limit. */
   maxOutput?: number;
+  /**
+   * Lets the model look up the exact wording of earlier messages in this chat ("search this
+   * chat"), offered when some of them are summarised or left out. Not on Groq (test-only).
+   */
+  chatSearch?: ChatSearch;
 };
 
 /** A provider error, worded for the person chatting. */
@@ -98,6 +104,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
 
   let lastError: unknown;
   let search = !!req.search && canSearch(req.model);
+  let chatSearch = req.chatSearch;
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
     if (attempt.wait) await pause(attempt.wait, req.signal);
@@ -110,7 +117,9 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
         yield { type: "notice", text: `${req.model.name} ${why}, so ${attempt.model.name} answered instead.` };
       }
       // Telling a model it can search without giving it the tool makes some reply with nothing.
-      const r = { ...req, model: attempt.model, search, system: search ? `${req.system} ${SEARCH_HINT}` : req.system };
+      const lookup = attempt.model.provider === "groq" ? undefined : chatSearch;
+      const system = [req.system, search ? SEARCH_HINT : "", lookup ? CHAT_SEARCH_HINT : ""].filter(Boolean).join(" ");
+      const r = { ...req, model: attempt.model, search, chatSearch: lookup, system };
       const inner = fakeAi()
         ? fakeReply(r, attempt.model.id === req.model.id)
         : r.model.provider === "anthropic"
@@ -130,6 +139,14 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       lastError = e;
       // Retrying after part of a reply was shown would repeat it.
       if (wrote) break;
+      // If a provider won't take the chat-search tool (some can't mix it with their own web
+      // search), answer without it rather than failing or dropping web search.
+      if (chatSearch && attempt.model.provider !== "groq" && status(e) === 400) {
+        chatSearch = undefined;
+        console.error("[chat] chat search tool refused, answering without it", detail(e));
+        i--;
+        continue;
+      }
       // Some keys or models can't search (free tiers, older models): answer without it instead.
       const groqLimit = attempt.model.provider === "groq" && isRateLimited(e);
       if (search && !isBusy(e) && !groqLimit && status(e) !== 401) {
@@ -151,6 +168,29 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
     }
   }
   throw new ProviderError(describe(req.model.provider, lastError));
+}
+
+const CHAT_SEARCH_HINT =
+  "Older messages of this conversation may be summarised or not shown to you. When you need the exact wording of something said earlier, look it up with the search_this_chat tool instead of guessing.";
+
+/** What a lookup the model asked for beyond the limit gets back. */
+const LOOKUPS_USED = "No more searches of this chat are possible in this reply. Answer from what you have.";
+
+/** Runs one lookup the model asked for, and says so to the person chatting. */
+async function* lookUp(chatSearch: ChatSearch, input: unknown, done: number): AsyncGenerator<StreamEvent, string> {
+  if (done >= MAX_CHAT_SEARCHES) return LOOKUPS_USED;
+  let query = "";
+  if (input && typeof input === "object") query = String((input as { query?: unknown }).query ?? "");
+  else if (typeof input === "string") {
+    try {
+      query = String((JSON.parse(input) as { query?: unknown }).query ?? "");
+    } catch {
+      query = "";
+    }
+  }
+  query = query.replace(/\s+/g, " ").trim().slice(0, 200);
+  yield { type: "searching", where: "chat", ...(query ? { query } : {}) };
+  return chatSearch(query);
 }
 
 const SEARCH_HINT =
@@ -175,7 +215,7 @@ const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-
 /** Long searches can pause a Claude turn; it is continued this many times at most. */
 const MAX_CONTINUES = 3;
 
-async function* anthropicReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* anthropicReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new Anthropic({ apiKey, maxRetries: 1 });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
@@ -194,20 +234,36 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
         }
       : { role: t.role, content: t.text || "(no text)" },
   );
+  const tools = [
+    ...(search ? [{ type: "web_search_20250305" as const, name: "web_search" as const, max_uses: MAX_SEARCHES }] : []),
+    ...(chatSearch
+      ? [{ name: CHAT_SEARCH_TOOL.name, description: CHAT_SEARCH_TOOL.description, input_schema: CHAT_SEARCH_TOOL.parameters }]
+      : []),
+  ];
   let input = 0;
   let output = 0;
   let searches = 0;
+  let lookups = 0;
+  let wrote = false;
   const cited: Source[] = [];
   const found: Source[] = [];
-  for (let round = 0; round <= MAX_CONTINUES; round++) {
+  for (let round = 0, continues = 0; ; round++) {
+    // Every round counts toward the same reply length, so the whole reply stays within the hold.
+    const left = maxOutput - output;
+    if (round > 0 && left < 1) {
+      yield { type: "notice", text: "The reply hit its length limit." };
+      break;
+    }
     const stream = client.beta.messages.stream(
       {
         model: model.id,
-        max_tokens: maxOutput,
+        max_tokens: left,
         system,
         messages: messages as never,
         output_config: { effort: "medium" },
-        ...(search ? { tools: [{ type: "web_search_20250305" as const, name: "web_search" as const, max_uses: MAX_SEARCHES }] } : {}),
+        ...(tools.length ? { tools: tools as never } : {}),
+        // Once the lookups are used up the tool stays defined (earlier rounds used it) but can't be called.
+        ...(chatSearch && lookups >= MAX_CHAT_SEARCHES ? { tool_choice: { type: "none" as const } } : {}),
         ...(fallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as never } : {}),
       },
       { signal },
@@ -215,6 +271,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
     // A search's query arrives in pieces; the cited pages of a text block arrive alongside its text.
     const queryJson = new Map<number, string>();
     const blockCites = new Map<number, Source[]>();
+    let roundText = false;
     for await (const ev of stream) {
       if (ev.type === "content_block_start") {
         const b = ev.content_block;
@@ -228,8 +285,12 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
           }
         }
       } else if (ev.type === "content_block_delta") {
-        if (ev.delta.type === "text_delta") yield { type: "text", text: ev.delta.text };
-        else if (ev.delta.type === "input_json_delta" && queryJson.has(ev.index)) {
+        if (ev.delta.type === "text_delta") {
+          // Text after a lookup starts a new paragraph rather than running on.
+          if (!roundText && wrote) yield { type: "text", text: "\n\n" };
+          roundText = wrote = true;
+          yield { type: "text", text: ev.delta.text };
+        } else if (ev.delta.type === "input_json_delta" && queryJson.has(ev.index)) {
           queryJson.set(ev.index, queryJson.get(ev.index) + ev.delta.partial_json);
         } else if (ev.delta.type === "citations_delta" && ev.delta.citation.type === "web_search_result_location") {
           const src = webSource(ev.delta.citation.url, ev.delta.citation.title);
@@ -265,9 +326,25 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
     input += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
     output += u.output_tokens ?? 0;
     searches += u.server_tool_use?.web_search_requests ?? 0;
-    if (final.stop_reason === "pause_turn" && round < MAX_CONTINUES) {
+    if (final.stop_reason === "pause_turn" && continues < MAX_CONTINUES) {
       // The search ran long: hand Claude back what it has so far and let it carry on.
+      continues++;
       messages.push({ role: "assistant", content: final.content });
+      continue;
+    }
+    const calls = final.content.filter(
+      (b): b is Extract<typeof b, { type: "tool_use" }> => b.type === "tool_use" && b.name === CHAT_SEARCH_TOOL.name,
+    );
+    if (final.stop_reason === "tool_use" && chatSearch && calls.length) {
+      // Claude asked to look back through the chat: run each lookup and hand back the results.
+      messages.push({ role: "assistant", content: final.content });
+      const results: unknown[] = [];
+      for (const c of calls) {
+        const content = yield* lookUp(chatSearch, c.input, lookups);
+        lookups++;
+        results.push({ type: "tool_result", tool_use_id: c.id, content });
+      }
+      messages.push({ role: "user", content: results });
       continue;
     }
     if (final.stop_reason === "refusal") yield { type: "notice", text: "The model declined to answer this." };
@@ -283,124 +360,210 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
   yield { type: "usage", input, output };
 }
 
-async function* openaiReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* openaiReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new OpenAI({ apiKey, maxRetries: 1 });
-  const stream = await client.responses.create(
-    {
-      model: model.id,
-      instructions: system,
-      input: turns.map((t) =>
-        t.role === "user" && t.files?.length
-          ? {
-              role: "user" as const,
-              content: [
-                ...t.files.map((f) =>
-                  f.mime === "application/pdf"
-                    ? { type: "input_file" as const, filename: f.name, file_data: `data:application/pdf;base64,${f.data}` }
-                    : { type: "input_image" as const, image_url: `data:${f.mime};base64,${f.data}`, detail: "auto" as const },
-                ),
-                ...(t.text ? [{ type: "input_text" as const, text: t.text }] : []),
-              ],
-            }
-          : { role: t.role, content: t.text },
-      ),
-      max_output_tokens: maxOutput,
-      store: false,
-      stream: true,
-      ...(search ? { tools: [{ type: "web_search" as const }], max_tool_calls: MAX_SEARCHES } : {}),
-    },
-    { signal },
+  const input: unknown[] = turns.map((t) =>
+    t.role === "user" && t.files?.length
+      ? {
+          role: "user" as const,
+          content: [
+            ...t.files.map((f) =>
+              f.mime === "application/pdf"
+                ? { type: "input_file" as const, filename: f.name, file_data: `data:application/pdf;base64,${f.data}` }
+                : { type: "input_image" as const, image_url: `data:${f.mime};base64,${f.data}`, detail: "auto" as const },
+            ),
+            ...(t.text ? [{ type: "input_text" as const, text: t.text }] : []),
+          ],
+        }
+      : { role: t.role, content: t.text },
   );
+  const tools = [
+    ...(search ? [{ type: "web_search" as const }] : []),
+    ...(chatSearch
+      ? [{ type: "function" as const, name: CHAT_SEARCH_TOOL.name, description: CHAT_SEARCH_TOOL.description, parameters: CHAT_SEARCH_TOOL.parameters, strict: true }]
+      : []),
+  ];
   const sources: Source[] = [];
   let searches = 0;
-  for await (const ev of stream) {
-    if (ev.type === "response.output_text.delta") yield { type: "text", text: ev.delta };
-    else if (ev.type === "response.output_item.added" && ev.item.type === "web_search_call") yield { type: "searching" };
-    else if (ev.type === "response.output_item.done" && ev.item.type === "web_search_call") {
-      const action = ev.item.action as { type?: string; query?: string; queries?: string[] } | undefined;
-      if (action?.type === "search") {
-        searches++;
-        const query = action.query ?? action.queries?.[0];
-        if (query) yield { type: "searching", query: query.slice(0, 200) };
+  let lookups = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let wrote = false;
+  for (let round = 0; ; round++) {
+    // Every round counts toward the same reply length, so the whole reply stays within the hold.
+    const left = maxOutput - outputTokens;
+    if (round > 0 && left < 16) {
+      yield { type: "notice", text: "The reply was cut short." };
+      break;
+    }
+    const stream = await client.responses.create(
+      {
+        model: model.id,
+        instructions: system,
+        input: input as never,
+        max_output_tokens: Math.max(16, left),
+        store: false,
+        stream: true,
+        ...(tools.length ? { tools: tools as never } : {}),
+        ...(search ? { max_tool_calls: MAX_SEARCHES } : {}),
+        // Nothing is stored at OpenAI, so the model's reasoning comes back encrypted to be handed
+        // back after a lookup.
+        ...(chatSearch
+          ? { include: ["reasoning.encrypted_content" as const], tool_choice: lookups >= MAX_CHAT_SEARCHES ? ("none" as const) : ("auto" as const) }
+          : {}),
+      },
+      { signal },
+    );
+    let roundText = false;
+    let roundSearches = 0;
+    const calls: { call_id: string; arguments: string }[] = [];
+    let produced: unknown[] = [];
+    for await (const ev of stream) {
+      if (ev.type === "response.output_text.delta") {
+        if (!roundText && wrote) yield { type: "text", text: "\n\n" };
+        roundText = wrote = true;
+        yield { type: "text", text: ev.delta };
+      } else if (ev.type === "response.output_item.added" && ev.item.type === "web_search_call") yield { type: "searching" };
+      else if (ev.type === "response.output_item.done" && ev.item.type === "web_search_call") {
+        const action = ev.item.action as { type?: string; query?: string; queries?: string[] } | undefined;
+        if (action?.type === "search") {
+          roundSearches++;
+          const query = action.query ?? action.queries?.[0];
+          if (query) yield { type: "searching", query: query.slice(0, 200) };
+        }
+      } else if (ev.type === "response.output_item.done" && ev.item.type === "function_call" && ev.item.name === CHAT_SEARCH_TOOL.name) {
+        calls.push({ call_id: ev.item.call_id, arguments: ev.item.arguments });
+      } else if (ev.type === "response.output_text.annotation.added") {
+        const a = ev.annotation as { type?: string; url?: string; title?: string };
+        const src = a?.type === "url_citation" ? webSource(a.url, a.title) : null;
+        if (src && !sources.some((x) => x.url === src.url)) sources.push(src);
+      } else if (ev.type === "response.completed" || ev.type === "response.incomplete") {
+        const u = ev.response.usage;
+        // Searches that only opened or scanned a page aren't billed as searches.
+        const billed = (ev.response.output ?? []).filter(
+          (o) => o.type === "web_search_call" && (o.action as { type?: string } | undefined)?.type === "search",
+        ).length;
+        searches += Math.max(roundSearches, billed);
+        inputTokens += u?.input_tokens ?? 0;
+        outputTokens += u?.output_tokens ?? 0;
+        produced = ev.response.output ?? [];
+        if (ev.type === "response.incomplete") yield { type: "notice", text: "The reply was cut short." };
+      } else if (ev.type === "response.failed") {
+        throw new Error(ev.response.error?.message ?? "failed");
+      } else if (ev.type === "error") {
+        throw new Error(ev.message);
       }
-    } else if (ev.type === "response.output_text.annotation.added") {
-      const a = ev.annotation as { type?: string; url?: string; title?: string };
-      const src = a?.type === "url_citation" ? webSource(a.url, a.title) : null;
-      if (src && !sources.some((x) => x.url === src.url)) sources.push(src);
-    } else if (ev.type === "response.completed" || ev.type === "response.incomplete") {
-      const u = ev.response.usage;
-      // Searches that only opened or scanned a page aren't billed as searches.
-      const calls = (ev.response.output ?? []).filter(
-        (o) => o.type === "web_search_call" && (o.action as { type?: string } | undefined)?.type === "search",
-      ).length;
-      searches = Math.max(searches, calls);
-      if (sources.length) yield { type: "sources", sources };
-      if (searches) yield { type: "searches", count: searches };
-      yield { type: "usage", input: u?.input_tokens ?? 0, output: u?.output_tokens ?? 0 };
-      if (ev.type === "response.incomplete") yield { type: "notice", text: "The reply was cut short." };
-    } else if (ev.type === "response.failed") {
-      throw new Error(ev.response.error?.message ?? "failed");
-    } else if (ev.type === "error") {
-      throw new Error(ev.message);
+    }
+    if (!chatSearch || !calls.length) break;
+    // The model asked to look back through the chat: give it back everything it produced (its
+    // reasoning included) followed by the results, and let it carry on.
+    input.push(...produced);
+    for (const c of calls) {
+      const output = yield* lookUp(chatSearch, c.arguments, lookups);
+      lookups++;
+      input.push({ type: "function_call_output", call_id: c.call_id, output });
     }
   }
+  if (sources.length) yield { type: "sources", sources };
+  if (searches) yield { type: "searches", count: searches };
+  yield { type: "usage", input: inputTokens, output: outputTokens };
 }
 
-async function* googleReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* googleReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const ai = new GoogleGenAI({ apiKey });
-  const stream = await ai.models.generateContentStream({
-    model: model.id,
-    contents: turns.map((t) => ({
-      role: t.role === "assistant" ? "model" : "user",
-      parts: [
-        ...(t.files ?? []).map((f) => ({ inlineData: { mimeType: f.mime, data: f.data } })),
-        ...(t.text || !t.files?.length ? [{ text: t.text }] : []),
-      ],
-    })),
-    config: {
-      systemInstruction: system,
-      maxOutputTokens: maxOutput,
-      abortSignal: signal,
-      ...(search ? { tools: [{ googleSearch: {} }] } : {}),
-    },
-  });
+  type Content = { role: "user" | "model"; parts: Part[] };
+  const contents: Content[] = turns.map((t) => ({
+    role: t.role === "assistant" ? "model" : "user",
+    parts: [
+      ...(t.files ?? []).map((f) => ({ inlineData: { mimeType: f.mime, data: f.data } })),
+      ...(t.text || !t.files?.length ? [{ text: t.text }] : []),
+    ],
+  }));
+  const tools = [
+    ...(search ? [{ googleSearch: {} }] : []),
+    ...(chatSearch
+      ? [{ functionDeclarations: [{ name: CHAT_SEARCH_TOOL.name, description: CHAT_SEARCH_TOOL.description, parametersJsonSchema: CHAT_SEARCH_TOOL.parameters }] }]
+      : []),
+  ];
   let input = 0;
   let output = 0;
+  let lookups = 0;
   const sources: Source[] = [];
   const queries = new Set<string>();
   let suggestions = "";
   let wroteText = false;
   let finish = "";
-  for await (const chunk of stream) {
-    const candidate = chunk.candidates?.[0];
-    const text = candidate?.content?.parts
-      ?.filter((p) => p.text && !p.thought)
-      .map((p) => p.text)
-      .join("");
-    if (text) {
-      wroteText = true;
-      yield { type: "text", text };
+  for (let round = 0; ; round++) {
+    // Every round counts toward the same reply length, so the whole reply stays within the hold.
+    const left = maxOutput - output;
+    if (round > 0 && left < 1) {
+      yield { type: "notice", text: "The reply hit its length limit." };
+      break;
     }
-    if (candidate?.finishReason) finish = String(candidate.finishReason);
-    const g = candidate?.groundingMetadata;
-    if (g) {
-      for (const q of g.webSearchQueries ?? []) {
-        if (q && !queries.has(q)) {
-          queries.add(q);
-          yield { type: "searching", query: q.slice(0, 200) };
+    const stream = await ai.models.generateContentStream({
+      model: model.id,
+      contents,
+      config: {
+        systemInstruction: system,
+        maxOutputTokens: left,
+        abortSignal: signal,
+        ...(tools.length ? { tools } : {}),
+        ...(chatSearch && lookups >= MAX_CHAT_SEARCHES
+          ? { toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.NONE } } }
+          : {}),
+      },
+    });
+    // Everything the model sent, kept as it came (thought signatures included) to hand back after a lookup.
+    const parts: Part[] = [];
+    let roundText = false;
+    let roundInput = 0;
+    let roundOutput = 0;
+    for await (const chunk of stream) {
+      const candidate = chunk.candidates?.[0];
+      parts.push(...(candidate?.content?.parts ?? []));
+      const text = candidate?.content?.parts
+        ?.filter((p) => p.text && !p.thought)
+        .map((p) => p.text)
+        .join("");
+      if (text) {
+        if (!roundText && wroteText) yield { type: "text", text: "\n\n" };
+        roundText = wroteText = true;
+        yield { type: "text", text };
+      }
+      if (candidate?.finishReason) finish = String(candidate.finishReason);
+      const g = candidate?.groundingMetadata;
+      if (g) {
+        for (const q of g.webSearchQueries ?? []) {
+          if (q && !queries.has(q)) {
+            queries.add(q);
+            yield { type: "searching", query: q.slice(0, 200) };
+          }
         }
+        for (const c of g.groundingChunks ?? []) {
+          const src = webSource(c.web?.uri, c.web?.title, c.web?.domain ?? c.web?.title);
+          if (src && !sources.some((x) => x.url === src.url)) sources.push(src);
+        }
+        if (g.searchEntryPoint?.renderedContent) suggestions = g.searchEntryPoint.renderedContent;
       }
-      for (const c of g.groundingChunks ?? []) {
-        const src = webSource(c.web?.uri, c.web?.title, c.web?.domain ?? c.web?.title);
-        if (src && !sources.some((x) => x.url === src.url)) sources.push(src);
+      const u = chunk.usageMetadata;
+      if (u) {
+        roundInput = u.promptTokenCount ?? roundInput;
+        roundOutput = (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0) || roundOutput;
       }
-      if (g.searchEntryPoint?.renderedContent) suggestions = g.searchEntryPoint.renderedContent;
     }
-    const u = chunk.usageMetadata;
-    if (u) {
-      input = u.promptTokenCount ?? input;
-      output = (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0) || output;
+    input += roundInput;
+    output += roundOutput;
+    const calls = parts.filter((p) => p.functionCall?.name === CHAT_SEARCH_TOOL.name);
+    if (!chatSearch || !calls.length) break;
+    // Gemini asked to look back through the chat: hand back its turn and the results.
+    contents.push({ role: "model", parts });
+    const answers: Part[] = [];
+    for (const c of calls) {
+      const result = yield* lookUp(chatSearch, c.functionCall?.args, lookups);
+      lookups++;
+      answers.push({ functionResponse: { id: c.functionCall?.id, name: CHAT_SEARCH_TOOL.name, response: { output: result } } });
     }
+    contents.push({ role: "user", parts: answers });
   }
   // A reply with no text at all says why, rather than leaving an empty space.
   if (!wroteText) yield { type: "notice", text: `The model sent back an empty reply${finish && finish !== "STOP" ? ` (${finish.toLowerCase().replace(/_/g, " ")})` : ""}. Try again.` };
@@ -576,7 +739,7 @@ This is well documented[^1].
 [^1]: [Quadratic formula](https://en.wikipedia.org/wiki/Quadratic_formula), Wikipedia.
 `.replaceAll("\\`", "`");
 
-async function* fakeReply({ turns, signal, search, model, system }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
+async function* fakeReply({ turns, signal, search, model, system, chatSearch }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const last = turns.at(-1);
   const q = last?.text.slice(0, 80) ?? "";
   // Asked to summarise a chat (auto-compaction): a short summary naming the first message, and facts.
@@ -586,6 +749,23 @@ async function* fakeReply({ turns, signal, search, model, system }: ReplyRequest
     await new Promise((r) => setTimeout(r, q.includes("slowly") ? 1500 : 30));
     yield { type: "text", text: reply };
     yield { type: "usage", input: Math.ceil((last?.text.length ?? 0) / 4), output: 60 };
+    return;
+  }
+  // "what did I say about X" looks X up in this chat, to test the search-this-chat tool.
+  const recall = chatSearch ? /what did i say about (.+?)\??$/i.exec(last?.text ?? "") : null;
+  if (chatSearch && recall) {
+    const result = yield* lookUp(chatSearch, { query: recall[1] }, 0);
+    await new Promise((r) => setTimeout(r, q.includes("slowly") ? 1500 : 50));
+    const quoted = /<message number="(\d+)"[^>]*>\n([\s\S]*?)\n<\/message>/.exec(result);
+    const text = quoted
+      ? `Earlier in this chat (message ${quoted[1]}) you said:\n\n> ${quoted[2].split("\n")[0]}`
+      : "I couldn't find that earlier in this chat.";
+    for (let i = 0; i < text.length; i += 24) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      await new Promise((r) => setTimeout(r, 8));
+      yield { type: "text", text: text.slice(i, i + 24) };
+    }
+    yield { type: "usage", input: 1500, output: 60 };
     return;
   }
   // Like Gemini, told it can search but given no search tool, it answers with nothing.
