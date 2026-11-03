@@ -1,21 +1,12 @@
 /**
- * Shared pieces of the daily bug fixer (.github/workflows/bug-fixer.yml). Runs with Node's built-in
- * TypeScript support and no npm packages, so the jobs that hold secrets never install or run
- * anything but this repository's own code from main.
+ * Shared pieces of the bug-report scripts (.github/workflows/bug-reports.yml and the "Bug-fix
+ * rules" check in ci.yml). Runs with Node's built-in TypeScript support and no npm packages, so
+ * jobs that hold secrets run nothing but this repository's own code from main.
  */
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
-export const TRIAGE_MODEL = "claude-sonnet-5-5";
-export const FIX_MODEL = "claude-opus-5-5";
-/** Hard spending ceiling for one fix attempt, enforced by Claude Code itself. */
-export const FIX_BUDGET_USD = 3;
-/** Most fixes attempted per daily run, to keep cost and GitHub Actions minutes small. */
-export const FIXES_PER_RUN = 2;
-/** Most new reports read per daily run. */
-export const TRIAGE_PER_RUN = 20;
 
 export function need(name: string): string {
   const v = process.env[name]?.trim();
@@ -46,40 +37,6 @@ function psql(input: string, vars: Record<string, string>): string {
 /** True when this file is the script node was asked to run (not just imported). */
 export function isMain(moduleUrl: string): boolean {
   return Boolean(process.argv[1]) && fileURLToPath(moduleUrl) === resolve(process.argv[1]);
-}
-
-type Tool = { name: string; description: string; input_schema: Record<string, unknown> };
-
-/** One call to the Anthropic Messages API that must answer by filling in `tool`. */
-export async function askWithTool<T>(opts: {
-  model: string;
-  system: string;
-  user: string;
-  tool: Tool;
-  maxTokens?: number;
-  fetchImpl?: typeof fetch;
-}): Promise<T> {
-  const res = await (opts.fetchImpl ?? fetch)("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": need("ANTHROPIC_API_KEY"),
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: opts.model,
-      max_tokens: opts.maxTokens ?? 1500,
-      system: opts.system,
-      messages: [{ role: "user", content: opts.user }],
-      tools: [opts.tool],
-      tool_choice: { type: "tool", name: opts.tool.name },
-    }),
-  });
-  if (!res.ok) throw new Error(`Anthropic API ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const body = (await res.json()) as { content: { type: string; name?: string; input?: unknown }[] };
-  const call = body.content.find((c) => c.type === "tool_use" && c.name === opts.tool.name);
-  if (!call) throw new Error("The model did not answer with the expected tool");
-  return call.input as T;
 }
 
 /** Writes a GitHub Actions step output. Values are single-line by construction. */

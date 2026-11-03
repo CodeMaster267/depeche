@@ -189,3 +189,29 @@ describe("the daily pipeline", () => {
     ).rejects.toThrow(/check/);
   });
 });
+
+describe("mirroring to GitHub issues", () => {
+  it("records the issue, never claims that report again, and copies its status back", async () => {
+    const [{ id: rid }] = await submit(P.bea, "The chat list jumps when a reply finishes");
+    const [claimed] = await asServer<{ id: string }>("select id from public.bug_reports_claim_for_triage(50)");
+    expect(claimed.id).toBe(rid);
+    await asServer("select public.bug_report_mirrored($1, 'https://github.com/CodeMaster267/depeche/issues/40')", [rid]);
+    // Even after the six-hour retry window, a mirrored report stays with its issue.
+    await asServer("update bug_reports set claimed_at = now() - interval '7 hours' where id = $1", [rid]);
+    expect(await asServer("select * from public.bug_reports_claim_for_triage(50)")).toEqual([]);
+
+    await asServer("select public.bug_report_set_status($1, 'fixing')", [rid]);
+    expect(await rows(db, P.bea, "select status from bug_reports where id = $1", [rid])).toEqual([{ status: "fixing" }]);
+    await expect(asServer("select public.bug_report_set_status($1, 'new')", [rid])).rejects.toThrow(/cannot go back/);
+    await expect(asServer("select public.bug_report_set_status($1, 'merged_by_magic')", [rid])).rejects.toThrow(/check/);
+    await expect(
+      asServer("select public.bug_report_mirrored($1, 'https://evil.example/issues/1')", [rid]),
+    ).rejects.toThrow(/check/);
+  });
+
+  it("cannot be driven from the browser", async () => {
+    await expect(rows(db, P.bea, `select public.bug_report_set_status('${id(5)}', 'fixed')`)).rejects.toThrow(/permission denied/);
+    await expect(rows(db, P.bea, `select public.bug_report_mirrored('${id(5)}', 'https://github.com/x')`)).rejects.toThrow(/permission denied/);
+    await expect(rows(db, P.bea, "select issue_url from bug_reports")).rejects.toThrow(/permission denied/);
+  });
+});

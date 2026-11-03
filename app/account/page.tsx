@@ -4,12 +4,18 @@ import { AppHeader, Page, Section } from "@/components/AppHeader";
 import { Button } from "@/components/ui";
 import { requireMe } from "@/lib/auth/session";
 import { signOut } from "@/app/sign-in/actions";
-import { PasswordForm, ProfileForm } from "./forms";
+import { supabaseServer } from "@/lib/supabase/server";
+import { KeepChatsToggle, PasswordForm, ProfileForm } from "./forms";
 
 export const metadata: Metadata = { title: "Account · Depeche" };
 
 export default async function Account() {
   const me = await requireMe();
+  const { data: prefs } = await (await supabaseServer())
+    .from("profiles")
+    .select("keep_chats")
+    .eq("id", me.userId)
+    .maybeSingle<{ keep_chats: boolean }>();
   return (
     <>
       <AppHeader isAdmin={me.profile.role === "admin"} />
@@ -33,6 +39,9 @@ export default async function Account() {
             Set one to sign in with your username or email and a password. Forgot it? Your family admin can reset it.
           </p>
           <PasswordForm />
+        </Section>
+        <Section title="Old chats">
+          <KeepChatsToggle keep={prefs?.keep_chats ?? false} />
         </Section>
         <Section title="Something broken?">
           <Link href="/report?from=/account" className="press text-[15px] underline underline-offset-4">

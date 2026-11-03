@@ -1,8 +1,9 @@
 /**
  * What a proposed fix is allowed to change, and whether it may merge itself.
  *
- * This is plain code, not a model, so nothing written in a bug report can argue with it. It runs
- * on a clean copy of main, after the fixer has finished and before anything is pushed.
+ * This is plain code, not a model, so nothing written in a bug report can argue with it. It runs as
+ * the "Bug-fix rules" check on every pull request that fixes a bug report (scripts/bugs/check-pr.ts),
+ * from main's copy, and passes only when the fix may merge without Hasan.
  *
  *  - Reports from Hasan's own account (`trusted`): the fix may touch most of the app. It merges
  *    itself once the Chrome and Safari tests pass, unless it touches something sensitive (sign-in,
@@ -23,7 +24,7 @@ export type Decision = {
   reasons: string[];
 };
 
-/** Never changed by the fixer, whoever reported the bug. */
+/** Never changed by a bug fix, whoever reported the bug. */
 export const ALWAYS_BLOCKED = [
   ".github/",
   ".git/",

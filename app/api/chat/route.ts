@@ -4,7 +4,8 @@ import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
 import { estimateCost, findModel, searchCost } from "@/lib/ai/models";
-import { ProviderError, streamReply, type Turn } from "@/lib/ai/providers";
+import { ProviderError, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
+import { MAX_FILES_PER_MESSAGE, UPLOAD_BUCKET, isFileRef, type FileRef } from "@/lib/chat/files";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
@@ -14,6 +15,8 @@ type Body = {
   chatId?: string | null;
   clientRequestId?: string;
   text?: string;
+  /** Files already uploaded to the person's own folder. */
+  files?: unknown[];
   model?: string;
   /** Answer this existing message again instead of sending a new one. */
   regenerate?: string;
@@ -28,6 +31,8 @@ const fail = (status: number, error: string) => NextResponse.json({ error }, { s
 
 /** About 150k tokens of history; older turns beyond that are left out of what the model sees. */
 const HISTORY_CHARS = 600_000;
+/** Images and PDFs sent with one request, newest first; older ones are named but not re-sent. */
+const FILE_BYTES_BUDGET = 30 * 1024 * 1024;
 
 /**
  * Sends a message and streams the reply as newline-separated JSON events:
@@ -46,7 +51,11 @@ export async function POST(req: NextRequest) {
   const model = findModel(body.model);
   if (!model) return fail(400, "Pick a model first.");
   const text = typeof body.text === "string" ? body.text.trim() : "";
-  if (!body.regenerate && !text) return fail(400, "Type a message first.");
+  const files = Array.isArray(body.files) ? body.files : [];
+  if (files.length > MAX_FILES_PER_MESSAGE) return fail(400, `Attach up to ${MAX_FILES_PER_MESSAGE} files at a time.`);
+  if (!files.every((f) => isFileRef(f, me.userId))) return fail(400, "One of those files can't be sent. Attach it again.");
+  const fileRefs = files as FileRef[];
+  if (!body.regenerate && !text && !fileRefs.length) return fail(400, "Type a message first.");
   if (text.length > MAX_MESSAGE_CHARS) return fail(400, "That message is too long. Try splitting it up.");
   if (!body.regenerate && !UUID.test(body.clientRequestId ?? "")) return fail(400, "Something went wrong. Try again.");
   if (body.chatId && !UUID.test(body.chatId)) return fail(404, "That chat doesn't exist.");
@@ -86,7 +95,7 @@ export async function POST(req: NextRequest) {
     if (body.regenerate) return fail(404, "That chat doesn't exist.");
     const { data: chat, error } = await db
       .from("chats")
-      .insert({ owner_id: me.userId, title: titleFrom(text), model: model.id })
+      .insert({ owner_id: me.userId, title: titleFrom(text || fileRefs[0]?.name || ""), model: model.id })
       .select("id")
       .single<{ id: string }>();
     if (error || !chat) return fail(500, "Couldn't start a chat. Try again.");
@@ -116,7 +125,7 @@ export async function POST(req: NextRequest) {
         owner_id: me.userId,
         parent_id: parent?.id ?? null,
         role: "user",
-        content: { text },
+        content: fileRefs.length ? { text, files: fileRefs.map(({ path, name, mime, size }) => ({ path, name, mime, size })) } : { text },
         client_request_id: body.clientRequestId,
       })
       .select("id, chat_id, parent_id, role, content, status, model, created_at")
@@ -136,25 +145,43 @@ export async function POST(req: NextRequest) {
   for (let m: MessageRow | undefined = question; m; m = m.parent_id ? byId.get(m.parent_id) : undefined) path.unshift(m);
   const turns: Turn[] = [];
   let budget = HISTORY_CHARS;
+  let fileBudget = FILE_BYTES_BUDGET;
+  const storage = supabaseAdmin().storage.from(UPLOAD_BUCKET);
   for (const m of [...path].reverse()) {
-    const t = m.content.text ?? "";
-    if (!t || m.role === "system" || (m.role === "assistant" && m.status === "failed")) continue;
+    let t = m.content.text ?? "";
+    const attached: TurnFile[] = [];
+    if (m.role === "user") {
+      for (const f of m.content.files ?? []) {
+        // Only ever the sender's own folder, even if a stored message says otherwise.
+        if (!isFileRef(f, me.userId)) continue;
+        const fits = f.mime === "text/plain" ? budget - f.size > 0 : fileBudget - f.size > 0;
+        const { data: blob } = fits ? await storage.download(f.path) : { data: null };
+        if (!blob) {
+          t += `\n\n[Attached file "${f.name}" is ${fits ? "no longer available: files are removed after 3 days without use" : "too large to send again"}.]`;
+        } else if (f.mime === "text/plain") {
+          const body = (await blob.text()).slice(0, 200_000);
+          budget -= body.length;
+          t += `\n\n<file name="${f.name.replace(/"/g, "'")}">\n${body}\n</file>`;
+        } else {
+          fileBudget -= f.size;
+          attached.push({ name: f.name, mime: f.mime, data: Buffer.from(await blob.arrayBuffer()).toString("base64") });
+        }
+      }
+    }
+    t = t.trim();
+    if ((!t && !attached.length) || m.role === "system" || (m.role === "assistant" && m.status === "failed")) continue;
     if (budget - t.length < 0 && turns.length) break;
     budget -= t.length;
     // Providers expect turns to alternate, so two in a row from one side are joined.
-    if (turns[0]?.role === m.role) turns[0] = { ...turns[0], text: `${t}\n\n${turns[0].text}` };
-    else turns.unshift({ role: m.role as Turn["role"], text: t });
+    if (turns[0]?.role === m.role) {
+      turns[0] = { ...turns[0], text: [t, turns[0].text].filter(Boolean).join("\n\n"), files: [...attached, ...(turns[0].files ?? [])] };
+    } else turns.unshift({ role: m.role as Turn["role"], text: t, files: attached.length ? attached : undefined });
   }
   while (turns[0]?.role === "assistant") turns.shift();
 
   const system = [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${me.profile.display_name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
-    ...(body.search === true
-      ? [
-          "You can search the web. Search when the question needs current, local or specific facts you might not know; otherwise answer directly without searching.",
-        ]
-      : []),
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
     body.voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."

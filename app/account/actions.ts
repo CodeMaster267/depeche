@@ -37,3 +37,11 @@ export async function changePassword(_: AccountState, form: FormData): Promise<A
   if (error) return { error: error.code === "same_password" ? "That's already your password." : "Couldn't change your password. Try a different one." };
   return { ok: "Password changed." };
 }
+
+/** Whether your chats are deleted after a month without use. Yours alone to change. */
+export async function setKeepChats(keep: boolean): Promise<void> {
+  const me = await requireMe();
+  const supabase = await supabaseServer();
+  await supabase.from("profiles").update({ keep_chats: keep }).eq("id", me.userId);
+  revalidatePath("/account");
+}

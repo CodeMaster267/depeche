@@ -1,0 +1,51 @@
+name: Mirror bug reports
+
+# Once a day, each new report from the app's Report a bug page becomes a GitHub issue, and what has
+# happened on earlier reports' issues is copied back so the people who sent them can see it.
+# A scheduled task in the Claude project reads these issues afterwards, sorts them, and starts a
+# thread to fix the real ones; the "Bug-fix rules" check in ci.yml decides what may merge.
+# No AI here and no API key. Needs SUPABASE_DB_URL (already set for "Update the live database").
+
+on:
+  schedule:
+    - cron: "17 4 * * *" # 04:17 UTC every day, before the Claude scheduled task
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: bug-reports
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check the database secret is set
+        id: ready
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::notice::SUPABASE_DB_URL is not set, so no reports were read."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.ready.outputs.go == 'true'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - if: steps.ready.outputs.go == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mirror new reports and copy statuses back
+        if: steps.ready.outputs.go == 'true'
+        run: node scripts/bugs/sync.ts

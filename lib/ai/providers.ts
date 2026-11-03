@@ -11,7 +11,10 @@ import { webSource } from "@/lib/ai/sources";
  * provider-neutral shape and turns them into each provider's format here, so a chat can switch
  * models halfway through.
  */
-export type Turn = { role: "user" | "assistant"; text: string };
+export type Turn = { role: "user" | "assistant"; text: string; files?: TurnFile[] };
+
+/** An image or PDF sent with a turn, base64 encoded. Text files are put into the turn's text. */
+export type TurnFile = { name: string; mime: string; data: string };
 
 export type StreamEvent =
   | { type: "text"; text: string }
@@ -95,7 +98,8 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
         const why = isRateLimited(lastError) ? "reached its free-tier limit" : "was busy";
         yield { type: "notice", text: `${req.model.name} ${why}, so ${attempt.model.name} answered instead.` };
       }
-      const r = { ...req, model: attempt.model, search };
+      // Telling a model it can search without giving it the tool makes some reply with nothing.
+      const r = { ...req, model: attempt.model, search, system: search ? `${req.system} ${SEARCH_HINT}` : req.system };
       const inner = fakeAi()
         ? fakeReply(r, attempt.model.id === req.model.id)
         : r.model.provider === "anthropic"
@@ -120,12 +124,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       if (search && !isBusy(e) && !groqLimit && status(e) !== 401) {
         search = false;
         console.error("[chat] search failed, answering without it", status(e), detail(e));
-        const said = detail(e);
-        const name = PROVIDER_NAME[attempt.model.provider];
-        yield {
-          type: "notice",
-          text: `Web search wasn't available for this answer, so it comes from the model's own knowledge.${said ? ` (${name} said: "${said}")` : ""}`,
-        };
+        yield { type: "notice", text: searchUnavailable(attempt.model.provider, e) };
         i--;
         continue;
       }
@@ -143,6 +142,22 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
   throw new ProviderError(describe(req.model.provider, lastError));
 }
 
+const SEARCH_HINT =
+  "You can search the web. Search when the question needs current, local or specific facts you might not know; otherwise answer directly without searching.";
+
+/** Why a search couldn't run, worded for the person chatting. */
+function searchUnavailable(provider: Provider, e: unknown): string {
+  const name = PROVIDER_NAME[provider];
+  const said = detail(e);
+  const base = "Web search wasn't available, so this answer comes from the model's own knowledge and may be out of date.";
+  if (status(e) === 429 || /quota|rate limit|resource.?exhausted/i.test(said)) {
+    return provider === "google"
+      ? `${base} Google's search allowance for your family's key is used up. Free Google keys include little or no web search.`
+      : `${base} ${name} says the key's limit is reached for now.`;
+  }
+  return said ? `${base} (${name} said: "${said}")` : base;
+}
+
 /** The models that fall back to another Claude model when a safety check declines a request. */
 const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]);
 
@@ -153,7 +168,21 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search }:
   const client = new Anthropic({ apiKey, maxRetries: 1 });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
-  const messages: Msg[] = turns.map((t) => ({ role: t.role, content: t.text }));
+  const messages: Msg[] = turns.map((t) =>
+    t.files?.length
+      ? {
+          role: t.role,
+          content: [
+            ...t.files.map((f) =>
+              f.mime === "application/pdf"
+                ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data }, title: f.name }
+                : { type: "image", source: { type: "base64", media_type: f.mime, data: f.data } },
+            ),
+            ...(t.text ? [{ type: "text", text: t.text }] : []),
+          ],
+        }
+      : { role: t.role, content: t.text || "(no text)" },
+  );
   let input = 0;
   let output = 0;
   let searches = 0;
@@ -249,7 +278,21 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search }: Re
     {
       model: model.id,
       instructions: system,
-      input: turns.map((t) => ({ role: t.role, content: t.text })),
+      input: turns.map((t) =>
+        t.role === "user" && t.files?.length
+          ? {
+              role: "user" as const,
+              content: [
+                ...t.files.map((f) =>
+                  f.mime === "application/pdf"
+                    ? { type: "input_file" as const, filename: f.name, file_data: `data:application/pdf;base64,${f.data}` }
+                    : { type: "input_image" as const, image_url: `data:${f.mime};base64,${f.data}`, detail: "auto" as const },
+                ),
+                ...(t.text ? [{ type: "input_text" as const, text: t.text }] : []),
+              ],
+            }
+          : { role: t.role, content: t.text },
+      ),
       max_output_tokens: MAX_OUTPUT,
       store: false,
       stream: true,
@@ -306,7 +349,7 @@ async function* groqReply({ model, apiKey, system, turns, signal, search }: Repl
   const stream = await client.chat.completions.create(
     {
       model: model.id,
-      messages: [{ role: "system", content: system }, ...turns.map((t) => ({ role: t.role, content: t.text }))],
+      messages: [{ role: "system", content: system }, ...turns.map((t) => ({ role: t.role, content: groqText(t) }))],
       stream: true,
       stream_options: { include_usage: true },
       ...(reasoning as object),
@@ -314,6 +357,9 @@ async function* groqReply({ model, apiKey, system, turns, signal, search }: Repl
     },
     { signal },
   );
+  if (turns.at(-1)?.files?.length) {
+    yield { type: "notice", text: `${model.name} reads text only, so it couldn't see the attached image or PDF. Pick a Gemini, GPT or Claude model for those.` };
+  }
   let input = 0;
   let output = 0;
   let wroteText = false;
@@ -360,6 +406,12 @@ async function* groqReply({ model, apiKey, system, turns, signal, search }: Repl
   yield { type: "usage", input, output };
 }
 
+/** Groq's models read text only: images and PDFs are named in the text instead of sent. */
+function groqText(t: Turn): string {
+  const names = (t.files ?? []).map((f) => `[Attached ${f.name}, which this model can't open]`);
+  return [t.text, ...names].filter(Boolean).join("\n\n");
+}
+
 type GroqTool = {
   index?: number;
   type?: string;
@@ -401,7 +453,13 @@ async function* googleReply({ model, apiKey, system, turns, signal, search }: Re
   const ai = new GoogleGenAI({ apiKey });
   const stream = await ai.models.generateContentStream({
     model: model.id,
-    contents: turns.map((t) => ({ role: t.role === "assistant" ? "model" : "user", parts: [{ text: t.text }] })),
+    contents: turns.map((t) => ({
+      role: t.role === "assistant" ? "model" : "user",
+      parts: [
+        ...(t.files ?? []).map((f) => ({ inlineData: { mimeType: f.mime, data: f.data } })),
+        ...(t.text || !t.files?.length ? [{ text: t.text }] : []),
+      ],
+    })),
     config: {
       systemInstruction: system,
       maxOutputTokens: MAX_OUTPUT,
@@ -615,8 +673,14 @@ This is well documented[^1].
 [^1]: [Quadratic formula](https://en.wikipedia.org/wiki/Quadratic_formula), Wikipedia.
 `.replaceAll("\\`", "`");
 
-async function* fakeReply({ turns, signal, search, model }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
-  const q = turns.at(-1)?.text.slice(0, 80) ?? "";
+async function* fakeReply({ turns, signal, search, model, system }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
+  const last = turns.at(-1);
+  const q = last?.text.slice(0, 80) ?? "";
+  // Like Gemini, told it can search but given no search tool, it answers with nothing.
+  if (!search && system.includes("You can search the web")) {
+    yield { type: "usage", input: 100, output: 0 };
+    return;
+  }
   // "busy" in the message makes the chosen model act overloaded, to test retries and the fallback.
   // "ratelimit" makes a Groq model act as if its free-tier allowance is used up; "ratelimitall" does
   // the same for the model that steps in, to test the fallback and the final error.
@@ -630,6 +694,7 @@ async function* fakeReply({ turns, signal, search, model }: ReplyRequest, chosen
   // "latest" with search on makes it search the web first, to test sources and search fees.
   if (search && q.includes("latest")) {
     if (q.includes("nosearch")) throw Object.assign(new Error("Search grounding is not supported for this key."), { status: 400 });
+    if (q.includes("noquota")) throw Object.assign(new Error("You exceeded your current quota, please check your plan and billing details."), { status: 429 });
     yield { type: "searching" };
     await new Promise((r) => setTimeout(r, q.includes("slowly") ? 1500 : 50));
     yield { type: "searching", query: q.slice(0, 60) };
@@ -652,7 +717,9 @@ async function* fakeReply({ turns, signal, search, model }: ReplyRequest, chosen
     yield { type: "usage", input: 3000, output: 200 };
     return;
   }
-  const reply = FAKE_REPLY.replace("{q}", q);
+  // Say which files arrived, so tests can check that attachments reach the model.
+  const seen = [...(last?.files ?? []).map((f) => f.name), ...[...(last?.text ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1])];
+  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + FAKE_REPLY.replace("{q}", q);
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
