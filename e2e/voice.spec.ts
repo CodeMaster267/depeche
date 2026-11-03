@@ -8,12 +8,15 @@ import { OWNER, signInWithPassword, watchErrors } from "./helpers";
  * stand-in AI turns any recording into "What is the quadratic formula?" and speaks a short tone.
  */
 
-async function fakeMicrophone(page: Page) {
-  await page.addInitScript(() => {
-    const w = window as unknown as { __speech: number; __played: number };
+/** Runs inside the page. Safe to run twice: the second time does nothing. */
+function installFakes() {
+  {
+    const w = window as unknown as { __speech: number; __played: number; __fakes?: boolean };
+    if (w.__fakes) return;
+    w.__fakes = true;
     w.__speech = 0;
     w.__played = 0;
-    navigator.mediaDevices.getUserMedia = async () => {
+    const make = async (): Promise<MediaStream> => {
       const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       // One context for the fake voice, like a real microphone's single device.
       const holder = window as unknown as { __micCtx?: AudioContext };
@@ -41,13 +44,20 @@ async function fakeMicrophone(page: Page) {
       };
       return stream;
     };
+    // On the prototype, not navigator.mediaDevices itself: WebKit sometimes hands out a fresh
+    // MediaDevices object, which would lose a patch made on the old one.
+    MediaDevices.prototype.getUserMedia = make;
     // Count sounds played, to check replies are read aloud.
     const start = AudioBufferSourceNode.prototype.start;
     AudioBufferSourceNode.prototype.start = function (...args: Parameters<typeof start>) {
       if ((this.buffer?.length ?? 0) > 100) w.__played++;
       return start.apply(this, args);
     };
-  });
+  }
+}
+
+async function fakeMicrophone(page: Page) {
+  await page.addInitScript(installFakes);
 }
 
 async function ready(page: Page) {
@@ -63,6 +73,8 @@ async function ready(page: Page) {
     await expect(row.getByText(/ends in/)).toBeVisible();
   }
   await page.goto("/");
+  // WebKit sometimes skips init scripts on a navigation; make sure the fakes are in place.
+  await page.evaluate(installFakes);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -74,7 +86,7 @@ test("the mic writes what you said into the box", async ({ page }) => {
   await ready(page);
   await page.getByRole("button", { name: "Dictate" }).click();
   await expect(page.getByRole("button", { name: "Stop and write it out" })).toBeVisible();
-  await page.waitForTimeout(1600);
+  await page.waitForTimeout(3000);
   await page.getByRole("button", { name: "Stop and write it out" }).click();
   await expect(page.getByLabel("Message Depeche")).toHaveValue("What is the quadratic formula?");
   // With text in the box, the round button sends again.
@@ -92,13 +104,16 @@ test("voice chat listens, sends, reads the reply aloud and listens again", async
   const dialog = page.getByRole("dialog", { name: "Voice chat" });
   await expect(dialog).toBeVisible();
   // It hears the "speech", stops by itself after the pause, and sends it.
-  await expect(dialog.getByText("“What is the quadratic formula?”")).toBeVisible({ timeout: 15_000 });
+  // Captions: what you said, then the answer as it arrives.
+  await expect(dialog.getByTestId("voice-you")).toHaveText("What is the quadratic formula?", { timeout: 15_000 });
   await expect(dialog.getByText("Speaking")).toBeVisible({ timeout: 15_000 });
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __played: number }).__played)).toBeGreaterThan(0);
+  await expect(dialog.getByTestId("voice-answer")).toContainText("worked answer");
+  await expect(dialog.getByTestId("voice-answer")).not.toContainText("$$");
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __played: number }).__played), { timeout: 15_000 }).toBeGreaterThan(0);
   // Then it's your turn again: it listens and sends a second message, on the same microphone.
   await expect(page.getByTestId("user-message")).toHaveCount(2, { timeout: 45_000 });
   expect(await page.evaluate(() => (window as unknown as { __speech: number }).__speech)).toBe(1);
-  await dialog.getByRole("button", { name: "End", exact: true }).click();
+  await dialog.getByRole("button", { name: "End voice chat" }).click();
   await expect(dialog).toHaveCount(0);
   // What was said and answered is in the chat like typed messages.
   await expect(page.getByTestId("user-message").last()).toHaveText("What is the quadratic formula?");
@@ -115,8 +130,24 @@ test("a reply can be read aloud and stopped", async ({ page }) => {
   const reply = page.getByTestId("reply").last();
   await expect(reply.getByRole("button", { name: "Copy reply" })).toBeVisible({ timeout: 15_000 });
   await reply.getByRole("button", { name: "Read aloud" }).click();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __played: number }).__played)).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __played: number }).__played), { timeout: 15_000 }).toBeGreaterThan(0);
   await expect(reply.getByRole("button", { name: "Stop reading" })).toBeVisible();
   await reply.getByRole("button", { name: "Stop reading" }).click();
   await expect(reply.getByRole("button", { name: "Read aloud" })).toBeVisible();
+});
+
+test("voice chat can be muted and unmuted", async ({ page }) => {
+  await ready(page);
+  await page.getByRole("button", { name: "Voice chat" }).click();
+  const dialog = page.getByRole("dialog", { name: "Voice chat" });
+  await expect(dialog.getByText("Listening")).toBeVisible();
+  await dialog.getByRole("button", { name: "Mute" }).click();
+  await expect(dialog.getByText("Muted")).toBeVisible();
+  // Muted, nothing is heard or sent, even when the "voice" plays.
+  await page.waitForTimeout(5000);
+  await expect(dialog.getByTestId("voice-you")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Unmute" }).first().click();
+  await expect(dialog.getByTestId("voice-you")).toHaveText("What is the quadratic formula?", { timeout: 15_000 });
+  await dialog.getByRole("button", { name: "End voice chat" }).click();
+  await expect(dialog).toHaveCount(0);
 });

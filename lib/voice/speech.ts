@@ -1,6 +1,6 @@
 import "server-only";
 import OpenAI, { toFile } from "openai";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { fakeAi } from "@/lib/ai/providers";
 import type { Provider } from "@/lib/ai/models";
 
@@ -21,7 +21,8 @@ export const VOICE = {
   transcribe: {
     openai: { model: "gpt-transcribe", perMinute: 0.0045 },
     // Audio input is estimated at 32 tokens a second at twice Flash's text price, to err high.
-    google: { model: "gemini-3.8-flash", fallback: "gemini-3.5-flash-lite", perMillionIn: 3, perMillionOut: 7.5 },
+    // Flash-Lite first: writing out speech needs no deep model, and it answers in a second or two.
+    google: { model: "gemini-3.5-flash-lite", fallback: "gemini-3.8-flash", perMillionIn: 3, perMillionOut: 7.5 },
   },
   speak: {
     google: { model: "gemini-3.8-flash-tts", voice: "Kore", perMillionIn: 1, perMillionAudio: 18, audioTokensPerSecond: 25 },
@@ -78,7 +79,7 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
   if (provider === "google") {
     const ai = new GoogleGenAI({ apiKey });
     const g = VOICE.transcribe.google;
-    const ask = (model: string) =>
+    const ask = (model: string, minimal: boolean) =>
       ai.models.generateContent({
         model,
         contents: [
@@ -92,18 +93,36 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
             ],
           },
         ],
-        config: { abortSignal: signal, maxOutputTokens: 2_000 },
+        config: {
+          abortSignal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]),
+          maxOutputTokens: 2_000,
+          // No time spent thinking: this is copying words down, not reasoning.
+          ...(minimal ? { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } } : {}),
+        },
       });
+    // Free keys are often "busy", and a model may not take the thinking setting: try the next.
+    const attempts: [string, boolean][] = [
+      [g.model, true],
+      [g.model, false],
+      [g.fallback, true],
+    ];
     let res;
     let model: string = g.model;
-    try {
-      res = await ask(g.model);
-    } catch (e) {
-      // Free keys are often "busy"; the lighter model usually isn't.
-      if (signal.aborted) throw e;
-      model = g.fallback;
-      res = await ask(g.fallback);
+    let lastError: unknown;
+    const started = Date.now();
+    for (const [m, minimal] of attempts) {
+      try {
+        res = await ask(m, minimal);
+        model = m;
+        break;
+      } catch (e) {
+        lastError = e;
+        console.error("[voice] transcribe", m, minimal ? "minimal" : "default", "failed after", Date.now() - started, "ms:", (e as Error)?.message?.slice(0, 200));
+        if (signal.aborted) throw e;
+      }
     }
+    if (!res) throw lastError;
+    console.log("[voice] transcribed with", model, "in", Date.now() - started, "ms");
     const text = (res.text ?? "").trim();
     const input = res.usageMetadata?.promptTokenCount ?? Math.ceil(seconds * 32);
     const output = res.usageMetadata?.candidatesTokenCount ?? Math.ceil(text.length / 4);

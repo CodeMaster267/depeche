@@ -15,6 +15,14 @@ import { speakable } from "@/lib/voice/text";
 
 let shared: AudioContext | null = null;
 
+/** A signal that aborts with `signal` or after `ms`. (AbortSignal.any is missing on older iPhones.) */
+export function within(signal: AbortSignal | undefined, ms: number): AbortSignal {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(new DOMException("Timed out", "TimeoutError")), ms);
+  signal?.addEventListener("abort", () => (clearTimeout(t), c.abort(signal.reason)), { once: true });
+  return c.signal;
+}
+
 /** Call from a tap. Creates or wakes the audio engine and unlocks playback on iOS. */
 export function unlockAudio(): AudioContext {
   const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -227,7 +235,7 @@ export async function listen(wav: Blob, signal?: AbortSignal): Promise<string> {
  * Reads text aloud: in the family's provider voice when it can, otherwise in the browser's own
  * voice. Resolves when it has finished, or straight away if `signal` aborts.
  */
-export async function say(text: string, signal: AbortSignal): Promise<void> {
+export async function say(text: string, signal: AbortSignal, onFallback?: (why: string) => void): Promise<void> {
   const ctx = shared;
   if (!speakable(text)) return;
   let audio: { pcm: ArrayBuffer; rate: number } | null = null;
@@ -236,11 +244,14 @@ export async function say(text: string, signal: AbortSignal): Promise<void> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
-      signal,
+      // A slow voice service shouldn't stall the conversation: the browser's voice takes over.
+      signal: within(signal, 25_000),
     });
     if (res.ok) audio = { pcm: await res.arrayBuffer(), rate: Number(res.headers.get("x-sample-rate") ?? 24_000) };
+    else onFallback?.(((await res.json().catch(() => ({}))) as { error?: string }).error ?? "The voice service didn't answer.");
   } catch {
     if (signal.aborted) return;
+    onFallback?.("The voice service took too long.");
   }
   if (signal.aborted) return;
   if (audio && audio.pcm.byteLength > 1 && ctx) return playPcm(ctx, audio.pcm, audio.rate, signal);
@@ -256,7 +267,10 @@ function playPcm(ctx: AudioContext, bytes: ArrayBuffer, rate: number, signal: Ab
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.connect(ctx.destination);
+    let finished = false;
     const end = () => {
+      if (finished) return;
+      finished = true;
       signal.removeEventListener("abort", stop);
       resolve();
     };
@@ -270,6 +284,8 @@ function playPcm(ctx: AudioContext, bytes: ArrayBuffer, rate: number, signal: Ab
     };
     src.onended = end;
     signal.addEventListener("abort", stop, { once: true });
+    // iPhones can drop the "ended" event after an interruption; never wait past the sound's length.
+    setTimeout(end, (samples.length / rate) * 1000 + 1500);
     if (ctx.state !== "running") ctx.resume().catch(() => {});
     src.start();
   });
@@ -280,7 +296,10 @@ function sayWithBrowser(text: string, signal: AbortSignal): Promise<void> {
     if (!("speechSynthesis" in window)) return resolve();
     const u = new SpeechSynthesisUtterance(speakable(text));
     u.rate = 1.02;
+    let finished = false;
     const done = () => {
+      if (finished) return;
+      finished = true;
       signal.removeEventListener("abort", stop);
       resolve();
     };
@@ -291,6 +310,8 @@ function sayWithBrowser(text: string, signal: AbortSignal): Promise<void> {
     u.onend = done;
     u.onerror = done;
     signal.addEventListener("abort", stop, { once: true });
+    // Safari sometimes never reports the end; allow about 12 characters a second, then move on.
+    setTimeout(done, (u.text.length / 12) * 1000 + 3000);
     window.speechSynthesis.speak(u);
   });
 }

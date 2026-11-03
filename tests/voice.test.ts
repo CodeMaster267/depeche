@@ -12,6 +12,7 @@ describe("speakable", () => {
     expect(out).not.toMatch(/[*#`[\]]/);
     expect(out).not.toContain("alert");
     expect(out).not.toContain("https");
+    expect(speakable("| Step | Result |\n| --- | --- |\n| One | 25 |")).toBe("Step, Result\nOne, 25");
     expect(speakable("It rained [1](https://a.b) today.")).toBe("It rained today.");
   });
 });
