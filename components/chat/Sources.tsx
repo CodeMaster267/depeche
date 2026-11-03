@@ -14,12 +14,13 @@ export function siteOf(s: Source): string {
 }
 
 /** Shown while a reply is searching, before (or between) its text. */
-export function Searching({ queries }: { queries: string[] }) {
+export function Searching({ queries, where = "web" }: { queries: string[]; where?: "web" | "chat" }) {
   const last = queries.at(-1);
+  const what = where === "chat" ? "Looking back through this chat" : "Searching the web";
   return (
-    <p data-testid="searching" className="flex items-center gap-2 text-[15px] text-mute" aria-live="polite">
+    <p data-testid="searching" data-where={where} className="flex items-center gap-2 text-[15px] text-mute" aria-live="polite">
       <span className="stream-cursor shrink-0" aria-hidden />
-      <span className="min-w-0 truncate">{last ? `Searching the web for “${last}”` : "Searching the web"}</span>
+      <span className="min-w-0 truncate">{last ? `${what} for “${last}”` : what}</span>
     </p>
   );
 }
