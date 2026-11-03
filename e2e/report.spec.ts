@@ -55,7 +55,7 @@ test("a fourth report in a day is refused, and what was written is kept", async 
     await expect(page.getByTestId("my-reports").getByText(`Report number ${n} about something broken.`)).toBeVisible();
   }
   await send(page, "One report too many for today.");
-  await expect(page.getByRole("alert")).toHaveText(/3 bug reports a day/);
+  await expect(page.locator("p[role=alert]")).toHaveText(/3 bug reports a day/);
   await expect(page.getByLabel("What went wrong?")).toHaveValue("One report too many for today.");
   await expect(page.getByTestId("my-reports").locator("li")).toHaveCount(3);
 });
