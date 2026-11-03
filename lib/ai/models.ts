@@ -6,7 +6,7 @@
  *
  * A model only appears for a family once its admin has added that provider's key.
  */
-export type Provider = "anthropic" | "openai" | "google";
+export type Provider = "anthropic" | "openai" | "google" | "groq";
 
 export type Model = {
   id: string;
@@ -26,6 +26,12 @@ export const PROVIDERS: { id: Provider; name: string; keyUrl: string; keyHint: s
   },
   { id: "openai", name: "OpenAI (GPT)", keyUrl: "https://platform.openai.com/api-keys", keyHint: "Starts with sk-" },
   { id: "google", name: "Google (Gemini)", keyUrl: "https://aistudio.google.com/apikey", keyHint: "Starts with AIza. Free keys work for testing, but Google may use free-tier chats to improve its products." },
+  {
+    id: "groq",
+    name: "Groq (open models)",
+    keyUrl: "https://console.groq.com/keys",
+    keyHint: "Starts with gsk_. The free tier works but is rate-limited (about 30 messages a minute and 1,000 a day per model, and short chats only). Groq handles data under its own terms.",
+  },
 ];
 
 export const MODELS: Model[] = [
@@ -40,10 +46,15 @@ export const MODELS: Model[] = [
   { id: "gemini-4-argon", provider: "google", name: "Gemini 4 Argon", short: "Gemini 4 Argon", tags: ["Most capable", "Long context"], price: { input: 4, output: 20 } },
   { id: "gemini-3.8-flash", provider: "google", name: "Gemini 3.8 Flash", short: "Gemini 3.8 Flash", tags: ["Fast"], price: { input: 1.5, output: 7.5 } },
   { id: "gemini-3.5-flash-lite", provider: "google", name: "Gemini 3.5 Flash-Lite", short: "Flash-Lite", tags: ["Fastest"], price: { input: 0.3, output: 2.5 } },
+  // Groq's free tier costs nothing but is rate-limited. Depeche can't tell a free key from a paid
+  // one, so its paid prices are used and limits err high, as with free Gemini keys.
+  { id: "openai/gpt-oss-120b", provider: "groq", name: "GPT-OSS 120B (Groq)", short: "GPT-OSS 120B", tags: ["Smart", "Free tier"], price: { input: 0.15, output: 0.6 } },
+  { id: "openai/gpt-oss-20b", provider: "groq", name: "GPT-OSS 20B (Groq)", short: "GPT-OSS 20B", tags: ["Fastest", "Free tier"], price: { input: 0.075, output: 0.3 } },
+  { id: "qwen/qwen3.8-27b", provider: "groq", name: "Qwen 3.8 27B (Groq)", short: "Qwen 3.8 27B", tags: ["Preview", "Free tier"], price: { input: 0.8, output: 4 } },
 ];
 
 /** What a new person starts with, if their family has the provider. */
-export const PREFERRED_DEFAULTS = ["claude-sonnet-5-5", "gpt-6.1-sol", "gemini-3.8-flash"];
+export const PREFERRED_DEFAULTS = ["claude-sonnet-5-5", "gpt-6.1-sol", "gemini-3.8-flash", "openai/gpt-oss-120b"];
 
 export function findModel(id: string | null | undefined): Model | undefined {
   return MODELS.find((m) => m.id === id);
@@ -84,7 +95,19 @@ export function chooseDefault(available: Model[], last?: string | null): Model |
  * ignored so estimates err high. The pages a search reads are billed as ordinary input tokens,
  * which the providers already include in their usage reports.
  */
-export const SEARCH_PRICE: Record<Provider, number> = { anthropic: 0.01, openai: 0.01, google: 0.014 };
+export const SEARCH_PRICE: Record<Provider, number> = { anthropic: 0.01, openai: 0.01, google: 0.014, groq: 0.005 };
+
+/**
+ * Whether Depeche lets this model search the web. On Groq only the GPT-OSS models can, with Groq's
+ * browser search ($5 per 1,000 searches on a paid plan; a free key isn't billed, but the fee is still
+ * counted so limits err high). Groq retired its Compound search models in October 2026.
+ */
+export function canSearch(model: Pick<Model, "id" | "provider"> | undefined): boolean {
+  if (!model) return true;
+  return model.provider !== "groq" || model.id.startsWith("openai/gpt-oss");
+}
+
+export const PROVIDER_NAME: Record<Provider, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google", groq: "Groq" };
 
 /** The most searches one reply may run, which bounds what a single reply's searching can cost. */
 export const MAX_SEARCHES = 5;

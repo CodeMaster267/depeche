@@ -85,7 +85,7 @@ export async function resetPassword(memberId: string, _: ActionState, form: Form
   return { ok: "New password set. Tell them in person, and they can change it in Account." };
 }
 
-const PROVIDER_IDS = ["anthropic", "openai", "google"] as const;
+const PROVIDER_IDS = ["anthropic", "openai", "google", "groq"] as const;
 
 /**
  * Saves a family's provider key. It is checked with the provider, encrypted here on the server,
