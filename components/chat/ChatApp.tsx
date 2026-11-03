@@ -252,7 +252,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
               <button
                 type="button"
                 onClick={() => setPicking(true)}
-                className="flex items-center gap-1 text-[14px] text-mute md:rounded-full md:border md:border-line md:px-3.5 md:py-1.5 md:text-fg"
+                className="press flex items-center gap-1 text-[14px] text-mute md:rounded-full md:border md:border-line md:px-3.5 md:py-1.5 md:text-fg"
                 aria-label={`Model: ${model.name}. Change model`}
               >
                 {model.name} <ChevronDownIcon />
@@ -444,7 +444,7 @@ function Composer({
         className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
       />
       {busy ? (
-        <button type="button" onClick={onStop} aria-label="Stop" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-inv text-on-inv">
+        <button type="button" onClick={onStop} aria-label="Stop" className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-inv text-on-inv">
           <StopIcon />
         </button>
       ) : (
@@ -452,7 +452,7 @@ function Composer({
           type="submit"
           aria-label="Send"
           disabled={disabled || !value.trim()}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-inv text-on-inv transition-opacity disabled:opacity-30"
+          className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-inv text-on-inv transition-opacity disabled:opacity-30"
         >
           <ArrowUpIcon />
         </button>

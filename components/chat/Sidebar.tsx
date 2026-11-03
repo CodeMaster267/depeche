@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Wordmark } from "@/components/Wordmark";
+import { NavLink } from "@/components/Press";
 import type { ChatRow } from "@/lib/chat/thread";
 import { CloseIcon, PlusIcon, SearchIcon } from "./icons";
 
@@ -67,7 +68,7 @@ export function Sidebar({
       <Link
         href="/"
         onClick={onNavigate}
-        className="flex h-12 items-center gap-3 rounded-2xl border border-line px-4 text-[16px] font-medium"
+        className="press flex h-12 items-center gap-3 rounded-2xl border border-line px-4 text-[16px] font-medium"
       >
         <PlusIcon /> New chat
       </Link>
@@ -91,6 +92,7 @@ export function Sidebar({
                 <li key={c.id}>
                   <Link
                     href={`/c/${c.id}`}
+                    prefetch={false}
                     onClick={onNavigate}
                     aria-current={c.id === activeId ? "page" : undefined}
                     className={`block truncate rounded-xl px-3 py-2.5 text-[16px] ${c.id === activeId ? "bg-soft font-medium" : "hover:bg-soft"}`}
@@ -112,15 +114,9 @@ export function Sidebar({
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[16px]">{name}</span>
-            <span className="flex gap-4 text-[14px] text-mute">
-              {isAdmin ? (
-                <Link href="/family" className="underline-offset-4 hover:underline">
-                  Family
-                </Link>
-              ) : null}
-              <Link href="/account" className="underline-offset-4 hover:underline">
-                Account
-              </Link>
+            <span className="mt-1 flex gap-2 text-[14px]">
+              {isAdmin ? <NavLink href="/family">Family</NavLink> : null}
+              <NavLink href="/account">Account</NavLink>
             </span>
           </span>
         </div>

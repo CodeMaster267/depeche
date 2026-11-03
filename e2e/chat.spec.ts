@@ -15,6 +15,7 @@ async function signInOwner(page: Page) {
 async function ensureGoogleKey(page: Page) {
   await page.goto("/family");
   const row = page.getByTestId("provider-google");
+  await expect(row.getByText(/Not added|ends in/)).toBeVisible();
   if (await row.getByText("Not added").isVisible()) {
     await row.getByLabel("Google (Gemini) API key").fill("test-google-key-1234567890abcd");
     await row.getByRole("button", { name: "Save key" }).click();
@@ -97,7 +98,8 @@ test.describe("chatting", () => {
     await expect(page.getByTestId("reply").last().getByRole("table")).toBeVisible();
     await expect(await menuLink(page, question)).toBeVisible();
     expect(page.url()).toBe(chatUrl);
-    expect(errors).toEqual([]);
+    // Safari reports link prefetches it cancels on reload; those aren't errors in the page.
+    expect(errors.filter((e) => !/_rsc=.*access control checks/.test(e))).toEqual([]);
   });
 
   test("a reply can be stopped part way, and what was written is kept", async ({ page }) => {
