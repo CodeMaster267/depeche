@@ -77,6 +77,13 @@ export async function noSidewaysScroll(page: Page) {
 export function watchErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  page.on("console", (m) => {
+    if (m.type() !== "error") return;
+    // Safari logs a Next.js page prefetch (`?_rsc=`) that a navigation cancels as an "access
+    // control" error. The header links prefetch pages, so leaving a page mid-prefetch triggers it.
+    // It is the browser dropping a request we no longer need, not a fault in Depeche.
+    if (/_rsc=.* due to access control checks/.test(m.text())) return;
+    errors.push(m.text());
+  });
   return errors;
 }
