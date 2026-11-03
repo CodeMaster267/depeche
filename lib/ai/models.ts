@@ -49,8 +49,14 @@ export function findModel(id: string | null | undefined): Model | undefined {
   return MODELS.find((m) => m.id === id);
 }
 
-export function modelsFor(providers: readonly string[]): Model[] {
-  return MODELS.filter((m) => providers.includes(m.provider));
+/**
+ * The models a family can use: those of providers it has a key for, narrowed to the ones each key
+ * can actually use once that has been checked (`models` null means not checked yet).
+ */
+export function modelsFor(keys: readonly { provider: string; models?: readonly string[] | null }[]): Model[] {
+  return MODELS.filter((m) =>
+    keys.some((k) => k.provider === m.provider && (!k.models?.length || k.models.includes(m.id))),
+  );
 }
 
 /** Price band shown in the picker: $ to $$$$. */

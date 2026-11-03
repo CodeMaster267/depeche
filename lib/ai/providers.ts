@@ -2,7 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
-import { findModel, type Model, type Provider } from "@/lib/ai/models";
+import { MODELS, findModel, type Model, type Provider } from "@/lib/ai/models";
 
 /**
  * One streaming interface over the three providers. Depeche stores conversations in its own
@@ -221,26 +221,56 @@ function friendlyError(provider: Provider, e: unknown): string {
 }
 
 /** Checks a key with a free request (listing models) before it is saved. */
-export async function checkKey(provider: Provider, key: string): Promise<boolean> {
-  if (fakeAi()) return key.startsWith("test-");
-  const opts = { signal: AbortSignal.timeout(10_000) };
-  try {
-    const res =
-      provider === "anthropic"
-        ? await fetch("https://api.anthropic.com/v1/models?limit=1", {
-            ...opts,
-            headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
-          })
-        : provider === "openai"
-          ? await fetch("https://api.openai.com/v1/models", { ...opts, headers: { authorization: `Bearer ${key}` } })
-          : await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", {
-              ...opts,
-              headers: { "x-goog-api-key": key },
-            });
-    return res.ok;
-  } catch {
-    return false;
+/**
+ * Asks the provider which models a key can see, using free model-list calls. Returns the ids
+ * Depeche offers that the key can use, or null if the provider refused the key.
+ */
+export async function listKeyModels(provider: Provider, key: string): Promise<string[] | null> {
+  const ours = MODELS.filter((m) => m.provider === provider).map((m) => m.id);
+  if (fakeAi()) {
+    if (!key.startsWith("test-")) return null;
+    // A key with "free" in it stands in for a free-tier key that can't use the paid-only models.
+    return key.includes("free") ? ours.filter((id) => id !== "gemini-4-argon") : ours;
   }
+  const signal = AbortSignal.timeout(10_000);
+  try {
+    const seen = new Set<string>();
+    if (provider === "anthropic") {
+      const res = await fetch("https://api.anthropic.com/v1/models?limit=1000", {
+        signal,
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
+      });
+      if (!res.ok) return res.status === 401 || res.status === 403 ? null : ours;
+      for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
+    } else if (provider === "openai") {
+      const res = await fetch("https://api.openai.com/v1/models", { signal, headers: { authorization: `Bearer ${key}` } });
+      if (!res.ok) return res.status === 401 || res.status === 403 ? null : ours;
+      for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
+    } else {
+      let page = "";
+      for (let i = 0; i < 5; i++) {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`,
+          { signal, headers: { "x-goog-api-key": key } },
+        );
+        if (!res.ok) return res.status === 400 || res.status === 401 || res.status === 403 ? null : ours;
+        const body = (await res.json()) as { models?: { name: string }[]; nextPageToken?: string };
+        for (const m of body.models ?? []) seen.add(m.name.replace(/^models\//, ""));
+        if (!body.nextPageToken) break;
+        page = body.nextPageToken;
+      }
+    }
+    const usable = ours.filter((id) => seen.has(id));
+    // If none of our names match, the provider has probably renamed things; better to offer
+    // everything than nothing.
+    return usable.length ? usable : ours;
+  } catch {
+    return null;
+  }
+}
+
+export async function checkKey(provider: Provider, key: string): Promise<boolean> {
+  return (await listKeyModels(provider, key)) !== null;
 }
 
 /**

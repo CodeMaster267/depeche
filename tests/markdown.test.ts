@@ -33,3 +33,14 @@ describe("conversation", () => {
     expect(titleFrom("word ".repeat(30)).length).toBeLessThanOrEqual(61);
   });
 });
+
+describe("modelsFor", () => {
+  it("offers a provider's models once it has a key, narrowed to what the key can use", async () => {
+    const { modelsFor } = await import("@/lib/ai/models");
+    const ids = (keys: Parameters<typeof modelsFor>[0]) => modelsFor(keys).map((m) => m.id);
+    expect(ids([])).toEqual([]);
+    expect(ids([{ provider: "google", models: null }])).toEqual(["gemini-4-argon", "gemini-3.8-flash", "gemini-3.5-flash-lite"]);
+    expect(ids([{ provider: "google", models: ["gemini-3.8-flash"] }])).toEqual(["gemini-3.8-flash"]);
+    expect(ids([{ provider: "google", models: [] }])).toHaveLength(3);
+  });
+});
