@@ -7,7 +7,8 @@ import { MAX_SEARCHES, estimateCost, findModel, searchCost } from "@/lib/ai/mode
 import { ProviderError, fakeAi, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
 import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOfferChatSearch } from "@/lib/chat/search";
 import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
-import { MAX_FILES_PER_MESSAGE, UPLOAD_BUCKET, isFileRef, type FileRef } from "@/lib/chat/files";
+import { MAX_FILES_PER_MESSAGE, OFFICE_TYPES, UPLOAD_BUCKET, isFileRef, readAsText, type FileRef } from "@/lib/chat/files";
+import { documentText } from "@/lib/docs/read";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
@@ -135,6 +136,8 @@ export async function POST(req: NextRequest) {
   for (const f of [...fileRefs, ...all.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : []))]) {
     if (!isFileRef(f, me.userId)) continue;
     if (f.mime === "text/plain") fileTokens += Math.ceil(Math.min(f.size, 200_000) / 2);
+    // Word, Excel and PowerPoint files are zipped, so their text can be several times their size.
+    else if (OFFICE_TYPES.includes(f.mime)) fileTokens += Math.ceil(Math.min(f.size * 5, 200_000) / 2);
     else if (binaryBytes + f.size <= FILE_BYTES_BUDGET) {
       binaryBytes += f.size;
       fileTokens += f.mime === "application/pdf" ? Math.ceil(f.size / 40) + 3_000 : 5_000;
@@ -239,14 +242,22 @@ export async function POST(req: NextRequest) {
       for (const f of m.content.files ?? []) {
         // Only ever the sender's own folder, even if a stored message says otherwise.
         if (!isFileRef(f, me.userId)) continue;
-        const fits = f.mime === "text/plain" ? budget - f.size > 0 : fileBudget - f.size > 0;
+        const fits = readAsText(f.mime) ? budget - f.size > 0 : fileBudget - f.size > 0;
         const { data: blob } = fits ? await storage.download(f.path) : { data: null };
         if (!blob) {
           t += `\n\n[Attached file "${f.name}" is ${fits ? "no longer available: files are removed after 3 days without use" : "too large to send again"}.]`;
-        } else if (f.mime === "text/plain") {
-          const body = (await blob.text()).slice(0, 200_000);
-          budget -= body.length;
-          t += `\n\n<file name="${f.name.replace(/"/g, "'")}">\n${body}\n</file>`;
+        } else if (readAsText(f.mime)) {
+          // Word, Excel and PowerPoint files are read here, as no provider takes them directly.
+          const body =
+            f.mime === "text/plain"
+              ? (await blob.text()).slice(0, 200_000)
+              : await documentText(f.mime, new Uint8Array(await blob.arrayBuffer())).catch(() => null);
+          const name = f.name.replace(/"/g, "'");
+          if (body === null) t += `\n\n[Attached file "${name}" couldn't be read. It may be damaged or password-protected.]`;
+          else {
+            budget -= body.length;
+            t += `\n\n<file name="${name}">\n${body || "(This file has no text in it.)"}\n</file>`;
+          }
         } else {
           fileBudget -= f.size;
           attached.push({ name: f.name, mime: f.mime, data: Buffer.from(await blob.arrayBuffer()).toString("base64") });
@@ -433,12 +444,21 @@ export async function POST(req: NextRequest) {
 /** About how many input tokens the pages from one web search add, erring high. */
 const SEARCH_INPUT_TOKENS = 12_000;
 
+/** How a model makes a file to download (shown by components/markdown/FileCard.tsx). */
+const FILE_INSTRUCTIONS = [
+  "You can make files to download.",
+  "When asked for a document, spreadsheet or other file (Word, PDF, Excel, CSV, Markdown, text or JSON), write the whole file in one fenced code block labelled file: and its name, for example ```file:Trip-plan.docx, and the app shows it with a Download button; never say you can't make files.",
+  "Inside, write Markdown for .docx, .pdf and .md; CSV with a heading row for .csv and .xlsx (for several sheets, put each under a line like ## Sheet: Name; Excel formulas such as =SUM(B2:B9) work in .xlsx); plain text for .txt and .json.",
+  "Use a short file name without spaces. If the file contains ``` fences, open and close the file block with ```` instead. Only make a file when one is wanted, and keep remarks outside the block.",
+].join(" ");
+
 function systemPrompt(name: string, voice: boolean, memories: string[]): string {
   return [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
     memoryInstructions(name, memories),
+    voice ? "" : FILE_INSTRUCTIONS,
     voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."
       : "",
