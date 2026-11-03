@@ -85,6 +85,8 @@ export function VoiceMode({
     mic.current?.cancel();
     mic.current = null;
     if (mutedRef.current) {
+      closeMicStream(stream.current);
+      stream.current = null;
       setLevel(0);
       setNote(null);
       return setPhase("muted");
@@ -93,7 +95,7 @@ export function VoiceMode({
     setPhase("listening");
     try {
       const ctx = unlockAudio();
-      // One microphone for the whole conversation; reopened only if the system took it away.
+      // The microphone is open only while it's your turn.
       if (!stream.current || stream.current.getAudioTracks().every((t) => t.readyState === "ended")) {
         stream.current = await openMicStream();
       }
@@ -114,6 +116,8 @@ export function VoiceMode({
   const pause = (why: string | null) => {
     mic.current?.cancel();
     mic.current = null;
+    closeMicStream(stream.current);
+    stream.current = null;
     setLevel(0);
     setNote(why);
     setPhase("paused");
@@ -124,6 +128,10 @@ export function VoiceMode({
     mic.current = null;
     if (!rec || !open.current) return;
     const wav = rec.stop();
+    // Let go of the microphone until it's your turn again, so the answer plays like media: through
+    // headphones when they're in, at full volume.
+    closeMicStream(stream.current);
+    stream.current = null;
     setLevel(0);
     setPhase("hearing");
     let text = "";

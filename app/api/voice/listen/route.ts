@@ -21,13 +21,17 @@ export async function POST(req: NextRequest) {
   if (wav.length < 44 || String.fromCharCode(...wav.subarray(0, 4)) !== "RIFF") return fail(400, "That recording didn't come through. Try again.");
   if (wavSeconds(wav) < 0.3) return NextResponse.json({ text: "" });
 
+  // The device's language, as a hint ("en-GB" becomes "en").
+  const lang = (req.headers.get("x-language") ?? "").slice(0, 2).toLowerCase();
+  const language = /^[a-z]{2}$/.test(lang) ? lang : undefined;
+
   const hold = await reserveVoice(me);
   if (hold instanceof NextResponse) return hold;
   // Best provider first; if it fails (a used-up free quota, say), the next one tries.
   let problem = "";
   for (const { provider, apiKey } of keys) {
     try {
-      const t = await transcribe(provider, apiKey, wav, req.signal);
+      const t = await transcribe(provider, apiKey, wav, req.signal, language);
       await recordUsage(hold, provider, t.model, t.input, t.output, t.cost);
       return NextResponse.json({ text: t.text, by: provider });
     } catch (e) {

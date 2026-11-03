@@ -112,9 +112,9 @@ test("voice chat listens, sends, reads the reply aloud and listens again", async
   await expect(dialog.getByTestId("voice-answer")).toContainText("worked answer");
   await expect(dialog.getByTestId("voice-answer")).not.toContainText("$$");
   await expect.poll(() => page.evaluate(() => (window as unknown as { __played: number }).__played), { timeout: 15_000 }).toBeGreaterThan(0);
-  // Then it's your turn again: it listens and sends a second message, on the same microphone.
+  // Then it's your turn again: the microphone, let go of while the answer played, opens again.
   await expect(page.getByTestId("user-message")).toHaveCount(2, { timeout: 45_000 });
-  expect(await page.evaluate(() => (window as unknown as { __speech: number }).__speech)).toBe(1);
+  expect(await page.evaluate(() => (window as unknown as { __speech: number }).__speech)).toBeGreaterThan(1);
   await dialog.getByRole("button", { name: "End voice chat" }).click();
   await expect(dialog).toHaveCount(0);
   // What was said and answered is in the chat like typed messages.
@@ -131,8 +131,13 @@ test("a reply can be read aloud and stopped", async ({ page }) => {
   await page.getByRole("button", { name: "Send" }).click();
   const reply = page.getByTestId("reply").last();
   await expect(reply.getByRole("button", { name: "Copy reply" })).toBeVisible({ timeout: 15_000 });
-  await reply.getByRole("button", { name: "Read aloud" }).click();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __played: number }).__played), { timeout: 15_000 }).toBeGreaterThan(0);
+  // A new chat's page can re-render once more just after the reply finishes (its address changes),
+  // which can swallow a click made at that moment; click again if nothing started.
+  const played = () => page.evaluate(() => (window as unknown as { __played: number }).__played);
+  await expect(async () => {
+    if (await reply.getByRole("button", { name: "Read aloud" }).isVisible()) await reply.getByRole("button", { name: "Read aloud" }).click();
+    await expect.poll(played, { timeout: 5_000 }).toBeGreaterThan(0);
+  }).toPass({ timeout: 30_000 });
   await expect(reply.getByRole("button", { name: "Stop reading" })).toBeVisible();
   await reply.getByRole("button", { name: "Stop reading" }).click();
   await expect(reply.getByRole("button", { name: "Read aloud" })).toBeVisible();

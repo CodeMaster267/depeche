@@ -63,7 +63,11 @@ export function wavSeconds(wav: Uint8Array): number {
   return (wav.length - 44) / (rate * channels * (bits / 8));
 }
 
-export async function transcribe(provider: Provider, apiKey: string, wav: Uint8Array, signal: AbortSignal): Promise<Transcript> {
+/**
+ * `language` is the device's language (two letters, like "en"). Without it, Whisper guesses from
+ * the sound alone and, on a short or noisy clip, often picks the wrong language entirely.
+ */
+export async function transcribe(provider: Provider, apiKey: string, wav: Uint8Array, signal: AbortSignal, language?: string): Promise<Transcript> {
   const seconds = wavSeconds(wav);
   if (fakeAi()) {
     // Tests: a fixed sentence, so a voice turn can be followed end to end.
@@ -74,7 +78,7 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
     const client = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1", maxRetries: 0, timeout: 15_000 });
     const g = VOICE.transcribe.groq;
     const res = await client.audio.transcriptions.create(
-      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: g.model, response_format: "json" },
+      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: g.model, response_format: "json", ...(language ? { language } : {}) },
       { signal },
     );
     return {
@@ -89,7 +93,7 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
   if (provider === "openai") {
     const client = new OpenAI({ apiKey, maxRetries: 1 });
     const res = await client.audio.transcriptions.create(
-      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: VOICE.transcribe.openai.model },
+      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: VOICE.transcribe.openai.model, ...(language ? { language } : {}) },
       { signal },
     );
     return {
@@ -112,7 +116,7 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
             parts: [
               { inlineData: { mimeType: "audio/wav", data: Buffer.from(wav).toString("base64") } },
               {
-                text: "Transcribe this recording exactly as spoken, in the language spoken, with normal punctuation. Reply with only the words said. If nobody speaks, reply with nothing.",
+                text: `Transcribe this recording exactly as spoken, with normal punctuation.${language ? ` The speaker most likely speaks the language with code "${language}".` : ""} Reply with only the words said. If nobody speaks, reply with nothing.`,
               },
             ],
           },
@@ -172,7 +176,8 @@ export async function speak(provider: Provider, apiKey: string, text: string, si
     const ai = new GoogleGenAI({ apiKey });
     const res = await ai.models.generateContent({
       model: g.model,
-      contents: [{ role: "user", parts: [{ text: `Read this aloud in a warm, natural voice:\n\n${text}` }] }],
+      // Only the words to say: any instruction placed here gets read out as well.
+      contents: [{ role: "user", parts: [{ text }] }],
       config: {
         abortSignal: signal,
         responseModalities: ["AUDIO"],
