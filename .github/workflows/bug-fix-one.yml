@@ -1,0 +1,172 @@
+name: Fix one bug report
+
+# Called by bug-fixer.yml for each report. The steps are separate jobs on separate machines so
+# that no job both runs code the fixer wrote and holds anything worth stealing:
+#
+#   fix      Claude Code edits a fresh copy of main. Holds only the Anthropic key. For reports
+#            from anyone but Hasan it has file tools only and cannot run commands.
+#   gate     A clean copy of main applies the patch as text (runs none of it), checks it against
+#            scripts/bugs/policy.ts, and has a second model review the diff.
+#   verify   Runs the fix: typecheck, database privacy tests, build, Chrome and Safari tests.
+#            Holds no secrets and no write access.
+#   publish  A clean copy of main opens the pull request, merges it only if the gate said
+#            "merge" and verify passed, and records the outcome. Runs none of the fixer's code.
+
+on:
+  workflow_call:
+    inputs:
+      report:
+        type: string
+        required: true
+      no_merge:
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+    env:
+      REPORT: ${{ inputs.report }}
+    steps:
+      - name: Check the report id
+        run: '[[ "$REPORT" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # No shared npm cache in jobs that run fixer-written code, so nothing can be planted in it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Install Claude Code
+        run: npm install --global @anthropic-ai/claude-code@2.1.309
+      - uses: actions/download-artifact@v4
+        with:
+          name: bug-work
+          path: ${{ runner.temp }}/work
+      - name: Fix
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node scripts/bugs/fix.ts "$RUNNER_TEMP/work/$REPORT.json" "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fix-${{ inputs.report }}
+          path: ${{ runner.temp }}/out
+          retention-days: 7
+
+  gate:
+    needs: fix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.gate.outputs.mode }}
+    env:
+      REPORT: ${{ inputs.report }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: bug-work
+          path: ${{ runner.temp }}/work
+      - uses: actions/download-artifact@v4
+        with:
+          name: fix-${{ inputs.report }}
+          path: ${{ runner.temp }}/fix
+      - name: Check the fix against the rules
+        id: gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node scripts/bugs/gate.ts "$RUNNER_TEMP/work/$REPORT.json" "$RUNNER_TEMP/fix"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: decision-${{ inputs.report }}
+          path: ${{ runner.temp }}/fix/decision.json
+          retention-days: 7
+
+  verify:
+    name: Chrome and Safari tests
+    needs: gate
+    if: needs.gate.outputs.mode == 'pr' || needs.gate.outputs.mode == 'merge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # No shared npm cache in jobs that run fixer-written code, so nothing can be planted in it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: fix-${{ inputs.report }}
+          path: ${{ runner.temp }}/fix
+      - name: Apply the fix
+        run: git apply --index --whitespace=nowarn "$RUNNER_TEMP/fix/patch.diff"
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Database privacy tests
+        run: npm test
+      - name: Install Chromium and WebKit
+        run: npx playwright install --with-deps chromium webkit
+      - name: Start a local Supabase
+        run: npm run db:start
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+      - name: Run in Chrome and Safari (desktop and phone)
+        run: npm run test:e2e
+
+  publish:
+    needs: [fix, gate, verify]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      REPORT: ${{ inputs.report }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERIFY_RESULT: ${{ needs.verify.result }}
+      NO_MERGE: ${{ inputs.no_merge }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: bug-work
+          path: ${{ runner.temp }}/work
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: fix-${{ inputs.report }}
+          path: ${{ runner.temp }}/fix
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: decision-${{ inputs.report }}
+          path: ${{ runner.temp }}/fix
+      - name: Open the pull request, merge if allowed, and record the outcome
+        run: node scripts/bugs/publish.ts "$RUNNER_TEMP/work/$REPORT.json" "$RUNNER_TEMP/fix"

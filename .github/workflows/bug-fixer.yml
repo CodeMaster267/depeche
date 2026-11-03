@@ -1,0 +1,94 @@
+name: Daily bug fixer
+
+# Once a day, reads new bug reports from the app, sorts real bugs from the rest (Claude Sonnet),
+# and tries to fix up to two real bugs (Claude Opus, medium effort). Each fix goes through
+# .github/workflows/bug-fix-one.yml: fix, gate, Chrome and Safari tests, then a pull request that
+# merges itself only when every rule in scripts/bugs/policy.ts allows it. Anything else waits for
+# Hasan as a pull request or an issue (GitHub emails him).
+#
+# Needs two repository secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL     already set for "Update the live database"
+#   ANTHROPIC_API_KEY   an Anthropic API key; until it exists this does nothing
+# It can also be run by hand from the Actions tab, with merging turned off if you like.
+
+on:
+  schedule:
+    - cron: "17 4 * * *" # 04:17 UTC every day
+  workflow_dispatch:
+    inputs:
+      no_merge:
+        description: Open pull requests but never merge them
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: bug-fixer
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: Read and sort new reports
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    outputs:
+      reports: ${{ steps.collect.outputs.reports }}
+      count: ${{ steps.collect.outputs.count }}
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      WORK_DIR: ${{ runner.temp }}/work
+    steps:
+      - name: Check the secrets are set
+        id: ready
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ] || [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::notice::SUPABASE_DB_URL or ANTHROPIC_API_KEY is not set yet, so no reports were read."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.ready.outputs.go == 'true'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - if: steps.ready.outputs.go == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Read and sort new reports
+        id: collect
+        if: steps.ready.outputs.go == 'true'
+        run: node scripts/bugs/collect.ts
+      - if: steps.collect.outputs.count > 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: bug-work
+          path: ${{ runner.temp }}/work
+          retention-days: 7
+
+  fix:
+    name: Fix
+    needs: collect
+    if: needs.collect.outputs.count > 0
+    strategy:
+      matrix:
+        report: ${{ fromJSON(needs.collect.outputs.reports) }}
+      max-parallel: 1
+      fail-fast: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    uses: ./.github/workflows/bug-fix-one.yml
+    with:
+      report: ${{ matrix.report }}
+      no_merge: ${{ inputs.no_merge == true }}
+    secrets: inherit

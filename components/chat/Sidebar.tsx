@@ -120,6 +120,7 @@ export function Sidebar({
             <span className="mt-1 flex gap-2 text-[14px]">
               {isAdmin ? <NavLink href="/family">Family</NavLink> : null}
               <NavLink href="/account">Account</NavLink>
+              <NavLink href={`/report?from=${encodeURIComponent(activeId ? `/c/${activeId}` : "/")}`}>Report a bug</NavLink>
             </span>
           </span>
         </div>
