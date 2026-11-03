@@ -75,6 +75,8 @@ async function ready(page: Page) {
   await page.goto("/");
   // WebKit sometimes skips init scripts on a navigation; make sure the fakes are in place.
   await page.evaluate(installFakes);
+  // The voice buttons appear once the page is running, so typing before then isn't lost.
+  await expect(page.getByRole("button", { name: "Voice chat" })).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
