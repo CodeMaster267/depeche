@@ -9,8 +9,9 @@ import { speakable } from "@/lib/voice/text";
  *   used both to record and to play.
  * - Audio is recorded as plain 16 kHz WAV, which every provider accepts and every browser can
  *   make, rather than MediaRecorder's formats, which differ between Safari and Chrome.
- * - Voice chat opens the microphone once per conversation and only listens between replies;
- *   home-screen apps on iPhone may ask for permission again every time it is reopened.
+ * - The microphone is let go of before a reply is played. While a page holds the mic, iPhones and
+ *   iPads treat it like a call: sound can go to the built-in speaker instead of headphones, and
+ *   quieter. Safari's audio session is also switched between "play-and-record" and "playback".
  */
 
 let shared: AudioContext | null = null;
@@ -49,18 +50,42 @@ export function unlockAudio(): AudioContext {
 }
 let primedVoice = false;
 
+type AudioSessionType = "auto" | "playback" | "play-and-record";
+
+/**
+ * Tells Safari (16.4 and later) how the page is using sound, so it routes it like media: to the
+ * headphones when they're in, mixed sensibly with other apps. Other browsers ignore it.
+ */
+export function setAudioSession(type: AudioSessionType) {
+  try {
+    const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
+    if (session && session.type !== type) session.type = type;
+  } catch {
+    // Not supported here.
+  }
+}
+
 export function micSupported(): boolean {
   return typeof window !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 }
 
-export function openMicStream(): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
+let openMics = 0;
+const micOpen = () => openMics > 0;
+
+export async function openMicStream(): Promise<MediaStream> {
+  setAudioSession("play-and-record");
+  const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
   });
+  openMics++;
+  return stream;
 }
 
 export function closeMicStream(stream: MediaStream | null | undefined) {
-  for (const t of stream?.getTracks() ?? []) t.stop();
+  if (!stream || stream.getTracks().every((t) => t.readyState === "ended")) return;
+  for (const t of stream.getTracks()) t.stop();
+  openMics = Math.max(0, openMics - 1);
+  if (!openMics) setAudioSession("playback");
 }
 
 export type MicOptions = {
@@ -224,8 +249,31 @@ export function encodeWav(chunks: Float32Array[], length: number, rate: number):
 }
 
 /** Sends a recording to be written out as text. */
+const LANGUAGES_KEY = "depeche:voice-languages";
+
+/** The languages this person speaks, main one first: their choice, or the device's languages. */
+export function voiceLanguages(): string[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LANGUAGES_KEY) ?? "null");
+    if (Array.isArray(saved) && saved.length && saved.every((l) => typeof l === "string")) return saved.slice(0, 4);
+  } catch {}
+  const device = (navigator.languages?.length ? navigator.languages : [navigator.language || "en"]).map((l) => l.slice(0, 2).toLowerCase());
+  return [...new Set(device)].slice(0, 4);
+}
+
+export function saveVoiceLanguages(languages: string[]) {
+  try {
+    localStorage.setItem(LANGUAGES_KEY, JSON.stringify(languages.slice(0, 4)));
+  } catch {}
+}
+
 export async function listen(wav: Blob, signal?: AbortSignal): Promise<string> {
-  const res = await fetch("/api/voice/listen", { method: "POST", headers: { "content-type": "audio/wav" }, body: wav, signal });
+  const res = await fetch("/api/voice/listen", {
+    method: "POST",
+    headers: { "content-type": "audio/wav", "x-languages": voiceLanguages().join(",") },
+    body: wav,
+    signal,
+  });
   const body = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
   if (!res.ok) throw new Error(body.error ?? "Couldn't hear that. Try again.");
   return body.text ?? "";
@@ -235,27 +283,49 @@ export async function listen(wav: Blob, signal?: AbortSignal): Promise<string> {
  * Reads text aloud: in the family's provider voice when it can, otherwise in the browser's own
  * voice. Resolves when it has finished, or straight away if `signal` aborts.
  */
-export async function say(text: string, signal: AbortSignal, onFallback?: (why: string) => void): Promise<void> {
-  const ctx = shared;
-  if (!speakable(text)) return;
-  let audio: { pcm: ArrayBuffer; rate: number } | null = null;
+/** A reply's audio from the family's provider, or why the device's own voice must read it. */
+export type Voiced = { pcm: ArrayBuffer; rate: number } | { fallback: string };
+
+/** Fetches the spoken audio for some text. Start it early: generating speech takes a few seconds. */
+export async function fetchVoice(text: string, signal: AbortSignal): Promise<Voiced> {
   try {
     const res = await fetch("/api/voice/speak", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
-      // A slow voice service shouldn't stall the conversation: the browser's voice takes over.
-      signal: within(signal, 25_000),
+      // A slow voice service shouldn't stall the conversation: the device's voice takes over.
+      signal: within(signal, 20_000),
     });
-    if (res.ok) audio = { pcm: await res.arrayBuffer(), rate: Number(res.headers.get("x-sample-rate") ?? 24_000) };
-    else onFallback?.(((await res.json().catch(() => ({}))) as { error?: string }).error ?? "The voice service didn't answer.");
+    if (res.ok) {
+      const pcm = await res.arrayBuffer();
+      if (pcm.byteLength > 1) return { pcm, rate: Number(res.headers.get("x-sample-rate") ?? 24_000) };
+    }
+    return { fallback: ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "The voice service didn't answer." };
   } catch {
-    if (signal.aborted) return;
-    onFallback?.("The voice service took too long.");
+    return { fallback: "The voice service took too long." };
   }
+}
+
+/** Plays what `fetchVoice` returned, or reads the text in the device's own voice. */
+export async function playVoice(text: string, voiced: Voiced, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return;
-  if (audio && audio.pcm.byteLength > 1 && ctx) return playPcm(ctx, audio.pcm, audio.rate, signal);
+  if ("pcm" in voiced && shared) {
+    if (!micOpen()) setAudioSession("playback");
+    return playPcm(shared, voiced.pcm, voiced.rate, signal);
+  }
   return sayWithBrowser(text, signal);
+}
+
+/**
+ * Reads text aloud: in the family's provider voice when it can, otherwise in the device's own
+ * voice. Resolves when it has finished, or straight away if `signal` aborts.
+ */
+export async function say(text: string, signal: AbortSignal, onFallback?: (why: string) => void): Promise<void> {
+  if (!speakable(text)) return;
+  const voiced = await fetchVoice(text, signal);
+  if (signal.aborted) return;
+  if ("fallback" in voiced) onFallback?.(voiced.fallback);
+  return playVoice(text, voiced, signal);
 }
 
 function playPcm(ctx: AudioContext, bytes: ArrayBuffer, rate: number, signal: AbortSignal): Promise<void> {

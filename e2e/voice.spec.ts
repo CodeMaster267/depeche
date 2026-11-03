@@ -112,9 +112,9 @@ test("voice chat listens, sends, reads the reply aloud and listens again", async
   await expect(dialog.getByTestId("voice-answer")).toContainText("worked answer");
   await expect(dialog.getByTestId("voice-answer")).not.toContainText("$$");
   await expect.poll(() => page.evaluate(() => (window as unknown as { __played: number }).__played), { timeout: 15_000 }).toBeGreaterThan(0);
-  // Then it's your turn again: it listens and sends a second message, on the same microphone.
+  // Then it's your turn again: the microphone, let go of while the answer played, opens again.
   await expect(page.getByTestId("user-message")).toHaveCount(2, { timeout: 45_000 });
-  expect(await page.evaluate(() => (window as unknown as { __speech: number }).__speech)).toBe(1);
+  expect(await page.evaluate(() => (window as unknown as { __speech: number }).__speech)).toBeGreaterThan(1);
   await dialog.getByRole("button", { name: "End voice chat" }).click();
   await expect(dialog).toHaveCount(0);
   // What was said and answered is in the chat like typed messages.
@@ -131,25 +131,62 @@ test("a reply can be read aloud and stopped", async ({ page }) => {
   await page.getByRole("button", { name: "Send" }).click();
   const reply = page.getByTestId("reply").last();
   await expect(reply.getByRole("button", { name: "Copy reply" })).toBeVisible({ timeout: 15_000 });
-  await reply.getByRole("button", { name: "Read aloud" }).click();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __played: number }).__played), { timeout: 15_000 }).toBeGreaterThan(0);
+  // A new chat's page can re-render once more just after the reply finishes (its address changes),
+  // which can swallow a click made at that moment; click again if nothing started.
+  const played = () => page.evaluate(() => (window as unknown as { __played: number }).__played);
+  await expect(async () => {
+    if (await reply.getByRole("button", { name: "Read aloud" }).isVisible()) await reply.getByRole("button", { name: "Read aloud" }).click();
+    await expect.poll(played, { timeout: 5_000 }).toBeGreaterThan(0);
+  }).toPass({ timeout: 30_000 });
   await expect(reply.getByRole("button", { name: "Stop reading" })).toBeVisible();
   await reply.getByRole("button", { name: "Stop reading" }).click();
   await expect(reply.getByRole("button", { name: "Read aloud" })).toBeVisible();
 });
 
-test("voice chat can be muted and unmuted", async ({ page }) => {
+test("with the mic off, voice chat waits for a tap instead of locking", async ({ page }) => {
   await ready(page);
   await page.getByRole("button", { name: "Voice chat" }).click();
   const dialog = page.getByRole("dialog", { name: "Voice chat" });
   await expect(dialog.getByText("Listening")).toBeVisible();
   await dialog.getByRole("button", { name: "Mute" }).click();
-  await expect(dialog.getByText("Muted")).toBeVisible();
-  // Muted, nothing is heard or sent, even when the "voice" plays.
+  await expect(dialog.getByText("Mic off")).toBeVisible();
+  // Mic off, nothing is heard or sent, even when the "voice" plays.
   await page.waitForTimeout(5000);
   await expect(dialog.getByTestId("voice-you")).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Unmute" }).first().click();
+  // A tap on the circle still lets you talk once, without turning the mic back on for good.
+  await dialog.getByRole("button", { name: "Tap to talk" }).click();
   await expect(dialog.getByTestId("voice-you")).toHaveText("What is the quadratic formula?", { timeout: 15_000 });
+  await expect(dialog.getByTestId("voice-answer")).toContainText("worked answer", { timeout: 15_000 });
+  await expect(dialog.getByText("Mic off")).toBeVisible({ timeout: 45_000 });
+  await dialog.getByRole("button", { name: "Unmute" }).click();
+  await expect(dialog.getByText("Listening")).toBeVisible();
   await dialog.getByRole("button", { name: "End voice chat" }).click();
   await expect(dialog).toHaveCount(0);
+});
+
+test("with sound off, the answer shows as captions and nothing plays", async ({ page }) => {
+  test.setTimeout(90_000);
+  await ready(page);
+  await page.getByRole("button", { name: "Voice chat" }).click();
+  const dialog = page.getByRole("dialog", { name: "Voice chat" });
+  await dialog.getByRole("button", { name: "Turn sound off" }).click();
+  await expect(dialog.getByRole("button", { name: "Turn sound on" })).toBeVisible();
+  await expect(dialog.getByTestId("voice-answer")).toContainText("worked answer", { timeout: 30_000 });
+  // Your turn again once the answer is written, with nothing read aloud.
+  await expect(page.getByTestId("user-message")).toHaveCount(2, { timeout: 45_000 });
+  expect(await page.evaluate(() => (window as unknown as { __played: number }).__played)).toBe(0);
+  await dialog.getByRole("button", { name: "End voice chat" }).click();
+});
+
+test("the languages you speak can be picked", async ({ page }) => {
+  await ready(page);
+  await page.getByRole("button", { name: "Voice chat" }).click();
+  const dialog = page.getByRole("dialog", { name: "Voice chat" });
+  await dialog.getByRole("button", { name: /^Languages:/ }).click();
+  await dialog.getByRole("group", { name: "Languages you speak" }).getByRole("button", { name: "Urdu" }).click();
+  await expect(dialog.getByRole("button", { name: /^Languages:.*Urdu/ })).toBeVisible();
+  // Writing out what you said sends both languages.
+  const sent = page.waitForRequest((r) => r.url().endsWith("/api/voice/listen"));
+  expect((await sent).headers()["x-languages"]).toContain("ur");
+  await dialog.getByRole("button", { name: "End voice chat" }).click();
 });

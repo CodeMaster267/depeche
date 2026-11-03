@@ -63,7 +63,34 @@ export function wavSeconds(wav: Uint8Array): number {
   return (wav.length - 44) / (rate * channels * (bits / 8));
 }
 
-export async function transcribe(provider: Provider, apiKey: string, wav: Uint8Array, signal: AbortSignal): Promise<Transcript> {
+/** English names for language codes ("ur" → "Urdu"). */
+export function languageName(code: string): string {
+  try {
+    return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+/**
+ * A short line telling the transcriber which languages to expect. People often mix two in one
+ * sentence (English and Urdu, say), so the language is suggested rather than forced: forcing one
+ * would translate or garble the other.
+ */
+export function languageHint(languages: string[]): string {
+  const names = languages.map(languageName);
+  if (!names.length) return "";
+  if (names.length === 1) return `This is a conversation in ${names[0]}.`;
+  return `This is a conversation in ${names.slice(0, -1).join(", ")} and ${names.at(-1)}, sometimes mixing them in one sentence.`;
+}
+
+/**
+ * `languages` are the languages the person speaks (two-letter codes, like "en" and "ur"), from the
+ * voice settings. Without them, Whisper guesses from the sound alone and, on a short or noisy clip,
+ * can pick a language nobody spoke.
+ */
+export async function transcribe(provider: Provider, apiKey: string, wav: Uint8Array, signal: AbortSignal, languages: string[] = []): Promise<Transcript> {
+  const hint = languageHint(languages);
   const seconds = wavSeconds(wav);
   if (fakeAi()) {
     // Tests: a fixed sentence, so a voice turn can be followed end to end.
@@ -73,10 +100,23 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
     // Groq speaks OpenAI's API, so the same client works with Groq's address.
     const client = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1", maxRetries: 0, timeout: 15_000 });
     const g = VOICE.transcribe.groq;
-    const res = await client.audio.transcriptions.create(
-      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: g.model, response_format: "json" },
-      { signal },
-    );
+    const ask = (language?: string) =>
+      client.audio.transcriptions.create(
+        {
+          file: new File([wav as BlobPart], "speech.wav", { type: "audio/wav" }),
+          model: g.model,
+          response_format: "verbose_json",
+          ...(hint ? { prompt: hint } : {}),
+          ...(language ? { language } : {}),
+        },
+        { signal },
+      ) as Promise<{ text: string; language?: string }>;
+    let res = await ask();
+    // Whisper names the language it heard. If that's none the person speaks, it misheard noise
+    // as another language: ask again, held to their main language.
+    const heard = (res.language ?? "").toLowerCase();
+    const known = languages.map((l) => languageName(l).toLowerCase());
+    if (heard && known.length && !known.includes(heard) && !languages.includes(heard)) res = await ask(languages[0]);
     return {
       text: res.text.trim(),
       model: g.model,
@@ -89,7 +129,7 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
   if (provider === "openai") {
     const client = new OpenAI({ apiKey, maxRetries: 1 });
     const res = await client.audio.transcriptions.create(
-      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: VOICE.transcribe.openai.model },
+      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: VOICE.transcribe.openai.model, ...(hint ? { prompt: hint } : {}) },
       { signal },
     );
     return {
@@ -112,7 +152,7 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
             parts: [
               { inlineData: { mimeType: "audio/wav", data: Buffer.from(wav).toString("base64") } },
               {
-                text: "Transcribe this recording exactly as spoken, in the language spoken, with normal punctuation. Reply with only the words said. If nobody speaks, reply with nothing.",
+                text: `Transcribe this recording exactly as spoken, with normal punctuation. ${hint} If languages are mixed, write each part in the language and script it was spoken in; never translate. Reply with only the words said. If nobody speaks, reply with nothing.`,
               },
             ],
           },
@@ -172,7 +212,8 @@ export async function speak(provider: Provider, apiKey: string, text: string, si
     const ai = new GoogleGenAI({ apiKey });
     const res = await ai.models.generateContent({
       model: g.model,
-      contents: [{ role: "user", parts: [{ text: `Read this aloud in a warm, natural voice:\n\n${text}` }] }],
+      // Only the words to say: any instruction placed here gets read out as well.
+      contents: [{ role: "user", parts: [{ text }] }],
       config: {
         abortSignal: signal,
         responseModalities: ["AUDIO"],
