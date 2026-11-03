@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { AppHeader, Page, Section } from "@/components/AppHeader";
 import { requireMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
-import { PROVIDERS } from "@/lib/ai/models";
+import { PROVIDERS, modelsFor } from "@/lib/ai/models";
 import { CreateFamilyForm, InviteForm, MemberRow, ProviderKeyRow, RevokeButton } from "./forms";
 
 export const metadata: Metadata = { title: "Family · Depeche" };
@@ -25,7 +25,7 @@ export default async function Family() {
   monthStart.setUTCDate(1);
   monthStart.setUTCHours(0, 0, 0, 0);
 
-  const [{ data: family }, { data: members }, { data: invites }, { data: usage }, { data: families }, { data: keys }] = await Promise.all([
+  const [{ data: family }, { data: members }, { data: invites }, { data: usage }, { data: families }, { data: keys }, { data: keyModels }] = await Promise.all([
     supabase.from("families").select("name").eq("id", me.profile.family_id).single<{ name: string }>(),
     supabase
       .from("profiles")
@@ -48,7 +48,9 @@ export default async function Family() {
       .select("provider, last4, updated_at")
       .eq("family_id", me.profile.family_id)
       .returns<{ provider: string; last4: string; updated_at: string }[]>(),
+    supabase.rpc("family_models"),
   ]);
+  const usable = new Map(((keyModels as { provider: string; models: string[] | null }[] | null) ?? []).map((k) => [k.provider, k.models]));
 
   const spent = new Map<string, number>();
   for (const u of usage ?? []) spent.set(u.owner_id, (spent.get(u.owner_id) ?? 0) + Number(u.cost_usd));
@@ -79,6 +81,7 @@ export default async function Family() {
                 keyUrl={p.keyUrl}
                 hint={p.keyHint}
                 saved={(keys ?? []).find((k) => k.provider === p.id)}
+                models={modelsFor([{ provider: p.id, models: usable.get(p.id) }]).map((m) => m.short)}
               />
             ))}
           </ul>

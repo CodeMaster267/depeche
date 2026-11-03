@@ -3,6 +3,8 @@ import type { Me } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { chooseDefault, modelsFor } from "@/lib/ai/models";
+import { after } from "next/server";
+import { refreshKeyModels, staleKeys, type KeyModels } from "@/lib/ai/key-models";
 import { activePath, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 
 export type Shell = {
@@ -28,10 +30,14 @@ export async function loadShell(me: Me): Promise<Shell> {
       .order("updated_at", { ascending: false })
       .limit(500)
       .returns<ChatRow[]>(),
-    db.rpc("family_providers"),
+    db.rpc("family_models"),
     supabaseAdmin().rpc("month_spend", { p_person: me.userId }),
   ]);
-  const models = modelsFor((providers as string[] | null) ?? []);
+  const keys = (providers as KeyModels[] | null) ?? [];
+  const models = modelsFor(keys);
+  // Keep the list of usable models fresh, after the page has been sent.
+  const stale = staleKeys(keys);
+  if (stale.length) after(() => refreshKeyModels(me.profile.family_id, stale.map((k) => k.provider)));
   const { data: last } = await db.from("profiles").select("last_model").eq("id", me.userId).maybeSingle<{ last_model: string | null }>();
   return {
     name: me.profile.display_name,

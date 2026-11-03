@@ -59,6 +59,33 @@ test.describe("family keys", () => {
     await row.getByRole("button", { name: "Remove" }).click();
     await expect(row.getByText("Not added")).toBeVisible();
   });
+
+  test("models a key can't use are hidden", async ({ page }, info) => {
+    test.skip(info.project.name !== "chrome-desktop", "changes shared family keys, so it runs once");
+    await signInOwner(page);
+    await ensureGoogleKey(page);
+    const row = page.getByTestId("provider-google");
+    const replaceWith = async (key: string) => {
+      await row.getByRole("button", { name: "Replace" }).click();
+      await row.getByLabel("Google (Gemini) API key").fill(key);
+      await row.getByRole("button", { name: "Save key" }).click();
+      await expect(row.getByText(/ends in/)).toBeVisible();
+    };
+
+    // A free-tier key can't use Gemini 4 Argon, so nobody is offered it.
+    await replaceWith("test-google-free-key-000000free");
+    await expect(row.getByTestId("key-models")).toHaveText("Can use Gemini 3.8 Flash, Flash-Lite");
+    await page.goto("/");
+    await page.getByRole("button", { name: /Change model/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Choose a model" });
+    await expect(dialog.getByRole("button", { name: /Gemini 3\.8 Flash/ })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: /Argon/ })).toHaveCount(0);
+
+    // A full key brings it back.
+    await page.goto("/family");
+    await replaceWith("test-google-key-1234567890abcd");
+    await expect(row.getByTestId("key-models")).toHaveText("Can use Gemini 4 Argon, Gemini 3.8 Flash, Flash-Lite");
+  });
 });
 
 test.describe("chatting", () => {

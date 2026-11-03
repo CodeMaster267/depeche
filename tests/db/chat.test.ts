@@ -91,6 +91,31 @@ describe("which providers a family has", () => {
   });
 });
 
+describe("which models a key can use", () => {
+  it("are recorded by the server and shown to the family as model names only", async () => {
+    await asServer(`select public.set_key_models($1, 'google', $2)`, [F.a, ["gemini-3.8-flash", "gemini-3.5-flash-lite"]]);
+    const seen = await rows<{ provider: string; models: string[] | null }>(
+      db,
+      P.amir,
+      "select provider, models from public.family_models()",
+    );
+    expect(seen).toEqual([
+      { provider: "anthropic", models: null },
+      { provider: "google", models: ["gemini-3.8-flash", "gemini-3.5-flash-lite"] },
+    ]);
+    expect(await rows(db, P.bea, "select provider, models from public.family_models()")).toEqual([
+      { provider: "openai", models: null },
+    ]);
+  });
+
+  it("cannot be changed from the browser", async () => {
+    await expect(
+      as(db, P.hasan, (tx) => tx.query(`select public.set_key_models($1, 'google', '{gemini-4-argon}')`, [F.a])),
+    ).rejects.toThrow(/permission denied/);
+    await expect(rows(db, null, "select * from public.family_models()")).rejects.toThrow(/permission denied/);
+  });
+});
+
 describe("model choice", () => {
   it("people can remember their own last model", async () => {
     await as(db, P.amir, (tx) => tx.query("update profiles set last_model = 'claude-sonnet-5-5' where id = $1", [P.amir]));

@@ -7,7 +7,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { newInviteToken } from "@/lib/tokens";
 import { cleanEmail, cleanName, passwordProblem } from "@/lib/validate";
 import { encryptSecret, toBytea } from "@/lib/crypto";
-import { checkKey } from "@/lib/ai/providers";
+import { listKeyModels } from "@/lib/ai/providers";
 import type { Provider } from "@/lib/ai/models";
 
 export type ActionState = { error?: string; ok?: string; link?: string } | undefined;
@@ -98,7 +98,8 @@ export async function saveProviderKey(provider: string, _: ActionState, form: Fo
   if (me.profile.role !== "admin") return { error: "Only a family admin can add keys." };
   const key = String(form.get("key") ?? "").trim();
   if (key.length < 20 || key.length > 400 || /\s/.test(key)) return { error: "That doesn't look like a key. Copy it again." };
-  if (!(await checkKey(provider as Provider, key))) {
+  const usable = await listKeyModels(provider as Provider, key);
+  if (!usable) {
     return { error: "The provider didn't accept that key. Check it's copied in full and that billing is set up." };
   }
   const { error } = await supabaseAdmin().rpc("save_provider_key", {
@@ -108,6 +109,7 @@ export async function saveProviderKey(provider: string, _: ActionState, form: Fo
     p_last4: key.slice(-4),
   });
   if (error) return { error: friendly(error) };
+  await supabaseAdmin().rpc("set_key_models", { p_family: me.profile.family_id, p_provider: provider, p_models: usable });
   revalidatePath("/family");
   revalidatePath("/");
   return { ok: "Key saved. Its models are ready for everyone in your family." };

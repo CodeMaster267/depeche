@@ -149,12 +149,14 @@ export function ProviderKeyRow({
   keyUrl,
   hint,
   saved,
+  models = [],
 }: {
   provider: string;
   name: string;
   keyUrl: string;
   hint: string;
   saved?: KeyInfo;
+  models?: string[];
 }) {
   const [editing, setEditing] = useState(!saved);
   const [state, action, pending] = useActionState(saveProviderKey.bind(null, provider), undefined);
@@ -176,6 +178,11 @@ export function ProviderKeyRow({
               "Not added"
             )}
           </span>
+          {saved && models.length ? (
+            <span className="mt-0.5 block text-[13px] text-mute" data-testid="key-models">
+              Can use {models.join(", ")}
+            </span>
+          ) : null}
         </span>
         {saved && !editing ? (
           <span className="flex shrink-0 gap-4 text-[15px]">
