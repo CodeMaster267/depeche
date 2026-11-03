@@ -2,7 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { FunctionCallingConfigMode, GoogleGenAI, type Part } from "@google/genai";
-import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
+import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canLookUp, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
 import { MAX_OUTPUT } from "@/lib/ai/budget";
 import { CHAT_SEARCH_TOOL, MAX_CHAT_SEARCHES, type ChatSearch } from "@/lib/chat/search";
 import { GROQ_VISION_MODEL, groqReply } from "@/lib/ai/groq";
@@ -125,7 +125,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
         yield { type: "notice", text: `${req.model.name} ${why}, so ${attempt.model.name} answered instead.` };
       }
       // Telling a model it can search without giving it the tool makes some reply with nothing.
-      const lookup = attempt.model.provider === "groq" ? undefined : chatSearch;
+      const lookup = canLookUp(attempt.model.provider) ? chatSearch : undefined;
       const system = [req.system, search ? SEARCH_HINT : "", lookup ? CHAT_SEARCH_HINT : ""].filter(Boolean).join(" ");
       const r = { ...req, model: attempt.model, search, chatSearch: lookup, system };
       const inner = fakeAi()
@@ -153,7 +153,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       if (wrote) break;
       // If a provider won't take the chat-search tool (some can't mix it with their own web
       // search), answer without it rather than failing or dropping web search.
-      if (chatSearch && attempt.model.provider !== "groq" && status(e) === 400) {
+      if (chatSearch && canLookUp(attempt.model.provider) && status(e) === 400) {
         chatSearch = undefined;
         console.error("[chat] chat search tool refused, answering without it", detail(e));
         i--;

@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { MODELS, PROVIDERS, PROVIDER_NAME, canSearch, estimateCost, findModel, modelsFor, searchCost } from "@/lib/ai/models";
+import { MODELS, PROVIDERS, PROVIDER_NAME, canLookUp, canSearch, estimateCost, findModel, modelsFor, searchCost } from "@/lib/ai/models";
 import { planReply, MAX_OUTPUT } from "@/lib/ai/budget";
 
 vi.mock("server-only", () => ({}));
@@ -81,6 +81,10 @@ describe("providers list", () => {
     expect(canSearch(findModel("deepseek-flash"))).toBe(false);
     expect(canSearch(findModel("grok-4.7"))).toBe(true);
     expect(searchCost("xai", 2)).toBeCloseTo(0.01);
+    // "Search this chat" isn't wired up for them yet, so it is never offered.
+    expect(canLookUp("deepseek")).toBe(false);
+    expect(canLookUp("xai")).toBe(false);
+    expect(canLookUp("anthropic")).toBe(true);
     expect(MODELS.filter((m) => m.provider === "deepseek" || m.provider === "xai").every((m) => m.price.input > 0 && m.price.output > 0)).toBe(true);
   });
 

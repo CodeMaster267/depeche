@@ -139,6 +139,14 @@ export function canSearch(model: Pick<Model, "id" | "provider"> | undefined): bo
   return model.provider !== "groq" || model.id.startsWith("openai/gpt-oss");
 }
 
+/**
+ * Whether Depeche gives this provider's models the "search this chat" tool. Groq's free tier is too
+ * small for the extra requests, and DeepSeek and xAI don't have it wired up yet.
+ */
+export function canLookUp(provider: Provider): boolean {
+  return provider !== "groq" && provider !== "deepseek" && provider !== "xai";
+}
+
 export const PROVIDER_NAME: Record<Provider, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google", groq: "Groq", deepseek: "DeepSeek", xai: "xAI" };
 
 /** The most searches one reply may run, which bounds what a single reply's searching can cost. */
