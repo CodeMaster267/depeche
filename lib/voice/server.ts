@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getMe, type Me } from "@/lib/auth/session";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
-import type { Provider } from "@/lib/ai/models";
+import { PROVIDER_NAME, type Provider } from "@/lib/ai/models";
 import { voiceProviders } from "@/lib/voice/speech";
 import { allow } from "@/lib/rate-limit";
 
@@ -104,7 +104,7 @@ export function reason(provider: Provider, e: unknown): { code: "busy" | "key" |
   const status = (e as { status?: unknown })?.status;
   const said = detail(e);
   console.error("[voice]", provider, typeof status === "number" ? status : "", said);
-  const name = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" }[provider];
+  const name = PROVIDER_NAME[provider];
   const code =
     status === 429 || /quota|rate limit|resource.?exhausted/i.test(said)
       ? "busy"
