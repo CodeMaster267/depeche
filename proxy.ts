@@ -6,7 +6,7 @@ import { createServerClient } from "@supabase/ssr";
  * devices) and sends anyone who isn't signed in to the sign-in page. Pages still check the
  * profile themselves; this is only the first gate.
  */
-const PUBLIC = ["/sign-in", "/setup", "/invite/", "/auth/", "/api/keep-alive"];
+const PUBLIC = ["/sign-in", "/setup", "/invite/", "/auth/", "/api/keep-alive", "/api/cleanup"];
 
 export async function proxy(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;

@@ -1,4 +1,5 @@
 /** Chat data shared by the server and the browser. */
+import type { FileRef } from "./files";
 
 /** A web page a reply's web search used. Only http(s) links are ever kept. */
 export type Source = { url: string; title: string; domain?: string };
@@ -10,6 +11,7 @@ export type MessageRow = {
   role: "user" | "assistant" | "system";
   content: {
     text?: string;
+    files?: FileRef[];
     notice?: string;
     error?: string;
     cost?: number;

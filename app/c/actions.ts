@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { requireMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
 import { loadChat, loadShell } from "@/lib/chat/load";
+import { UPLOAD_BUCKET } from "@/lib/chat/files";
+import type { MessageRow } from "@/lib/chat/thread";
 
 /**
  * Chat housekeeping. Everything runs with the person's own session, so row-level security makes
@@ -33,7 +35,18 @@ export async function pinChat(chatId: string, pinned: boolean) {
 
 export async function deleteChat(chatId: string) {
   const me = await requireMe();
-  await (await supabaseServer()).from("chats").delete().eq("id", chatId).eq("owner_id", me.userId);
+  const db = await supabaseServer();
+  // Its files go straight away too, not at the next clean-up.
+  const { data: withFiles } = await db
+    .from("messages")
+    .select("content")
+    .eq("chat_id", chatId)
+    .eq("owner_id", me.userId)
+    .not("content->files", "is", null)
+    .returns<{ content: MessageRow["content"] }[]>();
+  const paths = (withFiles ?? []).flatMap((m) => (m.content.files ?? []).map((f) => f.path));
+  if (paths.length) await db.storage.from(UPLOAD_BUCKET).remove(paths);
+  await db.from("chats").delete().eq("id", chatId).eq("owner_id", me.userId);
   revalidatePath("/", "layout");
 }
 
