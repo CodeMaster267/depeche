@@ -54,7 +54,10 @@ jobs:
           DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
           BACKUP_PASSPHRASE: local-drill-passphrase-not-a-secret
         run: |
-          scripts/backup/backup.sh "$RUNNER_TEMP/backup"
+          # The upload tests leave files in local Storage, so the drill backs those up too,
+          # with the local project's own address and key (written to .env.local by db:start).
+          set -a; . ./.env.local; set +a
+          SUPABASE_URL="$NEXT_PUBLIC_SUPABASE_URL" scripts/backup/backup.sh "$RUNNER_TEMP/backup"
           scripts/backup/restore.sh "$RUNNER_TEMP"/backup/*.gpg "$(scripts/backup/scratch-db.sh)"
       - name: Keep the report if something failed
         if: failure()
