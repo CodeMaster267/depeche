@@ -7,6 +7,7 @@ import {
   MAX_FILE_BYTES,
   MAX_FILES_PER_MESSAGE,
   UPLOAD_BUCKET,
+  refusal,
   sizeLabel,
   storedType,
   type FileRef,
@@ -26,7 +27,7 @@ export type Pending = {
 
 /** What the file picker offers. Other kinds can't be sent to a model. */
 export const ACCEPT =
-  "image/*,application/pdf,.pdf,text/*,.md,.csv,.tsv,.json,.jsonl,.xml,.yaml,.yml,.toml,.log,.html,.css,.js,.jsx,.ts,.tsx,.py,.rb,.go,.rs,.java,.kt,.swift,.c,.h,.cpp,.cs,.php,.sh,.sql,.tex";
+  "image/*,application/pdf,.pdf,text/*,.docx,.xlsx,.pptx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,.md,.csv,.tsv,.json,.jsonl,.xml,.yaml,.yml,.toml,.log,.html,.css,.js,.jsx,.ts,.tsx,.py,.rb,.go,.rs,.java,.kt,.swift,.c,.h,.cpp,.cs,.php,.sh,.sql,.tex";
 
 const LONG_EDGE = 2048;
 
@@ -84,7 +85,7 @@ export function useAttachments(userId: string) {
           size: file.size,
           preview: type?.startsWith("image/") ? URL.createObjectURL(file) : undefined,
           status: type ? "uploading" : "error",
-          error: type ? undefined : "Can't send this kind of file",
+          error: type ? undefined : refusal(file),
         },
       };
     });
