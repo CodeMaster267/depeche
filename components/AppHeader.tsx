@@ -2,19 +2,23 @@ import Link from "next/link";
 import { Wordmark } from "@/components/Wordmark";
 import { NavLink } from "@/components/Press";
 
+/** Three links fit beside the wordmark on a phone with slightly narrower pills. */
+const PILL = "max-sm:px-3!";
+
 /** Top bar for signed-in pages. The wordmark stays clean here; the glitch is for the title card. */
 export function AppHeader({ isAdmin }: { isAdmin: boolean }) {
   return (
     <header
-      className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-bg/90 px-5 py-3 backdrop-blur"
+      className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-bg/90 px-4 py-3 backdrop-blur sm:px-5"
       style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
     >
       <Link href="/" className="press text-[20px]" aria-label="Depeche home">
         <Wordmark />
       </Link>
-      <nav className="flex items-center gap-2 text-[15px]">
-        {isAdmin ? <NavLink href="/family">Family</NavLink> : null}
-        <NavLink href="/account">Account</NavLink>
+      <nav className="flex items-center gap-1.5 text-[15px] sm:gap-2">
+        {isAdmin ? <NavLink href="/family" className={PILL}>Family</NavLink> : null}
+        <NavLink href="/memory" className={PILL}>Memory</NavLink>
+        <NavLink href="/account" className={PILL}>Account</NavLink>
       </nav>
     </header>
   );
