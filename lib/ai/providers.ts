@@ -103,7 +103,12 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       if (search && !isBusy(e) && status(e) !== 401) {
         search = false;
         console.error("[chat] search failed, answering without it", status(e), detail(e));
-        yield { type: "notice", text: "Web search wasn't available for this answer, so it comes from the model's own knowledge." };
+        const said = detail(e);
+        const name = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" }[attempt.model.provider];
+        yield {
+          type: "notice",
+          text: `Web search wasn't available for this answer, so it comes from the model's own knowledge.${said ? ` (${name} said: "${said}")` : ""}`,
+        };
         i--;
         continue;
       }
@@ -280,13 +285,19 @@ async function* googleReply({ model, apiKey, system, turns, signal, search }: Re
   const sources: Source[] = [];
   const queries = new Set<string>();
   let suggestions = "";
+  let wroteText = false;
+  let finish = "";
   for await (const chunk of stream) {
     const candidate = chunk.candidates?.[0];
     const text = candidate?.content?.parts
       ?.filter((p) => p.text && !p.thought)
       .map((p) => p.text)
       .join("");
-    if (text) yield { type: "text", text };
+    if (text) {
+      wroteText = true;
+      yield { type: "text", text };
+    }
+    if (candidate?.finishReason) finish = String(candidate.finishReason);
     const g = candidate?.groundingMetadata;
     if (g) {
       for (const q of g.webSearchQueries ?? []) {
@@ -307,6 +318,8 @@ async function* googleReply({ model, apiKey, system, turns, signal, search }: Re
       output = (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0) || output;
     }
   }
+  // A reply with no text at all says why, rather than leaving an empty space.
+  if (!wroteText) yield { type: "notice", text: `The model sent back an empty reply${finish && finish !== "STOP" ? ` (${finish.toLowerCase().replace(/_/g, " ")})` : ""}. Try again.` };
   if (sources.length) yield { type: "sources", sources };
   // Google bills each search query the model runs.
   if (queries.size || sources.length) yield { type: "searches", count: Math.max(queries.size, 1) };
