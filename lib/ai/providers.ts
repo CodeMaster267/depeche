@@ -131,10 +131,37 @@ function status(e: unknown): number | undefined {
   return typeof s === "number" ? s : undefined;
 }
 
+/** The provider's own explanation, unwrapped from the JSON some SDKs nest it in. */
+function detail(e: unknown): string {
+  let msg = e instanceof Error ? e.message : String(e ?? "");
+  for (let i = 0; i < 3; i++) {
+    try {
+      const parsed = JSON.parse(msg.slice(msg.indexOf("{"))) as { error?: { message?: string }; message?: string };
+      const inner = parsed.error?.message ?? parsed.message;
+      if (typeof inner !== "string" || inner === msg) break;
+      msg = inner;
+    } catch {
+      break;
+    }
+  }
+  const cause = (e as { cause?: unknown })?.cause;
+  if (cause instanceof Error && !msg.includes(cause.message)) msg += ` (${cause.message})`;
+  return msg.replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
 function describe(provider: Provider, e: unknown): string {
+  const text = friendlyError(provider, e);
+  const said = detail(e);
+  // Logged for debugging in Vercel; never includes the key.
+  console.error(`[chat] ${provider} error`, status(e), said);
+  const name = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" }[provider];
+  return said ? `${text} (${name} said: "${said}")` : text;
+}
+
+function friendlyError(provider: Provider, e: unknown): string {
   const name = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" }[provider];
   const code = status(e);
-  const msg = e instanceof Error ? e.message : "";
+  const msg = detail(e);
   if (code === 401 || code === 403 || /api key|unauthori[sz]ed|permission/i.test(msg))
     return `${name} didn't accept your family's key. Ask your family admin to check it in Family settings.`;
   if (provider === "google" && (code === 429 || /quota|rate limit|resource.?exhausted/i.test(msg)))
