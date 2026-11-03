@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import { MAX_SEARCHES, MODELS, findModel, type Model, type Provider } from "@/lib/ai/models";
+import { MAX_OUTPUT } from "@/lib/ai/budget";
 import type { Source } from "@/lib/chat/thread";
 import { webSource } from "@/lib/ai/sources";
 
@@ -39,12 +40,13 @@ export type ReplyRequest = {
   signal: AbortSignal;
   /** Let the model search the web with the provider's own search tool when it decides to. */
   search?: boolean;
+  /** The longest reply allowed, so it fits what was reserved against the person's limit. */
+  maxOutput?: number;
 };
 
 /** A provider error, worded for the person chatting. */
 export class ProviderError extends Error {}
 
-const MAX_OUTPUT = 32_000;
 
 /**
  * When a model is overloaded (Google's free tier often says "high demand"), try again twice, then
@@ -55,6 +57,12 @@ const BUSY_FALLBACK: Record<string, string> = {
   "gemini-4-argon": "gemini-3.8-flash",
   "gemini-3.5-flash-lite": "gemini-3.8-flash",
 };
+
+/** Every model that might answer when this one is chosen, so a spending hold covers the dearest. */
+export function modelsThatMayAnswer(model: Model): Model[] {
+  const backup = findModel(BUSY_FALLBACK[model.id]);
+  return backup ? [model, backup] : [model];
+}
 
 export function isBusy(e: unknown): boolean {
   const code = status(e);
@@ -140,7 +148,7 @@ const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-
 /** Long searches can pause a Claude turn; it is continued this many times at most. */
 const MAX_CONTINUES = 3;
 
-async function* anthropicReply({ model, apiKey, system, turns, signal, search }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* anthropicReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new Anthropic({ apiKey, maxRetries: 1 });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
@@ -168,7 +176,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search }:
     const stream = client.beta.messages.stream(
       {
         model: model.id,
-        max_tokens: MAX_OUTPUT,
+        max_tokens: maxOutput,
         system,
         messages: messages as never,
         output_config: { effort: "medium" },
@@ -248,7 +256,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search }:
   yield { type: "usage", input, output };
 }
 
-async function* openaiReply({ model, apiKey, system, turns, signal, search }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* openaiReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new OpenAI({ apiKey, maxRetries: 1 });
   const stream = await client.responses.create(
     {
@@ -269,7 +277,7 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search }: Re
             }
           : { role: t.role, content: t.text },
       ),
-      max_output_tokens: MAX_OUTPUT,
+      max_output_tokens: maxOutput,
       store: false,
       stream: true,
       ...(search ? { tools: [{ type: "web_search" as const }], max_tool_calls: MAX_SEARCHES } : {}),
@@ -311,7 +319,7 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search }: Re
   }
 }
 
-async function* googleReply({ model, apiKey, system, turns, signal, search }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* googleReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const ai = new GoogleGenAI({ apiKey });
   const stream = await ai.models.generateContentStream({
     model: model.id,
@@ -324,7 +332,7 @@ async function* googleReply({ model, apiKey, system, turns, signal, search }: Re
     })),
     config: {
       systemInstruction: system,
-      maxOutputTokens: MAX_OUTPUT,
+      maxOutputTokens: maxOutput,
       abortSignal: signal,
       ...(search ? { tools: [{ googleSearch: {} }] } : {}),
     },

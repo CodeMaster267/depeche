@@ -12,6 +12,9 @@ export type Profile = {
   display_name: string;
   username: string | null;
   monthly_cap_usd: string;
+  share_titles: boolean;
+  /** Signed in with a temporary password from their admin, so must choose their own first. */
+  must_change_password: boolean;
 };
 
 export type Me = { userId: string; email: string; profile: Profile };
@@ -23,16 +26,21 @@ export const getMe = cache(async (): Promise<Me | null> => {
   if (!data.user) return null;
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, family_id, role, is_app_owner, display_name, username, monthly_cap_usd")
+    .select("id, family_id, role, is_app_owner, display_name, username, monthly_cap_usd, share_titles, must_change_password")
     .eq("id", data.user.id)
     .maybeSingle<Profile>();
   if (!profile) return null;
   return { userId: data.user.id, email: data.user.email ?? "", profile };
 });
 
-export async function requireMe(): Promise<Me> {
+/**
+ * The signed-in person, or a redirect to sign in. Someone still on a temporary password is sent to
+ * choose their own first, except on the page where they do that.
+ */
+export async function requireMe({ allowTempPassword = false } = {}): Promise<Me> {
   const me = await getMe();
   if (!me) redirect("/sign-in");
+  if (me.profile.must_change_password && !allowTempPassword) redirect("/new-password");
   return me;
 }
 

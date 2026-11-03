@@ -43,4 +43,4 @@ export function ownerEmail(): string {
 }
 
 /** How long an invite link works. */
-export const INVITE_DAYS = 14;
+export const INVITE_DAYS = 7;

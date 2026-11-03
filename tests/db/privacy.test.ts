@@ -144,9 +144,21 @@ describe("members", () => {
 });
 
 describe("family admins", () => {
-  it("see their members' chat titles", async () => {
+  it("see no chat titles unless the member chooses to share them", async () => {
+    expect(await rows(db, P.hasan, "select title from chats")).toEqual([]);
+    // Amir turns sharing on for himself, through his own session.
+    await as(db, P.amir, (tx) => tx.query("update profiles set share_titles = true where id = $1", [P.amir]));
     const titles = await rows<{ title: string }>(db, P.hasan, "select title from chats");
     expect(titles.map((t) => t.title)).toEqual(["Chemistry revision"]);
+    await as(db, P.amir, (tx) => tx.query("update profiles set share_titles = false where id = $1", [P.amir]));
+    expect(await rows(db, P.hasan, "select title from chats")).toEqual([]);
+  });
+
+  it("cannot switch title sharing on for a member", async () => {
+    await as(db, P.hasan, (tx) => tx.query("update profiles set share_titles = true where id = $1", [P.amir]));
+    expect(await rows(db, P.amir, "select share_titles from profiles where id = $1", [P.amir])).toEqual([
+      { share_titles: false },
+    ]);
   });
 
   it("never see their members' messages or memories", async () => {
@@ -185,10 +197,13 @@ describe("family admins", () => {
       { display_name: "Bea" },
       { display_name: "Ben" },
     ]);
+    // Even a member who shares titles shares them only with their own family's admin.
+    await db.exec(`update profiles set share_titles = true where id in ('${P.amir}', '${P.ben}')`);
     expect((await rows<{ title: string }>(db, P.bea, "select title from chats")).map((t) => t.title)).toEqual([
       "Ben private chat",
     ]);
     expect(await rows(db, P.bea, "select * from chats where owner_id = $1", [P.amir])).toEqual([]);
+    await db.exec(`update profiles set share_titles = false`);
     expect(await rows(db, P.bea, "select * from usage_events where owner_id = $1", [P.amir])).toEqual([]);
     expect((await rows<{ last4: string }>(db, P.bea, "select last4 from provider_keys")).map((k) => k.last4)).toEqual([
       "z9y8",

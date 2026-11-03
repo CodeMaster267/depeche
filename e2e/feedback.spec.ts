@@ -35,7 +35,7 @@ test("header links look like buttons and mark the current page", async ({ page }
   await expect(page).toHaveURL(/\/account$/);
   await expect(page.getByRole("link", { name: "Account" })).toHaveAttribute("aria-current", "page");
   // Sign out sits at the top now, beside the email.
-  await expect(page.getByRole("button", { name: "Sign out" })).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeInViewport();
   expect(errors).toEqual([]);
 });
 
