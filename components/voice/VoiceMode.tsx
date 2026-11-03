@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, closeMicStream, listen, openMicStream, say, startSpeaking, stopSpeaking, unlockAudio, within } from "@/lib/voice/client";
+import { Mic, closeMicStream, fetchVoice, listen, openMicStream, playVoice, startSpeaking, stopSpeaking, unlockAudio, within, type Voiced } from "@/lib/voice/client";
 import { readyToSpeak, speakable } from "@/lib/voice/text";
 import { micProblem } from "./VoiceButtons";
-import { CloseIcon, MicIcon, MicOffIcon } from "./icons";
+import { CloseIcon, MicIcon, MicOffIcon, SpeakerIcon, SpeakerOffIcon } from "./icons";
+import { LanguagePicker } from "./LanguagePicker";
 
 export type VoiceMessage = { id: string; role: string; content: { text?: string; error?: string }; status: string; streaming?: boolean };
 
@@ -17,7 +18,7 @@ const LABEL: Record<Phase, string> = {
   thinking: "Thinking…",
   speaking: "Speaking",
   paused: "Tap to talk",
-  muted: "Muted",
+  muted: "Mic off",
 };
 
 /** How long each step may take before voice chat gives up and says so, instead of hanging. */
@@ -63,7 +64,14 @@ export function VoiceMode({
   const mic = useRef<Mic | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const speech = useRef<AbortController | null>(null);
-  const queue = useRef<string[]>([]);
+  /** Pieces of the answer waiting to be said, each with its audio already being made. */
+  const queue = useRef<{ text: string; voiced: Promise<Voiced> }[]>([]);
+  /** Cancels everything for the current answer: audio being made and audio playing. */
+  const answerCtl = useRef<AbortController | null>(null);
+  /** Once the provider's voice fails, the rest of the conversation uses the device's voice. */
+  const deviceVoice = useRef(false);
+  const [soundOff, setSoundOffState] = useState(false);
+  const soundOffRef = useRef(false);
   const spoken = useRef(0);
   const base = useRef(0);
   const sending = useRef(false);
@@ -80,11 +88,12 @@ export function VoiceMode({
     return sending.current && list.length >= base.current + 2 && list.at(-1)?.role === "assistant" ? list.at(-1) : undefined;
   };
 
-  const startListening = useCallback(async () => {
+  /** Listens for your turn. With the mic muted it waits for a tap instead (`once` is that tap). */
+  const startListening = useCallback(async (once = false) => {
     if (!open.current) return;
     mic.current?.cancel();
     mic.current = null;
-    if (mutedRef.current) {
+    if (mutedRef.current && !once) {
       closeMicStream(stream.current);
       stream.current = null;
       setLevel(0);
@@ -105,7 +114,7 @@ export function VoiceMode({
         onLevel: setLevel,
         onAutoStop: (heard) => (heard ? hear() : pause("Didn't hear anything. Tap to talk.")),
       }, stream.current);
-      if (!open.current || mutedRef.current) mic.current.cancel();
+      if (!open.current) mic.current.cancel();
     } catch (e) {
       console.warn("[voice] microphone", (e as Error)?.name, (e as Error)?.message);
       pause(micProblem(e));
@@ -153,6 +162,8 @@ export function VoiceMode({
     setAnswerAt(base.current + 1);
     spoken.current = 0;
     queue.current = [];
+    answerCtl.current?.abort();
+    answerCtl.current = new AbortController();
     sending.current = true;
     setPhase("thinking");
     sendRef.current(text);
@@ -164,6 +175,22 @@ export function VoiceMode({
       sending.current = false;
       pause("No answer came back. Tap to try again.");
     }, ANSWER_TIMEOUT_MS);
+  };
+
+  /** Starts making a piece's audio now, so it's ready by the time the piece before it ends. */
+  const enqueue = (text: string) => {
+    const signal = answerCtl.current?.signal ?? new AbortController().signal;
+    const voiced: Promise<Voiced> =
+      soundOffRef.current || deviceVoice.current
+        ? Promise.resolve({ fallback: "" })
+        : fetchVoice(text, signal).then((v) => {
+            if ("fallback" in v && !signal.aborted && !deviceVoice.current) {
+              deviceVoice.current = true;
+              setNote(`Using this device's voice. ${v.fallback}`);
+            }
+            return v;
+          });
+    queue.current.push({ text, voiced });
   };
 
   const pump = async () => {
@@ -182,7 +209,9 @@ export function VoiceMode({
     setPhase("speaking");
     const c = startSpeaking();
     speech.current = c;
-    await say(next, c.signal, (why) => setNote(`Using this device's voice instead. ${why}`));
+    const voiced = await next.voiced;
+    // Sound off: the captions carry the answer, nothing is played.
+    if (!soundOffRef.current && !c.signal.aborted) await playVoice(next.text, voiced, c.signal);
     if (speech.current === c) speech.current = null;
     if (!c.signal.aborted) pump();
   };
@@ -202,7 +231,7 @@ export function VoiceMode({
     const text = r.content.text ?? "";
     const { ready } = readyToSpeak(text.slice(spoken.current), !r.streaming, spoken.current === 0);
     // Pieces that are only symbols or code have nothing to say aloud.
-    if (speakable(ready)) queue.current.push(ready);
+    if (speakable(ready)) enqueue(ready);
     spoken.current += ready.length;
     pump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -224,6 +253,7 @@ export function VoiceMode({
       closeMicStream(stream.current);
       stream.current = null;
       speech.current?.abort();
+      answerCtl.current?.abort();
       stopSpeaking();
       lock?.release().catch(() => {});
     };
@@ -244,9 +274,19 @@ export function VoiceMode({
     setMutedState(next);
     const p = phaseRef.current;
     if (next) {
-      // Stop listening now; anything being said still finishes.
+      // Stop listening now; anything being said still finishes, and a tap on the circle still
+      // lets you talk.
       if (p === "listening" || p === "paused" || p === "starting") startListening();
     } else if (p === "muted" || p === "paused") startListening();
+  };
+
+  const toggleSound = () => {
+    unlockAudio();
+    const next = !soundOffRef.current;
+    soundOffRef.current = next;
+    setSoundOffState(next);
+    // Turning sound off stops what's playing; the captions keep going.
+    if (next) stopSpeaking();
   };
 
   const tap = () => {
@@ -259,15 +299,16 @@ export function VoiceMode({
     if (p === "speaking" || p === "thinking") {
       // Interrupt: stop talking (and writing), and listen.
       queue.current = [];
+      answerCtl.current?.abort();
       speech.current?.abort();
       speech.current = null;
       if (busy) onStop();
       sending.current = false;
-      startListening();
+      startListening(true);
       return;
     }
-    if (p === "paused") startListening();
-    if (p === "muted") toggleMute();
+    // Paused, or mic off: a tap means "my turn".
+    if (p === "paused" || p === "muted") startListening(true);
   };
 
   const scale = phase === "listening" ? 1 + level * 0.5 : 1;
@@ -277,7 +318,7 @@ export function VoiceMode({
       : phase === "speaking" || phase === "thinking"
         ? "Tap the circle to interrupt."
         : phase === "muted"
-          ? "Your microphone is off. Tap Unmute to talk."
+          ? "Tap the circle when you want to talk."
           : "";
   return (
     <div role="dialog" aria-modal="true" aria-label="Voice chat" className="enter-glitch fixed inset-0 z-50 flex flex-col bg-bg">
@@ -287,7 +328,7 @@ export function VoiceMode({
           onClick={tap}
           data-phase={phase}
           aria-label={
-            phase === "speaking" || phase === "thinking" ? "Interrupt" : phase === "muted" ? "Unmute" : phase === "paused" ? "Tap to talk" : "Send now"
+            phase === "speaking" || phase === "thinking" ? "Interrupt" : phase === "paused" || phase === "muted" ? "Tap to talk" : "Send now"
           }
           className={`voice-orb h-28 w-28 shrink-0 rounded-full bg-fg ${phase === "thinking" || phase === "hearing" ? "voice-orb-busy" : ""} ${phase === "speaking" ? "voice-orb-speaking" : ""} ${phase === "paused" || phase === "muted" ? "opacity-30" : ""}`}
           style={{ transform: `scale(${scale})` }}
@@ -304,6 +345,7 @@ export function VoiceMode({
             <p className="text-[15px] text-mute">{hint}</p>
           ) : null}
         </div>
+        <LanguagePicker />
       </div>
 
       {/* Captions: what you said, then the answer as it is written and read out. */}
@@ -331,6 +373,15 @@ export function VoiceMode({
           className={`press flex h-14 w-14 items-center justify-center rounded-full border ${muted ? "border-fg bg-fg text-bg" : "border-line"}`}
         >
           {muted ? <MicOffIcon /> : <MicIcon />}
+        </button>
+        <button
+          type="button"
+          onClick={toggleSound}
+          aria-pressed={soundOff}
+          aria-label={soundOff ? "Turn sound on" : "Turn sound off"}
+          className={`press flex h-14 w-14 items-center justify-center rounded-full border ${soundOff ? "border-fg bg-fg text-bg" : "border-line"}`}
+        >
+          {soundOff ? <SpeakerOffIcon /> : <SpeakerIcon className="h-[22px] w-[22px]" />}
         </button>
         <button
           type="button"
