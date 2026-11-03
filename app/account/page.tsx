@@ -13,9 +13,16 @@ export default async function Account() {
     <>
       <AppHeader isAdmin={me.profile.role === "admin"} />
       <Page>
-        <div className="flex flex-col gap-1 pt-4">
-          <h1 className="text-[34px] font-semibold tracking-tight">Account</h1>
-          <p className="text-[15px] text-mute">{me.email}</p>
+        <div className="flex items-start justify-between gap-4 pt-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h1 className="text-[34px] font-semibold tracking-tight">Account</h1>
+            <p className="truncate text-[15px] text-mute">{me.email}</p>
+          </div>
+          <form action={signOut} className="shrink-0 pt-2">
+            <Button variant="secondary" className="h-11! w-auto! rounded-xl! px-4! text-[15px]!">
+              Sign out
+            </Button>
+          </form>
         </div>
         <Section title="You">
           <ProfileForm name={me.profile.display_name} username={me.profile.username ?? ""} />
@@ -26,9 +33,6 @@ export default async function Account() {
           </p>
           <PasswordForm />
         </Section>
-        <form action={signOut}>
-          <Button variant="secondary">Sign out</Button>
-        </form>
       </Page>
     </>
   );
