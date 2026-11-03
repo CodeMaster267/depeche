@@ -1,0 +1,49 @@
+name: Update the live database
+
+# Applies new files in supabase/migrations/ to the hosted Supabase project whenever they reach main,
+# so nobody has to paste SQL by hand. Needs one repository secret (Settings → Secrets and variables
+# → Actions): SUPABASE_DB_URL, the "Session pooler" connection string from Supabase → Connect, with
+# the database password filled in. Until it exists, this does nothing. It can also be run by hand
+# from the Actions tab.
+
+on:
+  push:
+    branches: [main]
+    paths: ["supabase/migrations/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-database
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - name: Check the Supabase secret is set
+        id: ready
+        run: |
+          if [ -z "$DB_URL" ]; then
+            echo "::notice::SUPABASE_DB_URL is not set yet, so the live database was not touched."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.ready.outputs.go == 'true'
+        uses: actions/checkout@v4
+      - if: steps.ready.outputs.go == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.ready.outputs.go == 'true'
+        run: npm ci
+      - name: Apply new migrations
+        if: steps.ready.outputs.go == 'true'
+        run: npx supabase db push --remote="$DB_URL" --yes
