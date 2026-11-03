@@ -1,9 +1,9 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState, useTransition } from "react";
 import { Button, Field, Kept, Notice, keepOnError } from "@/components/ui";
 import { MIN_PASSWORD } from "@/lib/validate";
-import { changePassword, saveProfile } from "./actions";
+import { changePassword, saveProfile, setKeepChats } from "./actions";
 
 export function ProfileForm({ name, username }: { name: string; username: string }) {
   const [state, action, pending] = useActionState(keepOnError(saveProfile), undefined);
@@ -35,5 +35,38 @@ export function PasswordForm() {
       {state?.error ? <Notice tone="error">{state.error}</Notice> : state?.ok ? <Notice>{state.ok}</Notice> : null}
       <Button variant="secondary" disabled={pending}>Set password</Button>
     </form>
+  );
+}
+
+/** A switch: chats unused for a month are deleted unless this is on. Pinned chats always stay. */
+export function KeepChatsToggle({ keep: initial }: { keep: boolean }) {
+  const [keep, setKeep] = useState(initial);
+  const [pending, start] = useTransition();
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <p className="text-[15px] text-mute" id="keep-chats-help">
+        {keep
+          ? "Your chats are kept until you delete them."
+          : "Chats you haven't used for a month are deleted, along with their files. Pinned chats are always kept."}
+      </p>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={keep}
+        aria-label="Keep all my chats"
+        aria-describedby="keep-chats-help"
+        disabled={pending}
+        onClick={() => {
+          const next = !keep;
+          setKeep(next);
+          start(() => setKeepChats(next));
+        }}
+        className={`relative h-8 w-[52px] shrink-0 rounded-full border transition-colors disabled:opacity-60 ${keep ? "border-fg bg-fg" : "border-line bg-soft"}`}
+      >
+        <span
+          className={`absolute top-[3px] h-6 w-6 rounded-full shadow transition-[left] ${keep ? "left-[24px] bg-bg" : "left-[3px] bg-fg"}`}
+        />
+      </button>
+    </div>
   );
 }
