@@ -1,0 +1,54 @@
+name: Health check
+
+# Every few hours, looks for problems that need Hasan and opens a GitHub issue (which GitHub emails
+# to him) when it finds one, closing it again once things recover:
+#   * an AI company failing most replies (a key, billing or limit problem),
+#   * the database nearing Supabase's free 500 MB,
+#   * the live site not answering.
+# Backups and the keep-alive have their own alerts (backup.yml, keep-alive.yml). The same results
+# show on the Health screen in the app.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      APP_URL: ${{ vars.APP_URL || 'https://depai.vercel.app' }}
+      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the site, the AI companies and the database size
+        run: |
+          problems=""
+          if ! curl -fsS --max-time 30 -o /dev/null "$APP_URL/sign-in"; then
+            problems="$problems- The site $APP_URL/sign-in didn't answer. Check the latest deployment on vercel.com."$'\n'
+          fi
+          if [ -n "$DB_URL" ]; then
+            failing=$(psql "$DB_URL" -Atc "select provider || ' failed ' || failed || ' of ' || replies || ' replies' from public.provider_failures_24h() where failed >= 3 and failed * 2 >= replies" 2>/dev/null || true)
+            while IFS= read -r line; do
+              [ -n "$line" ] && problems="$problems- In the last 24 hours, $line. Its key, billing or spending limit may need a look."$'\n'
+            done <<< "$failing"
+            size=$(psql "$DB_URL" -Atc "select pg_database_size(current_database())" 2>/dev/null || echo 0)
+            if [ "${size:-0}" -gt 400000000 ]; then
+              problems="$problems- The database is $(( size / 1000000 )) MB, over 80% of Supabase's free 500 MB."$'\n'
+            fi
+          fi
+          if [ -n "$problems" ]; then
+            scripts/backup/record-check.sh health_check false "$(printf '%s' "$problems" | head -c 1900)"
+            scripts/backup/alert.sh open health-check "Depeche needs a look" "$problems
+          Details: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            exit 1
+          fi
+          scripts/backup/record-check.sh health_check true "Site, AI companies and database size look fine"
+          scripts/backup/alert.sh close health-check "Fixed: the latest health check found nothing wrong."
