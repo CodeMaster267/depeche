@@ -11,5 +11,5 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
   const me = await requireMe();
   const [shell, found] = await Promise.all([loadShell(me), loadChat(me, id)]);
   if (!found) notFound();
-  return <ChatApp key={id} shell={shell} chat={found.chat} messages={found.messages} summaries={found.summaries} />;
+  return <ChatApp key={id} shell={shell} chat={found.chat} messages={found.messages} all={found.all} summaries={found.summaries} />;
 }

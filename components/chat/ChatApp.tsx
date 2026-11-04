@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
 import { canSearch, findModel } from "@/lib/ai/models";
-import { titleFrom, type ChatRow, type MessageRow } from "@/lib/chat/thread";
+import { latestLeaf, pathTo, titleFrom, versionsOf, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
 import { deleteChat, discardSummary, pinChat, refreshChat, refreshShell, rememberModel, renameChat, setCompaction } from "@/app/c/actions";
 import { activeSummary, type SummaryRow } from "@/lib/chat/summary";
@@ -13,10 +13,11 @@ import { SummaryLine, SummarySheet } from "./SummarySheet";
 import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
-import { ACCEPT, AttachmentTray, MessageFiles, useAttachments, type Pending } from "./Attachments";
+import { ACCEPT, AttachmentTray, useAttachments, type Pending } from "./Attachments";
 import { ModelPicker } from "./ModelPicker";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
+import { UserMessage, VersionSwitch } from "./Versions";
 import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
@@ -36,20 +37,27 @@ export function ChatApp({
   shell: initialShell,
   chat: initialChat,
   messages: initial,
+  all: initialAll,
   summaries: initialSummaries = [],
 }: {
   shell: Shell;
   chat: ChatRow | null;
   messages: MessageRow[];
+  /** Every version of every message; the screen shows one path through them. */
+  all?: MessageRow[];
   summaries?: SummaryRow[];
 }) {
   const router = useRouter();
   const [shell, setShell] = useState(initialShell);
   const [chat, setChat] = useState<ChatRow | null>(initialChat);
-  const [messages, setMessages] = useState<Live[]>(initial);
   // Summaries of earlier messages (auto-compaction), and whether the open one is showing.
   const [summaries, setSummaries] = useState<SummaryRow[]>(initialSummaries);
   const [viewing, setViewing] = useState<string | null>(null);
+  // Edits and regenerations sit beside the originals, so a chat is a tree. `leaf` is where the
+  // conversation on screen ends; flipping a version moves it.
+  const [tree, setTree] = useState<Live[]>(initialAll ?? initial);
+  const [leaf, setLeaf] = useState<string | null>(initial.at(-1)?.id ?? null);
+  const messages = useMemo(() => pathTo(tree, leaf), [tree, leaf]);
   const [modelId, setModelId] = useState<string | null>(
     initialChat?.model && initialShell.modelIds.includes(initialChat.model) ? initialChat.model : initialShell.defaultModel,
   );
@@ -110,7 +118,10 @@ export function ChatApp({
       const found = await refreshChat(chat.id).catch(() => null);
       if (found && !abortRef.current) {
         setChat(found.chat);
-        setMessages(found.messages);
+        const all = found.all ?? found.messages;
+        setTree(all);
+        // Stay on the version being read, picking up anything added below it; else the newest.
+        setLeaf((l) => (l && all.some((m) => m.id === l) ? latestLeaf(all, l) : (found.messages.at(-1)?.id ?? null)));
         setSummaries(found.summaries);
       }
     }
@@ -131,8 +142,12 @@ export function ChatApp({
     rememberModel(id).catch(() => {});
   };
 
-  async function run(body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean }, optimistic: Live[]) {
+  async function run(
+    body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean; parent?: string | null },
+    optimistic: Live[],
+  ) {
     if (!model) return;
+    const before = leaf;
     setBanner(null);
     setBusy(true);
     pinnedToBottom.current = true;
@@ -140,7 +155,7 @@ export function ChatApp({
     const placeholder: Live = {
       id: replyId,
       chat_id: chat?.id ?? "",
-      parent_id: null,
+      parent_id: optimistic[0]?.id ?? body.regenerate ?? null,
       role: "assistant",
       content: { text: "" },
       status: "streaming",
@@ -148,10 +163,11 @@ export function ChatApp({
       created_at: new Date().toISOString(),
       streaming: true,
     };
-    setMessages((m) => [...m, ...optimistic, placeholder]);
+    setTree((m) => [...m, ...optimistic, placeholder]);
+    setLeaf(replyId);
     const abort = new AbortController();
     abortRef.current = abort;
-    const patchReply = (fn: (m: Live) => Live) => setMessages((list) => list.map((m) => (m.id === replyId ? fn(m) : m)));
+    const patchReply = (fn: (m: Live) => Live) => setTree((list) => list.map((m) => (m.id === replyId ? fn(m) : m)));
 
     let chatId = chat?.id ?? null;
     try {
@@ -164,7 +180,8 @@ export function ChatApp({
       if (!res.ok || !res.body) {
         const { error } = (await res.json().catch(() => ({}))) as { error?: string };
         // Nothing was sent: take the message back off the screen and return it to the box.
-        setMessages((list) => list.filter((m) => m.id !== replyId && !optimistic.some((o) => o.id === m.id)));
+        setTree((list) => list.filter((m) => m.id !== replyId && !optimistic.some((o) => o.id === m.id)));
+        setLeaf(before);
         if (body.text) setDraft(body.text);
         setBanner(error ?? "Couldn't send that. Try again.");
         if (res.status === 409) sync();
@@ -216,7 +233,12 @@ export function ChatApp({
               window.history.replaceState(null, "", `/c/${ev.chatId}`);
             }
             const local = optimistic[0]?.id;
-            if (local) setMessages((list) => list.map((m) => (m.id === local ? ev.userMessage : m)));
+            if (local) {
+              const real = ev.userMessage;
+              setTree((list) =>
+                list.map((m) => (m.id === local ? real : m.id === replyId ? { ...m, parent_id: real.id, chat_id: real.chat_id } : m)),
+              );
+            }
           } else if (ev.type === "text") {
             pending += ev.text;
             if (!frame) frame = requestAnimationFrame(flush);
@@ -248,7 +270,8 @@ export function ChatApp({
             flush();
             const saved = ev.message;
             if (saved) {
-              setMessages((list) => list.map((m) => (m.id === replyId ? saved : m)));
+              setTree((list) => list.map((m) => (m.id === replyId ? saved : m)));
+              setLeaf(saved.id);
               setShell((s) => ({ ...s, spent: s.spent + Number(saved.content.cost ?? 0) }));
               // A summary made before this reply (the chat had grown well past the point).
               const made = ev.summary;
@@ -309,29 +332,54 @@ export function ChatApp({
     sendText(text, false, attachments.take());
   };
 
+  // The message a new one follows: the end of the conversation on screen.
+  const end = messages.at(-1);
+  const after = chat && end && !end.id.startsWith("local-") ? { parent: end.id } : {};
+
   const sendText = (text: string, voice = false, files: FileRef[] = []) => {
     if ((!text && !files.length) || busy || !model) return;
     const mine: Live = {
       id: draftId(),
       chat_id: chat?.id ?? "",
-      parent_id: null,
+      parent_id: after.parent ?? null,
       role: "user",
       content: files.length ? { text, files } : { text },
       status: "completed",
       model: null,
       created_at: new Date().toISOString(),
     };
-    run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}) }, [mine]);
+    run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}), ...after }, [mine]);
+  };
+
+  /** Send a changed copy of one of your messages; the original and what followed it are kept. */
+  const edit = (original: MessageRow, text: string) => {
+    if (busy || !model || !chat) return;
+    const files = original.content.files ?? [];
+    const mine: Live = {
+      id: draftId(),
+      chat_id: chat.id,
+      parent_id: original.parent_id,
+      role: "user",
+      content: files.length ? { text, files } : { text },
+      status: "completed",
+      model: null,
+      created_at: new Date().toISOString(),
+    };
+    run({ text, ...(files.length ? { files } : {}), parent: original.parent_id }, [mine]);
+  };
+
+  /** Show another version of a message, and the conversation that carried on from it. */
+  const showVersion = (id: string) => {
+    if (busy) return;
+    pinnedToBottom.current = false;
+    setLeaf(latestLeaf(tree, id));
   };
 
   const regenerate = (questionId: string) => {
     if (busy) return;
-    // The old reply is kept in the database; the new one replaces it on screen.
-    setMessages((list) => list.slice(0, list.findIndex((m) => m.id === questionId) + 1));
+    // The old reply is kept as an earlier version; the new one is shown in its place.
     run({ regenerate: questionId }, []);
   };
-
-  const lastUser = [...messages].reverse().find((m) => m.role === "user" && !m.id.startsWith("local-"));
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -413,23 +461,21 @@ export function ChatApp({
             ) : null}
             {messages.flatMap((m, i) => [
               m.role === "user" ? (
-                <div key={m.id} className="flex flex-col items-end gap-2">
-                  {m.content.files?.length ? <MessageFiles files={m.content.files} /> : null}
-                  {m.content.text ? (
-                    <div
-                      data-testid="user-message"
-                      className="max-w-[85%] whitespace-pre-wrap break-words rounded-[22px] bg-inv px-5 py-3 text-[17px] leading-relaxed text-on-inv"
-                    >
-                      {m.content.text}
-                    </div>
-                  ) : null}
-                </div>
+                <UserMessage
+                  key={m.id}
+                  message={m}
+                  versions={versionsOf(tree, m)}
+                  busy={busy}
+                  onEdit={(text) => edit(m, text)}
+                  onPickVersion={showVersion}
+                />
               ) : (
                 <Reply
                   key={m.id}
                   message={m}
-                  canRegenerate={!busy && !!lastUser && m.parent_id === lastUser.id}
+                  canRegenerate={!busy && !!m.parent_id && !m.parent_id.startsWith("local-")}
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
+                  versions={<ReplyVersions message={m} tree={tree} busy={busy} onPick={showVersion} />}
                 />
               ),
               applied && applied.index === i && i < messages.length - 1 ? (
@@ -509,13 +555,37 @@ export function ChatApp({
   );
 }
 
+function ReplyVersions({ message, tree, busy, onPick }: { message: Live; tree: Live[]; busy: boolean; onPick: (id: string) => void }) {
+  const versions = versionsOf(tree, message);
+  return (
+    <VersionSwitch
+      what="reply"
+      index={Math.max(0, versions.findIndex((v) => v.id === message.id))}
+      total={versions.length}
+      disabled={busy}
+      onPick={(i) => onPick(versions[i].id)}
+    />
+  );
+}
+
 /** The reply stopped thinking (it started writing or searching): bank the time it spent. */
 function stopThinking(m: Live): Live {
   if (!m.thinkingNow) return m;
   return { ...m, thinkingNow: false, thinkingSince: undefined, thoughtSoFar: (m.thoughtSoFar ?? 0) + (m.thinkingSince ? Date.now() - m.thinkingSince : 0) };
 }
 
-function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; canRegenerate: boolean; onRegenerate: () => void }) {
+function Reply({
+  message: m,
+  canRegenerate,
+  onRegenerate,
+  versions,
+}: {
+  message: Live;
+  canRegenerate: boolean;
+  onRegenerate: () => void;
+  /** "‹ 1/2 ›" when this reply has other versions. */
+  versions?: ReactNode;
+}) {
   const [copied, setCopied] = useState(false);
   const [source, setSource] = useState(false);
   const info = findModel(m.model);
@@ -574,6 +644,7 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
                 <CodeIcon />
               </button>
             ) : null}
+            {versions}
             {copied ? <span className="text-[13px]">Copied</span> : null}
           </span>
           <span className="font-mono text-[12px]">
