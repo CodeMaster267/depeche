@@ -97,7 +97,8 @@ describe("chat shares", () => {
     await as(db, P.hasan, (tx) => tx.query("delete from public.chat_shares"));
     await as(db, P.bea, (tx) => tx.query("delete from public.chat_shares"));
     expect(await rows(db, null, "select title from public.shared_chat($1)", [TOKEN])).toHaveLength(1);
-    await as(db, P.amir, (tx) => tx.query("delete from public.chat_shares where chat_id = $1", [C.amir]));
+    // As the app does it: by chat and owner.
+    await as(db, P.amir, (tx) => tx.query("delete from public.chat_shares where chat_id = $1 and owner_id = $2", [C.amir, P.amir]));
     expect(await rows(db, null, "select title from public.shared_chat($1)", [TOKEN])).toEqual([]);
   });
 

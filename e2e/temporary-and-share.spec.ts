@@ -89,7 +89,7 @@ test("the New chat button leaves a temporary chat, and a normal chat is saved as
   await page.goto("/?temporary");
   await expect(page.getByRole("button", { name: "Temporary chat" })).toHaveAttribute("aria-pressed", "true");
   await send(page, "Just between us");
-  await page.getByRole("button", { name: "New chat" }).first().click();
+  await page.locator("header").getByRole("link", { name: "New chat" }).click();
   await expect(page.getByRole("heading", { name: "Hi, Nia." })).toBeVisible();
   await expect(page.getByText("Just between us")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Temporary chat" })).toHaveAttribute("aria-pressed", "false");

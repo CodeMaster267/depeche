@@ -38,7 +38,7 @@ create trigger chat_shares_owner before insert or update on public.chat_shares
   for each row execute function public.chat_share_owner_check();
 
 revoke all on public.chat_shares from anon, authenticated;
-grant select (id, token, chat_id, created_at, updated_at) on public.chat_shares to authenticated;
+grant select (id, token, chat_id, owner_id, created_at, updated_at) on public.chat_shares to authenticated;
 grant delete on public.chat_shares to authenticated;
 
 alter table public.chat_shares enable row level security;

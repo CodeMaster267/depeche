@@ -77,5 +77,6 @@ export async function shareChat(chatId: string): Promise<{ share?: ShareState; e
 export async function stopSharing(chatId: string): Promise<void> {
   const me = await requireMe();
   if (!UUID.test(chatId)) return;
-  await (await supabaseServer()).from("chat_shares").delete().eq("chat_id", chatId).eq("owner_id", me.userId);
+  const { error } = await (await supabaseServer()).from("chat_shares").delete().eq("chat_id", chatId).eq("owner_id", me.userId);
+  if (error) throw new Error("Couldn't stop sharing");
 }
