@@ -1,4 +1,4 @@
-import type { Model } from "@/lib/ai/models";
+import { priceFor, type Model } from "@/lib/ai/models";
 
 /**
  * Hard spending caps. Before a reply starts, the server reserves the most it could cost, and the
@@ -33,12 +33,15 @@ export function inputTokensUpperBound(texts: readonly string[]): number {
 
 /**
  * Prices used for the hold: the dearest of the chosen model and any model that might answer for
- * it when it's busy. Google's models can also think before answering, and thinking is billed as
- * output on top of the reply's own limit, so it is counted twice for Google.
+ * it when it's busy, at the long-context rate if this much input reaches it. Google's models can
+ * also think before answering, and thinking is billed as output on top of the reply's own limit,
+ * so it is counted twice for Google. DeepSeek doesn't say whether its thinking counts within the
+ * limit, so it is counted twice there too.
  */
-function worstPrices(models: readonly Model[]) {
-  const input = Math.max(...models.map((m) => m.price.input));
-  const output = Math.max(...models.map((m) => m.price.output * (m.provider === "google" ? 2 : 1)));
+function worstPrices(models: readonly Model[], inputTokens: number) {
+  const prices = models.map((m) => ({ ...priceFor(m, inputTokens), twice: m.provider === "google" || m.provider === "deepseek" }));
+  const input = Math.max(...prices.map((p) => p.input));
+  const output = Math.max(...prices.map((p) => p.output * (p.twice ? 2 : 1)));
   return { input: input / 1_000_000, output: output / 1_000_000 };
 }
 
@@ -53,8 +56,9 @@ export function planReply(
   inputTokens: number,
   extra: { extraUsd?: number; extraInputTokens?: number } = {},
 ): Plan {
-  const p = worstPrices(models);
-  const inputCost = (inputTokens + (extra.extraInputTokens ?? 0)) * p.input + (extra.extraUsd ?? 0);
+  const allInput = inputTokens + (extra.extraInputTokens ?? 0);
+  const p = worstPrices(models, allInput);
+  const inputCost = allInput * p.input + (extra.extraUsd ?? 0);
   return {
     want: inputCost + MAX_OUTPUT * p.output,
     need: inputCost + MIN_OUTPUT * p.output,

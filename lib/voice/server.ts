@@ -57,11 +57,11 @@ export async function prepare(kind: "listen" | "speak"): Promise<Ready | NextRes
 const VOICE_HOLD = { want: 0.1, need: 0.01 };
 
 /** Reserves the worst case for one voice request. Returns the hold's id, or the refusal to send. */
-export async function reserveVoice(me: Me): Promise<string | NextResponse> {
+export async function reserveVoice(me: Me, amount = VOICE_HOLD): Promise<string | NextResponse> {
   const { data, error } = await supabaseAdmin().rpc("reserve_spend", {
     p_person: me.userId,
-    p_want: VOICE_HOLD.want,
-    p_need: VOICE_HOLD.need,
+    p_want: amount.want,
+    p_need: amount.need,
   });
   const hold = (data as { hold_id: string }[] | null)?.[0];
   if (!hold) return fail(402, error?.code === "P0001" ? `${error.message}.` : "Couldn't check your spending limit. Try again.");

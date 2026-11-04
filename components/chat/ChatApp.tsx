@@ -74,7 +74,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   const pinnedToBottom = useRef(true);
 
   const model = findModel(modelId);
-  // Some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
+  // DeepSeek and some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
   const searchable = canSearch(model);
   const noModels = shell.modelIds.length === 0;
   // Listening needs a provider that understands audio (Groq, OpenAI or Google); Claude has none.
@@ -321,7 +321,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
               </button>
             ) : null}
           </div>
-          {chat ? <ChatMenu chat={chat} onChange={(c) => { setChat(c); setShell((s) => ({ ...s, chats: s.chats.map((x) => (x.id === c.id ? c : x)) })); }} onDeleted={() => router.push("/")} /> : null}
+          {chat ? <ChatMenu chat={chat} userId={shell.userId} onChange={(c) => { setChat(c); setShell((s) => ({ ...s, chats: s.chats.map((x) => (x.id === c.id ? c : x)) })); }} onDeleted={() => router.push("/")} /> : null}
           <Link href="/" className="p-2 md:hidden" aria-label="New chat">
             <NewChatIcon />
           </Link>
@@ -644,7 +644,7 @@ function Composer({
   );
 }
 
-function ChatMenu({ chat, onChange, onDeleted }: { chat: ChatRow; onChange: (c: ChatRow) => void; onDeleted: () => void }) {
+function ChatMenu({ chat, userId, onChange, onDeleted }: { chat: ChatRow; userId: string; onChange: (c: ChatRow) => void; onDeleted: () => void }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
@@ -681,6 +681,22 @@ function ChatMenu({ chat, onChange, onDeleted }: { chat: ChatRow; onChange: (c: 
               }}
             >
               {chat.pinned ? "Unpin" : "Pin"}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full px-4 py-2.5 text-left hover:bg-soft"
+              onClick={async () => {
+                setOpen(false);
+                try {
+                  const [{ supabaseBrowser }, { downloadChat }] = await Promise.all([import("@/lib/supabase/browser"), import("@/lib/export/collect")]);
+                  await downloadChat(supabaseBrowser(), userId, chat.id);
+                } catch {
+                  window.alert("Couldn't download this chat. Try again.");
+                }
+              }}
+            >
+              Download
             </button>
             <button
               type="button"
