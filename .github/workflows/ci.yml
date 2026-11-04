@@ -8,9 +8,9 @@ on:
 permissions:
   contents: read
 
-# A new push to the same branch or pull request cancels the run it replaces, so superseded commits
-# don't use up GitHub Actions minutes (the repo is private: 2,000 free minutes a month). Runs on
-# main are never cancelled, so every merge is fully tested.
+# A new push to the same pull request cancels the run it replaces, so superseded commits don't hold
+# up the runners that every thread shares. Runs on main are never cancelled, so every merge is fully
+# tested.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
