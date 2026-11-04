@@ -92,11 +92,11 @@ test("a file can be sent on its own, and a kind that can't be sent is refused", 
   await ensureGoogleKey(page);
   await newChat(page);
   await page.getByTestId("file-input").setInputFiles([
-    { name: "song.mp3", mimeType: "audio/mpeg", buffer: Buffer.from("not really") },
+    { name: "archive.zip", mimeType: "application/zip", buffer: Buffer.from("not really") },
   ]);
   await expect(page.getByTestId("attachment")).toHaveAttribute("data-status", "error");
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
-  await page.getByRole("button", { name: "Remove song.mp3" }).click();
+  await page.getByRole("button", { name: "Remove archive.zip" }).click();
 
   await page.getByTestId("file-input").setInputFiles([{ name: "photo.png", mimeType: "image/png", buffer: PNG }]);
   await expect(page.getByTestId("attachment")).toHaveAttribute("data-status", "ready");

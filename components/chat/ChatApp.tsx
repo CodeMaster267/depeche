@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
 import { canSearch, findModel } from "@/lib/ai/models";
@@ -11,11 +12,14 @@ import { deleteChat, pinChat, refreshChat, refreshShell, rememberModel, renameCh
 import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
-import { ACCEPT, AttachmentTray, MessageFiles, useAttachments, type Pending } from "./Attachments";
+import { ACCEPT, AUDIO_ACCEPT, AttachmentTray, MessageFiles, useAttachments, type Pending } from "./Attachments";
 import { ModelPicker } from "./ModelPicker";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
-import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
+import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, PhotoIcon, RetryIcon, ScanIcon, StopIcon, WaveIcon } from "./icons";
+
+// Loaded only when someone scans, so the chat itself stays quick to open.
+const ScanSheet = dynamic(() => import("./ScanSheet"), { ssr: false });
 import { SearchSuggestions, Searching, Sources } from "./Sources";
 import type { Source } from "@/lib/chat/thread";
 
@@ -41,6 +45,8 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   const [drawer, setDrawer] = useState(false);
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  /** The scanner, open with the photos it was started with. */
+  const [scan, setScan] = useState<File[] | null>(null);
   const [draft, setDraft] = useState("");
   // Web search is on unless this person turned it off on this device.
   const [search, setSearch] = useState(true);
@@ -67,7 +73,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     });
   };
   const [voiceOpen, setVoiceOpen] = useState(false);
-  const attachments = useAttachments(initialShell.userId);
+  const attachments = useAttachments(initialShell.userId, (message) => setBanner(message));
   const abortRef = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
@@ -388,7 +394,18 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
               {banner}
             </p>
           ) : null}
+          {scan ? (
+            <ScanSheet
+              initial={scan}
+              onClose={() => setScan(null)}
+              onAttach={async (file) => {
+                const skipped = await attachments.add([file]);
+                if (skipped) setBanner("You can attach up to 5 files to one message.");
+              }}
+            />
+          ) : null}
           <Composer
+            onScan={(files) => setScan(files)}
             attachments={attachments.items}
             onAttach={async (files) => {
               const skipped = await attachments.add(files);
@@ -495,6 +512,7 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
 }
 
 function Composer({
+  onScan,
   attachments,
   onAttach,
   onRemoveAttachment,
@@ -530,9 +548,13 @@ function Composer({
   onVoice: () => void;
   onDictated: (text: string) => void;
   onVoiceError: (msg: string) => void;
+  onScan: (photos: File[]) => void;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
+  const recordings = useRef<HTMLInputElement>(null);
+  const [menu, setMenu] = useState(false);
   const [dragging, setDragging] = useState(false);
   useLayoutEffect(() => {
     const el = box.current;
@@ -576,15 +598,75 @@ function Composer({
             if (files.length) onAttach(files);
           }}
         />
-        <button
-          type="button"
-          onClick={() => picker.current?.click()}
-          disabled={disabled}
-          aria-label="Attach photos or files"
-          className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
-        >
-          <PaperclipIcon />
-        </button>
+        {/* Scanning opens the camera straight away on a phone (a file picker on a computer). */}
+        <input
+          ref={camera}
+          type="file"
+          multiple
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          data-testid="scan-input"
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = "";
+            if (files.length) onScan(files);
+          }}
+        />
+        <input
+          ref={recordings}
+          type="file"
+          multiple
+          accept={AUDIO_ACCEPT}
+          className="hidden"
+          data-testid="audio-input"
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = "";
+            if (files.length) onAttach(files);
+          }}
+        />
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => setMenu(!menu)}
+            disabled={disabled}
+            aria-label="Attach"
+            aria-haspopup="menu"
+            aria-expanded={menu}
+            className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
+          >
+            <PaperclipIcon />
+          </button>
+          {menu ? (
+            <>
+              <button type="button" aria-label="Close" tabIndex={-1} className="fixed inset-0 z-20 cursor-default" onClick={() => setMenu(false)} />
+              <div role="menu" aria-label="Attach" onKeyDown={(e) => e.key === "Escape" && setMenu(false)} className="absolute bottom-12 left-0 z-30 w-64 overflow-hidden rounded-2xl border border-line bg-bg py-1 text-[16px] shadow-lg">
+                {(
+                  [
+                    ["Photos and files", PhotoIcon, picker],
+                    ["Scan pages", ScanIcon, camera],
+                    ["Voice note or recording", WaveIcon, recordings],
+                  ] as const
+                ).map(([label, Icon, input]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-soft"
+                    onClick={() => {
+                      setMenu(false);
+                      input.current?.click();
+                    }}
+                  >
+                    <Icon className="shrink-0 text-mute" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
         <button
           type="button"
           onClick={onToggleSearch}
