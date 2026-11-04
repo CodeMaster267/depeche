@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { OWNER, noSidewaysScroll, signInWithPassword, watchErrors } from "./helpers";
+import { OWNER, admin, noSidewaysScroll, signInWithPassword, uniqueEmail, watchErrors } from "./helpers";
 
 /** Desktop projects have a real mouse; phones and tablets are touch screens, where the field drifts on its own. */
 const isDesktop = (page: Page) => (page.viewportSize()?.width ?? 0) >= 900;
@@ -111,5 +111,39 @@ test("new chat: the field sits behind an empty chat, clear of the greeting", asy
     return document.elementFromPoint(r.left + 10, r.top + r.height / 2)?.closest("h2") === el;
   });
   expect(top).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test("an open chat gets a soft ripple that fades to stillness", async ({ page }) => {
+  const errors = watchErrors(page);
+  const db = admin();
+  const email = uniqueEmail("ripple");
+  const { data: user } = await db.auth.admin.createUser({ email, password: "member-password-123", email_confirm: true });
+  const id = user.user!.id;
+  const { data: owner } = await db.from("profiles").select("family_id").eq("is_app_owner", true).single();
+  await db.from("profiles").insert({ id, family_id: owner!.family_id, display_name: "Rae" });
+  const { data: chat } = await db.from("chats").insert({ owner_id: id, title: "Waves" }).select("id").single();
+  await db.from("messages").insert({ chat_id: chat!.id, owner_id: id, role: "user", content: { text: "Tell me about waves." } });
+  await signInWithPassword(page, email, "member-password-123");
+  await expect(page.getByRole("heading", { name: "Hi, Rae." })).toBeVisible();
+  await page.goto(`/c/${chat!.id}`);
+  await expect(page.getByText("Tell me about waves.")).toBeVisible();
+  const field = page.getByTestId("chat-ripple");
+  await expect(field).toHaveCount(1);
+  await expect(field).toHaveAttribute("aria-hidden", "true");
+  expect(await field.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe("none");
+  if (await canRun(page)) {
+    // A burst when the chat opens (or, where frames can't keep up, a still field)...
+    await expect(field).toHaveAttribute("data-ripple", /^(drifting|still|ready)$/);
+    // ...that settles by itself: nothing keeps running behind the conversation.
+    await expect(field).toHaveAttribute("data-ripple", /^(ready|still)$/, { timeout: 15_000 });
+  }
+  // The message stays on top and readable.
+  const top = await page.getByText("Tell me about waves.").evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(r.left + 5, r.top + r.height / 2));
+  });
+  expect(top).toBe(true);
+  await noSidewaysScroll(page);
   expect(errors).toEqual([]);
 });

@@ -274,12 +274,13 @@ If a look ever makes Depeche hard to use, Safe mode (on the My look page) shows 
   },
   {
     id: "ripple",
-    title: "The moving letters behind sign-in, new chats and loading",
+    title: "The moving letters behind sign-in, chats and loading",
     text: `
 Behind the sign-in page, an empty new chat and the loading screen there is a faint wall of the word "depeche". On a
 computer, move the mouse over it and a ripple spreads out: letters flicker and brighten, then settle in a few seconds.
 On a phone or iPad it drifts on its own in slow waves; nothing follows your finger, and taps go straight through to
-the page. It never covers what you read: the sign-in form and the greeting stay clear. It is switched off if your
+the page. It never covers what you read: the sign-in form and the greeting stay clear. Inside a chat, a much
+softer wave washes through when you open it and, fainter, when an answer arrives, then everything goes still. It is switched off if your
 device asks for reduced motion (iPhone: Settings → Accessibility → Motion → Reduce Motion), and on devices too slow to
 animate it smoothly it stays still.`,
   },

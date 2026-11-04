@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { letterflip, rippleMode, type RippleMode } from "@/lib/ripple/letterflip";
+import { letterflip, rippleMode, type Letterflip, type RippleMode } from "@/lib/ripple/letterflip";
 
 /** What the field repeats: the wordmark, lowercase, as a faint wall of type. */
 const WORDS = "depeche  depeche   depeche  depeche    depeche   depeche ";
@@ -52,6 +52,61 @@ export function RippleField({ clear, className = "absolute inset-0" }: { clear?:
       aria-hidden="true"
       data-testid="ripple"
       data-mode={mode}
+      className={`ripple-field pointer-events-none text-fg ${className}`}
+    />
+  );
+}
+
+/**
+ * A soft ripple behind an open chat: when the chat opens, a burst of waves washes through faint
+ * letters and fades to stillness in a few seconds; each new answer (`pulseKey` changes) sends a
+ * fainter one. In between nothing runs. The letters are invisible at rest and only faintly lit, so
+ * the conversation stays easy to read. Off with reduced motion, and still on devices that can't
+ * keep up. The canvas covers its positioned parent.
+ */
+export function ChatRipple({ pulseKey, className = "absolute inset-0" }: { pulseKey: number; className?: string }) {
+  const [on, setOn] = useState(false);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const field = useRef<Letterflip | null>(null);
+
+  useEffect(() => {
+    const q = matchMedia("(prefers-reduced-motion: reduce)");
+    const check = () => setOn(rippleMode() !== null);
+    check();
+    q.addEventListener("change", check);
+    return () => q.removeEventListener("change", check);
+  }, []);
+
+  useEffect(() => {
+    const el = canvas.current;
+    if (!on || !el) return;
+    const timer = window.setTimeout(() => {
+      field.current = letterflip(el, { text: WORDS, mode: "pulse", soft: true });
+      field.current?.pulse(1, 1500);
+    }, START_AFTER_MS);
+    return () => {
+      clearTimeout(timer);
+      field.current?.();
+      field.current = null;
+    };
+  }, [on]);
+
+  // A new answer: a fainter wave.
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    field.current?.pulse(0.55, 700);
+  }, [pulseKey]);
+
+  if (!on) return null;
+  return (
+    <canvas
+      ref={canvas}
+      aria-hidden="true"
+      data-testid="chat-ripple"
       className={`ripple-field pointer-events-none text-fg ${className}`}
     />
   );
