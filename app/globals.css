@@ -564,6 +564,7 @@ body {
 
 /*
  * The letterflip ripple behind the sign-in page and an empty new chat (components/RippleField.tsx).
+ * It follows the mouse on computers and drifts on its own on touch screens.
  * It fades in once its letters are measured; it never takes the pointer.
  */
 .ripple-field {
@@ -573,6 +574,7 @@ body {
   transition: opacity 0.8s ease;
 }
 .ripple-field[data-ripple="ready"],
-.ripple-field[data-ripple="moving"] {
+.ripple-field[data-ripple="moving"],
+.ripple-field[data-ripple="drifting"] {
   opacity: 1;
 }

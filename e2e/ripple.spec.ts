@@ -1,8 +1,18 @@
 import { expect, test, type Page } from "@playwright/test";
 import { OWNER, noSidewaysScroll, signInWithPassword, watchErrors } from "./helpers";
 
-/** Desktop projects have a real mouse; phones are touch only and get no field at all. */
+/** Desktop projects have a real mouse; phones and tablets are touch screens, where the field drifts on its own. */
 const isDesktop = (page: Page) => (page.viewportSize()?.width ?? 0) >= 900;
+
+/** On a touch screen the field drifts by itself, without anyone touching it. */
+async function expectDrifting(page: Page) {
+  const field = page.getByTestId("ripple");
+  await expect(field).toHaveCount(1);
+  await expect(field).toHaveAttribute("data-mode", "ambient");
+  await expect(field).toHaveAttribute("aria-hidden", "true");
+  expect(await field.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe("none");
+  if (await canRun(page)) await expect(field).toHaveAttribute("data-ripple", "drifting");
+}
 
 /** The field needs WebGL2 with renderable half-float textures; without it the page stays plain. */
 async function canRun(page: Page) {
@@ -21,17 +31,21 @@ async function sweep(page: Page) {
   }
 }
 
-test("sign-in: the letterflip field ripples under a mouse on desktop and rests afterwards", async ({ page }) => {
+test("sign-in: the letterflip field ripples under a mouse on desktop and drifts on its own on touch screens", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/sign-in");
   const field = page.getByTestId("ripple");
   if (!isDesktop(page)) {
-    await expect(page.getByRole("button", { name: "Send me a sign-in link" })).toBeVisible();
-    await expect(field).toHaveCount(0);
+    await expectDrifting(page);
+    // Taps still reach the form through it.
+    await page.getByRole("button", { name: "Use a username and password" }).click();
+    await expect(page.getByLabel("Password")).toBeVisible();
+    await noSidewaysScroll(page);
     expect(errors).toEqual([]);
     return;
   }
   await expect(field).toHaveCount(1);
+  await expect(field).toHaveAttribute("data-mode", "mouse");
   // Decoration only: hidden from screen readers and never in the way of a click.
   await expect(field).toHaveAttribute("aria-hidden", "true");
   expect(await field.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe("none");
@@ -59,23 +73,19 @@ test("sign-in: no field for people who asked for less motion", async ({ page }) 
   await expect(page.getByTestId("ripple")).toHaveCount(0);
 });
 
-test("new chat: the field sits behind an empty chat on desktop, clear of the greeting", async ({ page }) => {
+test("new chat: the field sits behind an empty chat, clear of the greeting", async ({ page }) => {
   const errors = watchErrors(page);
   await signInWithPassword(page, OWNER.email, OWNER.password);
   const hi = page.getByRole("heading", { name: `Hi, ${OWNER.name}.` });
   await expect(hi).toBeVisible();
   const field = page.getByTestId("ripple");
-  if (!isDesktop(page)) {
-    await expect(field).toHaveCount(0);
-    expect(errors).toEqual([]);
-    return;
-  }
-  await expect(field).toHaveCount(1);
+  if (isDesktop(page)) await expect(field).toHaveAttribute("data-mode", "mouse");
+  else await expectDrifting(page);
   // The field stays inside the conversation area: the composer and header sit outside it.
   const box = (await field.boundingBox())!;
   const composer = (await page.locator("textarea").last().boundingBox())!;
   expect(box.y + box.height).toBeLessThanOrEqual(composer.y + 1);
-  if (await canRun(page)) {
+  if (isDesktop(page) && (await canRun(page))) {
     await expect(field).toHaveAttribute("data-ripple", "ready");
     await sweep(page);
     await expect(field).toHaveAttribute("data-ripple", "moving");

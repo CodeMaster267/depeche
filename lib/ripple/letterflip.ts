@@ -9,6 +9,9 @@
  *  - rising value (this frame minus last): the letter flips to a stand-in character with a small
  *    red/cyan channel split, the only colour, as in the rest of Depeche's glitch.
  *
+ * On touch screens (no mouse to follow) two unseen wanderers paint in slow bursts instead, so the
+ * field drifts like waves on its own.
+ *
  * Everything runs on the GPU (WebGL2): the simulation ping-pongs between two half-float textures and
  * the letters are drawn from a glyph atlas in one full-screen pass. The CPU only tracks the mouse.
  * The loop starts on mouse movement and stops itself once the ripple has faded, so an idle page
@@ -29,16 +32,18 @@ const STANDINS = "abcdeghknopqsuvxyz0123456789^][_/\\<>=+*#%&?!:;.";
 const RED = [1, 0x1e / 255, 0x3c / 255];
 const CYAN = [0, 0xe5 / 255, 1];
 
-/** Whether this device should get the effect: a real mouse, a wide screen, no request for less motion. */
-export function rippleAllowed(): boolean {
-  if (typeof window === "undefined" || typeof matchMedia !== "function") return false;
-  return (
-    matchMedia("(hover: hover) and (pointer: fine)").matches &&
-    !matchMedia("(prefers-reduced-motion: reduce)").matches &&
-    matchMedia("(min-width: 900px)").matches &&
-    // iPads with a trackpad report a fine pointer; any touch screen gets the plain page.
-    (navigator.maxTouchPoints ?? 0) === 0
-  );
+export type RippleMode = "mouse" | "ambient";
+
+/**
+ * How this device gets the effect. With a real mouse (and no touch screen, so iPads with a trackpad
+ * count as touch) the ripple follows the pointer. On phones, tablets and touch screens it drifts on
+ * its own, like slow waves, never tied to a finger. Nothing at all for anyone who asked for less motion.
+ */
+export function rippleMode(): RippleMode | null {
+  if (typeof window === "undefined" || typeof matchMedia !== "function") return null;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return null;
+  const mouse = matchMedia("(hover: hover) and (pointer: fine)").matches && (navigator.maxTouchPoints ?? 0) === 0;
+  return mouse ? "mouse" : "ambient";
 }
 
 export type LetterflipOptions = {
@@ -46,6 +51,8 @@ export type LetterflipOptions = {
   text: string;
   /** Elements (inside the canvas's parent) to keep clear of letters, so what people read stays clean. */
   clearSelector?: string;
+  /** "mouse" follows the pointer; "ambient" drifts on its own (touch screens). */
+  mode?: RippleMode;
 };
 
 const VERT = `#version 300 es
@@ -67,8 +74,8 @@ const SIM = `#version 300 es
 precision highp float;
 uniform sampler2D prev;
 uniform vec2 size;   // simulation size in cells
-uniform vec4 seg;    // stroke from (x, y) to (z, w), in cells
-uniform float radius; // stroke radius in cells, 0 = no stroke
+uniform vec4 seg[2];     // strokes from (x, y) to (z, w), in cells
+uniform float radius[2]; // stroke radii in cells, 0 = no stroke
 ${WARP}
 out vec4 o;
 float at(vec2 c) { return texture(prev, (c + 0.5) / size).r; }
@@ -77,10 +84,11 @@ void main() {
   vec2 q = warp(c);
   float next = max(max(at(q - vec2(1.0, 0.0)), at(q + vec2(1.0, 0.0))),
                    max(at(q - vec2(0.0, 1.0)), at(q + vec2(0.0, 1.0)))) * ${DECAY};
-  if (radius > 0.0) {
-    vec2 a = seg.xy, s = seg.zw - seg.xy;
+  for (int i = 0; i < 2; i++) {
+    if (radius[i] <= 0.0) continue;
+    vec2 a = seg[i].xy, s = seg[i].zw - seg[i].xy;
     float h = clamp(dot(c - a, s) / max(dot(s, s), 1e-6), 0.0, 1.0);
-    float k = 1.0 - length(c - a - s * h) / radius;
+    float k = 1.0 - length(c - a - s * h) / radius[i];
     if (k > 0.0) next = min(1.0, next + k * k * k * ${DECAY});
   }
   o = vec4(next, 0.0, 0.0, 1.0);
@@ -210,7 +218,7 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
 
   const loc = (p: WebGLProgram, n: string) => gl.getUniformLocation(p, n);
   const U = {
-    sim: Object.fromEntries(["prev", "size", "seg", "radius", "phase", "warpK"].map((n) => [n, loc(sim, n)])),
+    sim: Object.fromEntries(["prev", "size", "seg[0]", "radius[0]", "phase", "warpK"].map((n) => [n, loc(sim, n)])),
     letters: Object.fromEntries(
       ["cur", "prev", "state", "simSize", "view", "cell", "standBase", "standCount", "rest", "clearRects", "clearCount", "phase", "warpK"].map(
         (n) => [n, loc(letters, n)],
@@ -363,7 +371,8 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     gl.uniform1f(u.warpK, CELL / window.innerHeight);
   };
 
-  const step = (seg: [number, number, number, number], radius: number) => {
+  /** One simulation step with up to two strokes: [ax, ay, bx, by] in cells (bottom-up) and radii in cells. */
+  const step = (segs: number[], radii: number[]) => {
     const from = targets[cur], to = targets[1 - cur];
     gl.useProgram(sim);
     gl.bindFramebuffer(gl.FRAMEBUFFER, to.fbo);
@@ -372,8 +381,8 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     gl.bindTexture(gl.TEXTURE_2D, from.tex);
     gl.uniform1i(U.sim.prev, 0);
     gl.uniform2f(U.sim.size, simW, simH);
-    gl.uniform4f(U.sim.seg, ...seg);
-    gl.uniform1f(U.sim.radius, radius);
+    gl.uniform4fv(U.sim["seg[0]"], new Float32Array([...segs, 0, 0, 0, 0, 0, 0, 0, 0].slice(0, 8)));
+    gl.uniform1fv(U.sim["radius[0]"], new Float32Array([...radii, 0, 0].slice(0, 2)));
     setWarp(U.sim);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -445,7 +454,7 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     const t = clamp01((speed - 0.1) / 0.9);
     const radius = (0.05 * t * t * (3 - 2 * t) * innerHeight) / CELL;
     // Grid cells, bottom-up.
-    step([last.x / CELL, (h - last.y) / CELL, mouse.x / CELL, (h - mouse.y) / CELL], radius);
+    step([last.x / CELL, (h - last.y) / CELL, mouse.x / CELL, (h - mouse.y) / CELL], [radius]);
     last = { ...mouse };
     if (radius > 0) {
       lastPaint = now;
@@ -463,8 +472,61 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     }
   };
 
+  // Ambient: two unseen wanderers drift on slow, never-repeating paths and paint in bursts, so rings
+  // keep rising and fading across the field. About 30 steps a second, which also halves the work.
+  const ambient = opts.mode === "ambient";
+  const wanderers = [0, 1].map(() => ({
+    f: [0.09 + Math.random() * 0.08, 0.07 + Math.random() * 0.08],
+    p: [Math.random() * 6.283, Math.random() * 6.283, Math.random() * 6.283],
+    last: null as null | { x: number; y: number },
+  }));
+  let t0 = 0;
+  let visible = true;
+  const drift = (now: number) => {
+    raf = requestAnimationFrame(drift);
+    if (now - lastStep < 33) return;
+    lastStep = now;
+    const t = (now - t0) / 1000;
+    const segs: number[] = [], radii: number[] = [];
+    for (const [i, wd] of wanderers.entries()) {
+      const pos = {
+        x: w * (0.5 + 0.45 * Math.sin(t * wd.f[0] + wd.p[0]) * Math.cos(t * 0.031 + i)),
+        y: h * (0.5 + 0.45 * Math.sin(t * wd.f[1] + wd.p[1])),
+      };
+      const from = wd.last ?? pos;
+      wd.last = pos;
+      // Bursts: the brush swells and vanishes every few seconds, so each burst leaves a ring.
+      const pulse = Math.max(0, Math.sin(t * (0.55 + i * 0.17) + wd.p[2]));
+      const r = (0.035 * Math.min(innerHeight, 900) * pulse * pulse) / CELL;
+      segs.push(from.x / CELL, (h - from.y) / CELL, pos.x / CELL, (h - pos.y) / CELL);
+      radii.push(r > 0.6 ? r : 0);
+    }
+    step(segs, radii);
+    draw();
+  };
+  const startDrift = () => {
+    if (raf || stopped || !ready || !visible) return;
+    if (!t0) t0 = performance.now();
+    canvas.dataset.ripple = "drifting";
+    raf = requestAnimationFrame(drift);
+  };
+  const pauseDrift = () => {
+    cancelAnimationFrame(raf);
+    raf = 0;
+    for (const wd of wanderers) wd.last = null;
+    if (ready) canvas.dataset.ripple = "ready";
+  };
+  // Only while the field is on screen: no work behind a scrolled-away page.
+  const io = new IntersectionObserver(([e]) => {
+    visible = !!e?.isIntersecting;
+    if (!ambient) return;
+    if (visible) startDrift();
+    else pauseDrift();
+  });
+  io.observe(canvas);
+
   const start = () => {
-    if (raf || stopped || !ready) return;
+    if (ambient || raf || stopped || !ready) return;
     lastPaint = performance.now();
     canvas.dataset.ripple = "moving";
     raf = requestAnimationFrame(frame);
@@ -528,6 +590,7 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
       draw();
       ready = true;
       canvas.dataset.ripple = "ready";
+      if (ambient) startDrift();
     });
 
   function stop() {
@@ -536,6 +599,7 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     cancelAnimationFrame(raf);
     clearTimeout(resizeTimer);
     ro.disconnect();
+    io.disconnect();
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("scroll", onScroll, { capture: true });
     scheme.removeEventListener("change", onScheme);
