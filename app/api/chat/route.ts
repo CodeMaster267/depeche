@@ -29,7 +29,16 @@ type Body = {
   search?: boolean;
   /** Sent from voice chat: the reply will be read aloud. */
   voice?: boolean;
+  /**
+   * A temporary chat: nothing is saved (no chat, no messages, no memories), so the browser sends
+   * the conversation so far with each message. Only the cost is recorded, for the spending limit.
+   */
+  temporary?: boolean;
+  history?: unknown[];
 };
+
+/** The most turns a temporary chat sends back with each message. */
+const MAX_TEMPORARY_TURNS = 400;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status: number, error: string) => NextResponse.json({ error }, { status });
@@ -69,6 +78,32 @@ export async function POST(req: NextRequest) {
   if (!body.regenerate && !UUID.test(body.clientRequestId ?? "")) return fail(400, "Something went wrong. Try again.");
   if (body.chatId && !UUID.test(body.chatId)) return fail(404, "That chat doesn't exist.");
   if (body.regenerate && !UUID.test(body.regenerate)) return fail(404, "That message doesn't exist.");
+  const temporary = body.temporary === true;
+  if (temporary && (body.chatId || body.regenerate)) return fail(400, "Something went wrong. Try again.");
+  // A temporary chat's earlier turns, as the browser holds them. Only your own files can be named.
+  let history: MessageRow[] = [];
+  if (temporary) {
+    const raw = Array.isArray(body.history) ? body.history : [];
+    if (raw.length > MAX_TEMPORARY_TURNS) return fail(400, "This temporary chat is too long. Start a new one.");
+    const at = Date.now() - raw.length - 1;
+    for (const [i, h] of raw.entries()) {
+      const turn = (h ?? {}) as { role?: unknown; text?: unknown; files?: unknown };
+      if ((turn.role !== "user" && turn.role !== "assistant") || typeof turn.text !== "string" || turn.text.length > MAX_MESSAGE_CHARS) {
+        return fail(400, "Something went wrong. Try again.");
+      }
+      const turnFiles = turn.role === "user" && Array.isArray(turn.files) ? turn.files.filter((f) => isFileRef(f, me.userId)) : [];
+      history.push({
+        id: `temporary-${i}`,
+        chat_id: "",
+        parent_id: i ? `temporary-${i - 1}` : null,
+        role: turn.role,
+        content: turnFiles.length ? { text: turn.text, files: turnFiles } : { text: turn.text },
+        status: "completed",
+        model: null,
+        created_at: new Date(at + i).toISOString(),
+      });
+    }
+  }
 
   const db = await supabaseServer();
   const admin = supabaseAdmin();
@@ -90,7 +125,7 @@ export async function POST(req: NextRequest) {
 
   // The chat: an existing one of yours, or (once the spending hold is in place) a new one.
   let chatId = body.chatId ?? null;
-  let all: MessageRow[] = [];
+  let all: MessageRow[] = history;
   if (chatId) {
     const { data: chat } = await db.from("chats").select("id").eq("id", chatId).eq("owner_id", me.userId).maybeSingle();
     if (!chat) return fail(404, "That chat doesn't exist.");
@@ -108,19 +143,23 @@ export async function POST(req: NextRequest) {
   // The monthly limit is a hard one: reserve the most this reply could cost before anything is
   // spent, counting other replies still being written. The reply is then kept short enough to fit.
   const search = body.search === true;
-  // What the person asked Depeche to remember. Their own rows only, read as them.
-  const { data: remembered } = await db
-    .from("memories")
-    .select("content")
-    .eq("owner_id", me.userId)
-    .eq("status", "active")
-    .order("updated_at", { ascending: false })
-    .limit(MEMORY_PROMPT_LIMIT)
-    .returns<{ content: string }[]>();
+  // What the person asked Depeche to remember. Their own rows only, read as them. A temporary chat
+  // neither uses nor suggests memories.
+  const { data: remembered } = temporary
+    ? { data: [] }
+    : await db
+        .from("memories")
+        .select("content")
+        .eq("owner_id", me.userId)
+        .eq("status", "active")
+        .order("updated_at", { ascending: false })
+        .limit(MEMORY_PROMPT_LIMIT)
+        .returns<{ content: string }[]>();
   const system = systemPrompt(
     me.profile.display_name,
     Boolean(body.voice),
     (remembered ?? []).map((m) => m.content),
+    temporary,
   );
   let historyChars = 0;
   const seen = [system, text];
@@ -147,7 +186,7 @@ export async function POST(req: NextRequest) {
   // long chats today; summarised ones once compaction lands). Each lookup sends the conversation
   // to the model again, so the hold covers that too, or the tool isn't offered.
   const historyTotal = all.reduce((n, m) => n + (m.content.text?.length ?? 0), text.length);
-  let mayLookUp = canLookUp(model.provider) && (historyTotal + fileTokens * 2 > HISTORY_CHARS * 0.8 || fakeAi());
+  let mayLookUp = !temporary && canLookUp(model.provider) && (historyTotal + fileTokens * 2 > HISTORY_CHARS * 0.8 || fakeAi());
   const reserve = async (lookups: boolean) => {
     const baseInput = inputTokensUpperBound(seen);
     const searchInput = search ? MAX_SEARCHES * SEARCH_INPUT_TOKENS : 0;
@@ -179,7 +218,7 @@ export async function POST(req: NextRequest) {
     });
   const maxOutput = plan.maxOutput(Number(hold.amount_usd));
 
-  if (!chatId) {
+  if (!chatId && !temporary) {
     const { data: chat, error } = await db
       .from("chats")
       .insert({ owner_id: me.userId, title: titleFrom(text || fileRefs[0]?.name || ""), model: model.id })
@@ -201,6 +240,19 @@ export async function POST(req: NextRequest) {
       return fail(404, "That message doesn't exist.");
     }
     question = q;
+  } else if (temporary) {
+    // Never saved: the question only exists for this request.
+    question = {
+      id: crypto.randomUUID(),
+      chat_id: "",
+      parent_id: all.at(-1)?.id ?? null,
+      role: "user",
+      content: fileRefs.length ? { text, files: fileRefs.map(({ path, name, mime, size }) => ({ path, name, mime, size })) } : { text },
+      status: "completed",
+      model: null,
+      created_at: new Date().toISOString(),
+    };
+    all = [...all, question];
   } else {
     const parent = activePath(all).at(-1);
     const { data: inserted, error } = await db
@@ -282,7 +334,7 @@ export async function POST(req: NextRequest) {
   const earlier = path.filter((m) => m.id !== question.id);
   const chatSearch =
     mayLookUp && (shouldOfferChatSearch(earlier, sent) || fakeAi())
-      ? chatSearcher(db, chatId, earlier, me.profile.display_name)
+      ? chatSearcher(db, chatId!, earlier, me.profile.display_name)
       : undefined;
 
   const abort = new AbortController();
@@ -305,7 +357,7 @@ export async function POST(req: NextRequest) {
           open = false;
         }
       };
-      send({ type: "start", chatId: finalChatId, userMessageId: questionId, userMessage: question });
+      send({ type: "start", chatId: finalChatId, temporary, userMessageId: questionId, userMessage: question });
 
       let reply = "";
       const memory = memoryFilter();
@@ -369,46 +421,55 @@ export async function POST(req: NextRequest) {
       // Each web search has a fee on top of tokens, so it counts toward the monthly limit too.
       const cost = estimateCost(used, usage.input, usage.output) + searchCost(used.provider, searches);
 
-      const { data: saved } = await admin
-        .from("messages")
-        .insert({
-          chat_id: finalChatId,
-          owner_id: me.userId,
-          parent_id: questionId,
-          role: "assistant",
-          content: {
-            text: reply,
-            ...(notice ? { notice } : {}),
-            ...(error ? { error } : {}),
-            ...(sources.length ? { sources } : {}),
-            ...(searches ? { searches } : {}),
-            ...(suggestions ? { suggestions } : {}),
-            cost,
-          },
-          status,
-          provider: used.provider,
-          model: used.id,
-        })
-        .select("id, chat_id, parent_id, role, content, status, model, created_at")
-        .single<MessageRow>();
+      const content: MessageRow["content"] = {
+        text: reply,
+        ...(notice ? { notice } : {}),
+        ...(error ? { error } : {}),
+        ...(sources.length ? { sources } : {}),
+        ...(searches ? { searches } : {}),
+        ...(suggestions ? { suggestions } : {}),
+        cost,
+      };
+      // A temporary chat's reply goes to the browser only.
+      const { data: saved } = temporary
+        ? {
+            data: {
+              id: crypto.randomUUID(), chat_id: "", parent_id: questionId, role: "assistant", content, status, model: used.id,
+              created_at: new Date().toISOString(),
+            } satisfies MessageRow as MessageRow,
+          }
+        : await admin
+            .from("messages")
+            .insert({
+              chat_id: finalChatId,
+              owner_id: me.userId,
+              parent_id: questionId,
+              role: "assistant",
+              content,
+              status,
+              provider: used.provider,
+              model: used.id,
+            })
+            .select("id, chat_id, parent_id, role, content, status, model, created_at")
+            .single<MessageRow>();
       const now = new Date().toISOString();
       await Promise.all([
         // Swap the hold for what the reply really cost.
         admin.rpc("settle_spend", {
           p_hold: hold.hold_id,
-          p_message: saved?.id ?? null,
+          p_message: temporary ? null : (saved?.id ?? null),
           p_provider: used.provider,
           p_model: used.id,
           p_input: usage.input,
           p_output: usage.output,
           p_cost: Number(cost.toFixed(6)),
         }),
-        admin.from("chats").update({ updated_at: now, model: model.id }).eq("id", finalChatId),
+        finalChatId ? admin.from("chats").update({ updated_at: now, model: model.id }).eq("id", finalChatId) : null,
         admin.from("profiles").update({ last_model: model.id }).eq("id", me.userId),
       ]);
 
       // A suggested memory waits for the person to keep or dismiss it; nothing is used until then.
-      const fact = status === "completed" ? memory.suggestions[0] : undefined;
+      const fact = status === "completed" && !temporary ? memory.suggestions[0] : undefined;
       if (saved && fact) {
         const { data: suggested } = await admin
           .from("memories")
@@ -452,12 +513,14 @@ const FILE_INSTRUCTIONS = [
   "Use a short file name without spaces. If the file contains ``` fences, open and close the file block with ```` instead. Only make a file when one is wanted, and keep remarks outside the block.",
 ].join(" ");
 
-function systemPrompt(name: string, voice: boolean, memories: string[]): string {
+function systemPrompt(name: string, voice: boolean, memories: string[], temporary = false): string {
   return [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
-    memoryInstructions(name, memories),
+    temporary
+      ? `This is a temporary chat: it isn't saved and nothing from it is remembered. If ${name} asks you to remember something, say that temporary chats can't save memories.`
+      : memoryInstructions(name, memories),
     voice ? "" : FILE_INSTRUCTIONS,
     voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."

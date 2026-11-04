@@ -13,6 +13,9 @@ import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
 import { ACCEPT, AttachmentTray, MessageFiles, useAttachments, type Pending } from "./Attachments";
 import { ModelPicker } from "./ModelPicker";
+import { TemporaryToggle, historyOf, type TemporaryTurn } from "./Temporary";
+import { supabaseBrowser } from "@/lib/supabase/browser";
+import { UPLOAD_BUCKET } from "@/lib/chat/files";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
 import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
@@ -29,8 +32,21 @@ const draftId = () => `local-${Math.random().toString(36).slice(2)}`;
  * The chat screen: your chats on the left (a drawer on phones), the conversation, and the box to
  * write in. Replies stream in from /api/chat as they're written.
  */
-export function ChatApp({ shell: initialShell, chat: initialChat, messages: initial }: { shell: Shell; chat: ChatRow | null; messages: MessageRow[] }) {
+export function ChatApp({
+  shell: initialShell,
+  chat: initialChat,
+  messages: initial,
+  temporary: startTemporary = false,
+}: {
+  shell: Shell;
+  chat: ChatRow | null;
+  messages: MessageRow[];
+  /** Start as a temporary chat (opened from /?temporary). */
+  temporary?: boolean;
+}) {
   const router = useRouter();
+  // A temporary chat lives only on this screen: nothing is saved, and it's gone once you leave.
+  const [temporary, setTemporary] = useState(startTemporary && !initialChat);
   const [shell, setShell] = useState(initialShell);
   const [chat, setChat] = useState<ChatRow | null>(initialChat);
   const [messages, setMessages] = useState<Live[]>(initial);
@@ -69,6 +85,19 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   const [voiceOpen, setVoiceOpen] = useState(false);
   const attachments = useAttachments(initialShell.userId);
   const abortRef = useRef<AbortController | null>(null);
+  // Files sent in a temporary chat are deleted when you leave it (the daily clean-up catches any left).
+  const temporaryFiles = useRef<string[]>([]);
+  useEffect(() => {
+    const forget = () => {
+      const paths = temporaryFiles.current.splice(0);
+      if (paths.length) supabaseBrowser().storage.from(UPLOAD_BUCKET).remove(paths).catch(() => {});
+    };
+    window.addEventListener("pagehide", forget);
+    return () => {
+      window.removeEventListener("pagehide", forget);
+      forget();
+    };
+  }, []);
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
 
@@ -114,7 +143,10 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     rememberModel(id).catch(() => {});
   };
 
-  async function run(body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean }, optimistic: Live[]) {
+  async function run(
+    body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean; temporary?: boolean; history?: TemporaryTurn[] },
+    optimistic: Live[],
+  ) {
     if (!model) return;
     setBanner(null);
     setBusy(true);
@@ -173,14 +205,16 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
         for (const line of lines) {
           if (!line) continue;
           const ev = JSON.parse(line) as
-            | { type: "start"; chatId: string; userMessage: MessageRow }
+            | { type: "start"; chatId: string | null; userMessage: MessageRow }
             | { type: "text"; text: string }
             | { type: "notice"; text: string }
             | { type: "searching"; query?: string; where?: "chat" }
             | { type: "sources"; sources: Source[] }
             | { type: "done" | "error"; message: MessageRow | null; error?: string };
           if (ev.type === "start") {
-            if (!chatId) {
+            const questionId = ev.userMessage.id;
+            patchReply((m) => ({ ...m, parent_id: questionId }));
+            if (!chatId && ev.chatId) {
               chatId = ev.chatId;
               const created: ChatRow = {
                 id: ev.chatId,
@@ -267,11 +301,24 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       model: null,
       created_at: new Date().toISOString(),
     };
-    run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}) }, [mine]);
+    if (temporary) temporaryFiles.current.push(...files.map((f) => f.path));
+    run(
+      { text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}), ...(temporary ? { temporary, history: historyOf(messages) } : {}) },
+      [mine],
+    );
   };
 
   const regenerate = (questionId: string) => {
     if (busy) return;
+    if (temporary) {
+      // Nothing is stored, so ask the question again with the conversation before it.
+      const at = messages.findIndex((m) => m.id === questionId);
+      const q = messages[at];
+      if (!q) return;
+      setMessages((list) => list.slice(0, at + 1));
+      run({ text: q.content.text ?? "", ...(q.content.files?.length ? { files: q.content.files } : {}), temporary, history: historyOf(messages.slice(0, at)) }, []);
+      return;
+    }
     // The old reply is kept in the database; the new one replaces it on screen.
     setMessages((list) => list.slice(0, list.findIndex((m) => m.id === questionId) + 1));
     run({ regenerate: questionId }, []);
@@ -308,7 +355,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             <MenuIcon />
           </button>
           <div className="flex min-w-0 flex-1 flex-col items-center md:flex-row md:items-center md:gap-4">
-            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">{chat?.title ?? "New chat"}</h1>
+            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">{chat?.title ?? (temporary ? "Temporary chat" : "New chat")}</h1>
             {model ? (
               <button
                 type="button"
@@ -320,6 +367,16 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
               </button>
             ) : null}
           </div>
+          {!chat && (messages.length === 0 || temporary) ? (
+            <TemporaryToggle
+              on={temporary}
+              locked={messages.length > 0}
+              onToggle={() => {
+                setTemporary((t) => !t);
+                window.history.replaceState(null, "", temporary ? "/" : "/?temporary");
+              }}
+            />
+          ) : null}
           {chat ? <ChatMenu chat={chat} onChange={(c) => { setChat(c); setShell((s) => ({ ...s, chats: s.chats.map((x) => (x.id === c.id ? c : x)) })); }} onDeleted={() => router.push("/")} /> : null}
           <Link href="/" className="p-2 md:hidden" aria-label="New chat">
             <NewChatIcon />
@@ -337,8 +394,13 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
           <div className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
             {messages.length === 0 ? (
               <div className="flex flex-col gap-2 pt-[12vh]">
-                <h2 className="text-[34px] font-semibold tracking-tight">Hi, {shell.name}.</h2>
-                {noModels ? (
+                <h2 className="text-[34px] font-semibold tracking-tight">{temporary ? "Temporary chat" : `Hi, ${shell.name}.`}</h2>
+                {temporary && !noModels ? (
+                  <p data-testid="temporary-note" className="max-w-[460px] text-[17px] text-mute">
+                    This chat won&apos;t be saved or added to your chats, and nothing in it is remembered. It&apos;s gone once you
+                    leave or start a new chat.
+                  </p>
+                ) : noModels ? (
                   <p className="text-[17px] text-mute">
                     {shell.isAdmin ? (
                       <>

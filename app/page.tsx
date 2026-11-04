@@ -7,7 +7,7 @@ import { loadShell } from "@/lib/chat/load";
 export const dynamic = "force-dynamic";
 
 /** Home is a new chat. */
-export default async function Home() {
+export default async function Home({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (!isConfigured()) {
     // Before Supabase is connected, show the title card so a fresh deployment visibly works.
     return (
@@ -25,5 +25,7 @@ export default async function Home() {
 
   const me = await requireMe();
   const shell = await loadShell(me);
-  return <ChatApp key="new" shell={shell} chat={null} messages={[]} />;
+  // /?temporary opens a temporary chat straight away.
+  const temporary = (await searchParams).temporary !== undefined;
+  return <ChatApp key="new" shell={shell} chat={null} messages={[]} temporary={temporary} />;
 }
