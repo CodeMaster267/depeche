@@ -3,6 +3,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { MessageRow } from "@/lib/chat/thread";
 import { MessageFiles } from "./Attachments";
+import { QuoteLine } from "./Extras";
 import { ChevronLeftIcon, ChevronRightIcon, CopyIcon, EditIcon } from "./icons";
 
 /** "‹ 2 / 3 ›": flip between versions of a message (its edits, or a reply's regenerations). */
@@ -72,6 +73,7 @@ export function UserMessage({
 
   return (
     <div className="msg-row flex flex-col items-end gap-1.5">
+      {m.content.quote ? <QuoteLine quote={m.content.quote} /> : null}
       {m.content.files?.length ? <MessageFiles files={m.content.files} /> : null}
       {editing ? (
         <EditBox
