@@ -53,6 +53,8 @@ export type ChatRow = {
   model: string | null;
   pinned: boolean;
   updated_at: string;
+  /** Set while the chat is archived: out of the list until restored or written in. */
+  archived_at?: string | null;
   /** Set on chats brought in from another app's export. */
   imported_from?: "chatgpt" | "claude" | "gemini" | null;
   created_at?: string;
