@@ -42,6 +42,8 @@ export type MessageRow = {
     read?: string[];
     /** The person asked the model to think harder for this reply. */
     harder?: boolean;
+    /** Skills from the person's list that the reply used (lib/skills/match.ts). */
+    skills?: { id: string; name: string }[];
     /** Set when two or three models answered the same question side by side (see lib/chat/compare.ts). */
     compare?: { id: string; slot: number };
   };
