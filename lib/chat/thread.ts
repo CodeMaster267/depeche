@@ -58,6 +58,8 @@ export type ChatRow = {
   model: string | null;
   pinned: boolean;
   updated_at: string;
+  /** Auto-compaction for this chat ("auto" unless turned off). Only loaded for the open chat. */
+  compaction?: "auto" | "off";
   /** Set while the chat is archived: out of the list until restored or written in. */
   archived_at?: string | null;
   /** Set on chats brought in from another app's export. */

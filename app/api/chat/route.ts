@@ -16,6 +16,8 @@ import { allow } from "@/lib/rate-limit";
 import { notifyIfAway } from "@/lib/push/notify";
 import { MAX_QUERIES, MAX_REASONING_CHARS, thinkingClock } from "@/lib/chat/activity";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
+import { compactChat, compactOverride, loadSummaries } from "@/lib/chat/compact";
+import { activeSummary, compactAt, planCompaction, summaryForModel, unsummarisedTokens, type SummaryRow } from "@/lib/chat/summary";
 import { CANVAS_PROMPT_CHARS, fenceFor, withoutCanvasBlocks } from "@/lib/canvas";
 import { saveReplyCanvases } from "@/lib/chat/canvas";
 import { pictureReply } from "./picture";
@@ -154,10 +156,20 @@ export async function POST(req: NextRequest) {
   // The chat: an existing one of yours, or (once the spending hold is in place) a new one.
   let chatId = body.chatId ?? null;
   let all: MessageRow[] = history;
+  let summaries: SummaryRow[] = [];
+  // Temporary chats are never saved, so they are never summarised either.
+  let compaction = !temporary;
   let canvas: OpenCanvas | null = null;
   if (chatId) {
-    const { data: chat } = await db.from("chats").select("id").eq("id", chatId).eq("owner_id", me.userId).maybeSingle();
+    const { data: chat } = await db
+      .from("chats")
+      .select("id, compaction")
+      .eq("id", chatId)
+      .eq("owner_id", me.userId)
+      .maybeSingle<{ id: string; compaction: string }>();
     if (!chat) return fail(404, "That chat doesn't exist.");
+    if (chat.compaction === "off") compaction = false;
+    summaries = await loadSummaries(db, chatId);
     const { data: existing } = await db
       .from("messages")
       .select("id, chat_id, parent_id, role, content, status, model, created_at")
@@ -216,7 +228,13 @@ export async function POST(req: NextRequest) {
   ) + (skills.length ? `\n\n${skillsPrompt(me.profile.display_name, skills)}` : "");
   let historyChars = 0;
   const seen = [system, text, quote ?? ""];
+  // A summarised part of the chat is sent as its summary, not message by message.
+  const current = activePath(all);
+  const summarised = compaction ? activeSummary(current, summaries) : null;
+  const covered = new Set(summarised ? current.slice(0, summarised.index + 1).map((m) => m.id) : []);
+  if (summarised) seen.push(summaryForModel(summarised.summary));
   for (const m of [...all].reverse()) {
+    if (covered.has(m.id)) continue;
     const t = m.content.text ?? "";
     if (historyChars + t.length > HISTORY_CHARS + 50_000) break;
     historyChars += t.length;
@@ -236,10 +254,15 @@ export async function POST(req: NextRequest) {
     }
   }
   // "Search this chat" may be offered when part of the chat won't be sent word for word (very
-  // long chats today; summarised ones once compaction lands). Each lookup sends the conversation
+  // long chats, and summarised ones). Each lookup sends the conversation
   // to the model again, so the hold covers that too, or the tool isn't offered.
   const historyTotal = all.reduce((n, m) => n + (m.content.text?.length ?? 0), text.length);
-  let mayLookUp = !temporary && canLookUp(model.provider) && (historyTotal + fileTokens * 2 > HISTORY_CHARS * 0.8 || fakeAi());
+  // A summary (now, or one made before this reply) also leaves messages out of what's sent.
+  const willSummarise = compaction && unsummarisedTokens(current, summarised?.index ?? -1) >= compactAt(model, compactOverride()) * 1.5;
+  let mayLookUp =
+    !temporary &&
+    canLookUp(model.provider) &&
+    (historyTotal + fileTokens * 2 > HISTORY_CHARS * 0.8 || !!summarised || willSummarise || fakeAi());
   const reserve = async (lookups: boolean) => {
     const baseInput = inputTokensUpperBound(seen);
     const searchInput = search ? MAX_SEARCHES * SEARCH_INPUT_TOKENS : 0;
@@ -338,13 +361,31 @@ export async function POST(req: NextRequest) {
   const byId = new Map(all.map((m) => [m.id, m]));
   const path: MessageRow[] = [];
   for (let m: MessageRow | undefined = question; m; m = m.parent_id ? byId.get(m.parent_id) : undefined) path.unshift(m);
+  // A long chat that wasn't summarised in the background (the app was closed, or a smaller model was
+  // picked) is summarised now, before answering, once it is well past the point where it should be.
+  const override = compactOverride();
+  let applied = compaction ? activeSummary(path, summaries) : null;
+  let madeNow: SummaryRow | undefined;
+  if (compaction && chatId && unsummarisedTokens(path.slice(0, -1), applied?.index ?? -1) >= compactAt(model, override) * 1.5) {
+    const made = await compactChat({
+      userId: me.userId, name: me.profile.display_name, familyId: me.profile.family_id, chatId,
+      chatModel: model, path: path.slice(0, -1), summaries, signal: req.signal, override,
+    }).catch(() => ({ skipped: "failed" }) as const);
+    if ("summary" in made) {
+      summaries = [...summaries, made.summary];
+      applied = activeSummary(path, summaries);
+      madeNow = made.summary;
+    }
+  }
+  // Past the summary point (if any) message by message; the part before it as its summary.
   const turns: Turn[] = [];
   // Messages the model gets word for word (or that have nothing to send); the rest can be looked up.
   const sent = new Set<string>([question.id]);
-  let budget = HISTORY_CHARS;
+  let trimmed = false;
+  let budget = model.context ? Math.min(HISTORY_CHARS, model.context * 3) : HISTORY_CHARS;
   let fileBudget = FILE_BYTES_BUDGET;
   const storage = supabaseAdmin().storage.from(UPLOAD_BUCKET);
-  for (const m of [...path].reverse()) {
+  for (const m of path.slice(applied ? applied.index + 1 : 0).reverse()) {
     // Old canvas texts aren't sent again: the canvas as it is now is in the instructions.
     let t =
       m.role === "user"
@@ -388,7 +429,10 @@ export async function POST(req: NextRequest) {
       sent.add(m.id);
       continue;
     }
-    if (budget - t.length < 0 && turns.length) break;
+    if (budget - t.length < 0 && turns.length) {
+      trimmed = true;
+      break;
+    }
     budget -= t.length;
     sent.add(m.id);
     // Providers expect turns to alternate, so two in a row from one side are joined.
@@ -397,7 +441,9 @@ export async function POST(req: NextRequest) {
     } else turns.unshift({ role: m.role as Turn["role"], text: t, files: attached.length ? attached : undefined });
   }
   while (turns[0]?.role === "assistant") turns.shift();
-  // The question itself is in front of the model, so a lookup searches everything before it.
+  if (applied && turns[0]) turns[0] = { ...turns[0], text: `${summaryForModel(applied.summary)}\n\n${turns[0].text}` };
+  // The question itself is in front of the model, so a lookup searches everything before it,
+  // summarised messages included.
   const earlier = path.filter((m) => m.id !== question.id);
   const chatSearch =
     mayLookUp && (shouldOfferChatSearch(earlier, sent) || fakeAi())
@@ -430,7 +476,10 @@ export async function POST(req: NextRequest) {
       const memory = memoryFilter();
       const followups = tagFilter(FOLLOWUPS_OPEN, FOLLOWUPS_CLOSE);
       let used = model;
-      let notice: string | undefined;
+      let notice: string | undefined = trimmed
+        ? "This chat is very long, so its oldest messages were left out of what the model saw this time."
+        : undefined;
+      if (notice) send({ type: "notice", text: notice });
       let usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number } | undefined;
       let sources: Source[] = [];
       let searches = 0;
@@ -589,8 +638,12 @@ export async function POST(req: NextRequest) {
         if (suggested) saved.memory = suggested;
       }
 
+      // Due for a summary? The app then asks for one in the background, so the next message is cheaper.
+      const compact =
+        compaction && !!saved && status === "completed" &&
+        !!planCompaction([...path, saved], activeSummary([...path, saved], summaries)?.index ?? -1, model, compactOverride());
       if (error) send({ type: "error", error, message: saved });
-      else send({ type: "done", message: saved });
+      else send({ type: "done", message: saved, ...(compact ? { compact: true } : {}), ...(madeNow ? { summary: madeNow } : {}) });
       try {
         if (open) controller.close();
       } catch {

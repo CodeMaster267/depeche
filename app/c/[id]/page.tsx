@@ -22,7 +22,7 @@ export default async function ChatPage({
   if (!found) notFound();
   return (
     <PersonalLook>
-      <ChatApp key={`${id}:${focus ?? ""}`} shell={shell} chat={found.chat} messages={found.messages} all={found.all} focus={focus} />
+      <ChatApp key={`${id}:${focus ?? ""}`} shell={shell} chat={found.chat} messages={found.messages} all={found.all} summaries={found.summaries} focus={focus} />
     </PersonalLook>
   );
 }
