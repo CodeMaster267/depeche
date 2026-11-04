@@ -143,7 +143,7 @@ export function ChatApp({
 
   const model = findModel(modelId);
   const selected = model;
-  // DeepSeek and some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
+  // DeepSeek can't search the web, so the globe is shown off and greyed out while one is picked.
   const searchable = canSearch(model);
   // Picture models make or edit a picture from each message.
   const imaging = !!model?.image;
@@ -157,8 +157,8 @@ export function ChatApp({
   useEffect(() => setEditLast(true), [lastPicture?.path]);
   const editing = imaging && editLast && lastPicture && !attachments.items.some((x) => x.ref?.path === lastPicture.path) ? lastPicture : undefined;
   const noModels = shell.modelIds.length === 0;
-  // Listening needs a provider that understands audio (Groq, OpenAI or Google); Claude has none.
-  const canListen = shell.modelIds.some((id) => ["groq", "openai", "google"].includes(findModel(id)?.provider ?? ""));
+  // Listening needs a provider that understands audio (Google or OpenAI); Claude has none.
+  const canListen = shell.modelIds.some((id) => ["google", "openai"].includes(findModel(id)?.provider ?? ""));
 
   // Keep the newest text in view while a reply streams, unless the person scrolled up to read.
   useLayoutEffect(() => {
