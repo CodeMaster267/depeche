@@ -916,7 +916,12 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   const asAssistant = q.includes("assistant")
     ? `Assistant: ${/In this chat you are "([^"]+)"/.exec(system)?.[1] ?? "none"}. Assistant instructions: ${/<assistant_instructions>\n([\s\S]*?)\n<\/assistant_instructions>/.exec(system)?.[1] ?? "none"}. Assistant files: ${[...(/<assistant_files>([\s\S]*?)<\/assistant_files>/.exec(system)?.[1] ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1]).join(", ") || "none"}.\n\n`
     : "";
-  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + fromProject + asAssistant + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
+  // "next steps" makes it suggest follow-up questions, to test the follow-up buttons.
+  const followups = q.includes("next steps") ? "\n\n<followups>\n- How do I check the answer?\n2. What if a is zero?\n</followups>" : "";
+  // A question about part of an earlier answer says which part it was given, to test quoting.
+  const about = /^About this part of your earlier answer:\n> (.*)/.exec(last?.text ?? "");
+  const asked = about ? `You asked about "${about[1].slice(0, 60)}".\n\n` : "";
+  const reply = asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + fromProject + asAssistant + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

@@ -17,6 +17,7 @@ import {
   type AssistantContext,
   type ProjectContext,
 } from "@/lib/chat/project-context";
+import { FOLLOWUPS_CLOSE, FOLLOWUPS_OPEN, cleanQuote, followUpInstructions, parseFollowUps, tagFilter, withQuote } from "@/lib/chat/followups";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
 import { MAX_QUERIES, MAX_REASONING_CHARS, thinkingClock } from "@/lib/chat/activity";
@@ -34,6 +35,11 @@ type Body = {
   model?: string;
   /** Answer this existing message again instead of sending a new one. */
   regenerate?: string;
+  /**
+   * The message this one follows: the end of the conversation as shown, or, for an edit, the
+   * message before the one being edited (null when editing the first). Left out, the newest.
+   */
+  parent?: string | null;
   /** Let the model search the web when it needs to. */
   search?: boolean;
   /** Sent from voice chat: the reply will be read aloud. */
@@ -42,6 +48,8 @@ type Body = {
   projectId?: string | null;
   /** Start the new chat with this saved assistant (yours, or one shared with your family). */
   assistantId?: string | null;
+  /** The part of an earlier answer this message asks about. */
+  quote?: unknown;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -77,6 +85,7 @@ export async function POST(req: NextRequest) {
   if (files.length > MAX_FILES_PER_MESSAGE) return fail(400, `Attach up to ${MAX_FILES_PER_MESSAGE} files at a time.`);
   if (!files.every((f) => isFileRef(f, me.userId))) return fail(400, "One of those files can't be sent. Attach it again.");
   const fileRefs = files as FileRef[];
+  const quote = body.regenerate ? undefined : cleanQuote(body.quote);
   if (!body.regenerate && !text && !fileRefs.length) return fail(400, "Type a message first.");
   if (text.length > MAX_MESSAGE_CHARS) return fail(400, "That message is too long. Try splitting it up.");
   if (!body.regenerate && !UUID.test(body.clientRequestId ?? "")) return fail(400, "Something went wrong. Try again.");
@@ -84,6 +93,8 @@ export async function POST(req: NextRequest) {
   if (body.regenerate && !UUID.test(body.regenerate)) return fail(404, "That message doesn't exist.");
   if (body.projectId && !UUID.test(body.projectId)) return fail(404, "That project doesn't exist.");
   if (body.assistantId && !UUID.test(body.assistantId)) return fail(404, "That assistant isn't available.");
+  const parentGiven = "parent" in body && !body.regenerate;
+  if (parentGiven && body.parent !== null && !UUID.test(String(body.parent))) return fail(404, "That message doesn't exist.");
 
   const db = await supabaseServer();
   const admin = supabaseAdmin();
@@ -127,9 +138,11 @@ export async function POST(req: NextRequest) {
       .order("created_at")
       .returns<MessageRow[]>();
     all = existing ?? [];
-  } else if (body.regenerate) {
+  } else if (body.regenerate || (parentGiven && body.parent)) {
     return fail(404, "That chat doesn't exist.");
   }
+  // An edit or a reply to an earlier version must follow a message in this same chat.
+  if (parentGiven && body.parent && !all.some((m) => m.id === body.parent)) return fail(404, "That message doesn't exist.");
 
   // The monthly limit is a hard one: reserve the most this reply could cost before anything is
   // spent, counting other replies still being written. The reply is then kept short enough to fit.
@@ -162,7 +175,7 @@ export async function POST(req: NextRequest) {
     assistant,
   );
   let historyChars = 0;
-  const seen = [system, text];
+  const seen = [system, text, quote ?? ""];
   for (const m of [...all].reverse()) {
     const t = m.content.text ?? "";
     if (historyChars + t.length > HISTORY_CHARS + 50_000) break;
@@ -255,7 +268,7 @@ export async function POST(req: NextRequest) {
     }
     question = q;
   } else {
-    const parent = activePath(all).at(-1);
+    const parent = parentGiven ? (body.parent ? all.find((m) => m.id === body.parent) : undefined) : activePath(all).at(-1);
     const { data: inserted, error } = await db
       .from("messages")
       .insert({
@@ -263,7 +276,11 @@ export async function POST(req: NextRequest) {
         owner_id: me.userId,
         parent_id: parent?.id ?? null,
         role: "user",
-        content: fileRefs.length ? { text, files: fileRefs.map(({ path, name, mime, size }) => ({ path, name, mime, size })) } : { text },
+        content: {
+          text,
+          ...(fileRefs.length ? { files: fileRefs.map(({ path, name, mime, size }) => ({ path, name, mime, size })) } : {}),
+          ...(quote ? { quote } : {}),
+        },
         client_request_id: body.clientRequestId,
       })
       .select("id, chat_id, parent_id, role, content, status, model, created_at")
@@ -290,7 +307,7 @@ export async function POST(req: NextRequest) {
   let fileBudget = FILE_BYTES_BUDGET;
   const storage = supabaseAdmin().storage.from(UPLOAD_BUCKET);
   for (const m of [...path].reverse()) {
-    let t = m.content.text ?? "";
+    let t = m.role === "user" ? withQuote(m.content.text ?? "", cleanQuote(m.content.quote)) : (m.content.text ?? "");
     const attached: TurnFile[] = [];
     if (m.role === "user") {
       for (const f of m.content.files ?? []) {
@@ -376,6 +393,7 @@ export async function POST(req: NextRequest) {
 
       let reply = "";
       const memory = memoryFilter();
+      const followups = tagFilter(FOLLOWUPS_OPEN, FOLLOWUPS_CLOSE);
       let used = model;
       let notice: string | undefined;
       let usage: { input: number; output: number } | undefined;
@@ -403,7 +421,8 @@ export async function POST(req: NextRequest) {
             }
           } else if (ev.type === "text") {
             // A suggested memory is taken out of the reply and offered separately.
-            const shown = memory.push(ev.text);
+            // So are follow-up questions, which are shown as buttons instead.
+            const shown = followups.push(memory.push(ev.text));
             if (shown) {
               reply += shown;
               send({ type: "text", text: shown });
@@ -437,13 +456,14 @@ export async function POST(req: NextRequest) {
       }
 
       clock.stopped();
-      const tail = memory.end();
+      const tail = followups.push(memory.end()) + followups.end();
       if (tail) {
         reply += tail;
         send({ type: "text", text: tail });
       }
 
       // Stopped replies have no usage report, so estimate about four characters per token.
+      const estimated = !usage;
       if (!usage) {
         const inputChars = turns.reduce((n, t) => n + t.text.length, system.length);
         usage = { input: status === "failed" ? 0 : Math.ceil(inputChars / 4), output: Math.ceil(reply.length / 4) };
@@ -467,6 +487,8 @@ export async function POST(req: NextRequest) {
             ...(sources.length ? { sources } : {}),
             ...(searches ? { searches } : {}),
             ...(suggestions ? { suggestions } : {}),
+            ...(status === "completed" && parseFollowUps(followups.found).length ? { followups: parseFollowUps(followups.found) } : {}),
+            usage: { input: usage.input, output: usage.output, ...(estimated ? { estimated } : {}) },
             ...(reasoning.trim() ? { reasoning, thoughtMs: clock.ms } : {}),
             ...(queries.length ? { queries } : {}),
             ...(lookups.length ? { lookups } : {}),
@@ -554,6 +576,7 @@ function systemPrompt(
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
     memoryInstructions(name, memories),
     voice ? "" : FILE_INSTRUCTIONS,
+    voice ? "" : followUpInstructions(name),
     voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."
       : "",
