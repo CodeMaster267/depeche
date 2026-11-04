@@ -1,3 +1,4 @@
+import { PROVIDER_NAME } from "@/lib/ai/models";
 /** What the Health screen reads, and the plain-language alerts it raises. */
 export type FamilyProvider = {
   provider: string;
@@ -23,7 +24,7 @@ export type SystemHealth = {
   last_backup_restore_verified: boolean | null;
 };
 
-const NAMES: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google", groq: "Groq" };
+const NAMES: Record<string, string> = PROVIDER_NAME;
 const HOUR = 3_600_000;
 /** Supabase's free plan allows a 500 MB database. */
 export const FREE_DB_BYTES = 500_000_000;
