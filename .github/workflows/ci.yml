@@ -53,8 +53,13 @@ jobs:
         env:
           DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
           BACKUP_PASSPHRASE: local-drill-passphrase-not-a-secret
+        # The tests leave Storage files behind, so the backup needs the local project's URL and its
+        # fixed development secret key (from .env.local). Only the backup gets them: the restore
+        # then checks the files without uploading anything back.
         run: |
-          scripts/backup/backup.sh "$RUNNER_TEMP/backup"
+          SUPABASE_URL="$(sed -n 's/^NEXT_PUBLIC_SUPABASE_URL=//p' .env.local)" \
+          SUPABASE_SERVICE_ROLE_KEY="$(sed -n 's/^SUPABASE_SERVICE_ROLE_KEY=//p' .env.local)" \
+            scripts/backup/backup.sh "$RUNNER_TEMP/backup"
           scripts/backup/restore.sh "$RUNNER_TEMP"/backup/*.gpg "$(scripts/backup/scratch-db.sh)"
       - name: Keep the report if something failed
         if: failure()
