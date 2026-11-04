@@ -21,6 +21,16 @@ export type MessageRow = {
     searches?: number;
     /** Google's "Search suggestions" chips (its own HTML), shown in a sandbox as Google requires. */
     suggestions?: string;
+    /** The model's reasoning, or its provider's summary of it, shown collapsed above the reply. */
+    reasoning?: string;
+    /** How long the model thought, in milliseconds. */
+    thoughtMs?: number;
+    /** What the reply searched the web for. */
+    queries?: string[];
+    /** What the reply looked up in earlier messages of this chat. */
+    lookups?: string[];
+    /** Files the reply read (those sent with the question). */
+    read?: string[];
     /** Set when two or three models answered the same question side by side (see lib/chat/compare.ts). */
     compare?: { id: string; slot: number };
   };
