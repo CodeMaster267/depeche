@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { OWNER, admin, signInWithPassword, uniqueEmail } from "./helpers";
 
 /** Personal instructions: written on the Memory page, private, and given to the model every time. */
@@ -43,8 +43,7 @@ test("personal instructions are saved, reach the model, and can be paused", asyn
   await page.goto("/");
   await page.getByRole("button", { name: /Change model/ }).click();
   await page.getByRole("dialog", { name: "Choose a model" }).getByRole("button", { name: /Gemini 3\.8 Flash/ }).click();
-  await page.getByLabel("Message Depeche").fill("what are my instructions");
-  await page.getByRole("button", { name: "Send" }).click();
+  await ask(page, "what are my instructions");
   let reply = page.getByTestId("reply").last();
   await expect(reply).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
   await expect(reply).toContainText("About you: I'm a nurse in Leeds.");
@@ -60,9 +59,22 @@ test("personal instructions are saved, reach the model, and can be paused", asyn
   await expect(form.getByLabel("About you")).toHaveValue("I'm a nurse in Leeds.");
 
   await page.goto("/");
-  await page.getByLabel("Message Depeche").fill("what are my instructions");
-  await page.getByRole("button", { name: "Send" }).click();
+  await ask(page, "what are my instructions");
   reply = page.getByTestId("reply").last();
   await expect(reply).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
   await expect(reply).toContainText("No personal instructions.");
 });
+
+/**
+ * Types and sends a message. Text typed before the page has finished loading can be cleared, and an
+ * empty composer shows the voice button instead of Send, so it types again until Send appears.
+ */
+async function ask(page: Page, text: string) {
+  const box = page.getByLabel("Message Depeche");
+  const send = page.getByRole("button", { name: "Send" });
+  await expect(async () => {
+    await box.fill(text);
+    await expect(send).toBeEnabled({ timeout: 1000 });
+  }).toPass({ timeout: 10_000 });
+  await send.click();
+}
