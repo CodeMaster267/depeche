@@ -66,9 +66,9 @@ naming the page you're on to switch). "Ask Concierge", under your chats, opens t
   },
   {
     id: "composer",
-    title: "Attaching files, web search, deep research",
+    title: "Attaching files, web search, deep research, saved prompts, think harder",
     text: `
-The buttons next to the message box:
+The buttons in the row under the message box:
 - Paperclip ("Attach"): opens a menu with three choices.
   - "Photos and files": photos, PDFs, Word, Excel, PowerPoint, and text or code files. Up to 5 files a message and
     10 MB each. You can also paste or drag files in. Word, Excel and PowerPoint files are read by Depeche and sent as
@@ -83,7 +83,21 @@ The buttons next to the message box:
   has a small fee. DeepSeek models can't search, so the globe is greyed out for them.
 - Deep research (the magnifier with lines): for this one message, the model runs several web searches and writes a long
   report with sources. It takes a few minutes and costs more than a normal reply; progress shows in the chat.
-- Microphone: see Voice.`,
+- Light bulb ("Think harder"): asks Claude, GPT or Gemini to reason longer and more carefully before answering. Slower
+  and a little dearer; the reply says "thought harder" next to the model's name. It stays on until you turn it off or
+  leave the page. Greyed out for DeepSeek and Grok, which can't be asked.
+- Bookmark ("Saved prompts"): messages you use often. Tap "New prompt", or "Save what I typed" to keep what's in the box.
+  Put a word in double curly brackets, like {{language}}, and you're asked to fill it in each time you use the prompt;
+  then it goes into the message box for you to check and send. Tap Edit on a prompt to change or delete it. Only you
+  can see your saved prompts.
+- Microphone: see Voice.
+
+While a reply is being written you can keep typing. Tap the outlined arrow ("Send after this reply"), or press Enter on
+a computer, and your message waits above the box and is sent as soon as the reply finishes (up to 5 can wait). Tap ×
+to take one back. If you stop a reply, waiting messages stay until you tap "Send now".
+
+Anything you type but don't send is kept as a draft for that chat on this device, so it's still there when you come
+back. Drafts are cleared when you sign out.`,
   },
   {
     id: "files-out",
@@ -134,11 +148,25 @@ Voice works while the app is open; iPhones don't let websites listen in the back
     text: `
 - The side menu lists your chats: Pinned, Today, Yesterday, Previous 7 days, Earlier. The Search box there filters by title.
 - Each chat has three dots (in the list, and at the top right of an open chat) with: Rename, Pin (or Unpin), Archive
-  (or Restore), Download (the chat as a file) and Delete.
+  (or Restore), Download (the chat as a file) and Delete. In an open chat it also has "Turn off summaries" (or "Turn on").
 - "Archived chats" at the bottom of the list shows chats you put away. Writing in an archived chat brings it back.
 - Chats you haven't used for a month are deleted with their files, archived ones too. Pinned chats are always kept. To
   keep everything, turn on "Keep all my chats" in [Account → Old chats](/account#old-chats). When chats are about to be
   deleted, a line at the top of the chat screen says so, with "Keep" to save them.`,
+  },
+  {
+    id: "summaries",
+    title: "Long chats: summaries of earlier messages",
+    text: `
+- When a chat gets very long (roughly 35,000 words), Depeche has the cheapest model of the same AI company write a
+  summary of the older part, plus a list of exact details (numbers, dates, names, links, decisions). From then on the
+  model reads that summary and the recent messages instead of everything, so long chats stay cheap and fit.
+- Nothing is deleted: every message stays in the chat. A line "Earlier messages summarised" marks where the summary
+  ends; tap it to read the summary, its key facts and what it cost.
+- In that sheet: "Redo summary" writes it again from the original messages, "Don't use this summary" drops it, and
+  "Turn off for this chat" stops summaries for that chat (turn them back on from the chat's three dots).
+- The model can still look up the exact wording of anything earlier in the chat when it needs to.
+- Summaries count towards your monthly limit like replies, and usually cost a fraction of a cent.`,
   },
   {
     id: "temporary-and-sharing",
