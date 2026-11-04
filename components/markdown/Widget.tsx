@@ -1,8 +1,12 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Runner } from "./RunCode";
 import { checkWidgetEvent, widgetDocument, type Theme } from "@/lib/widgets/frame";
+import { costText } from "@/lib/gadgets/cost";
+import { loadGadgetData, saveGadget, saveGadgetData } from "@/app/gadgets/actions";
 
 /** The page's colours and font, so a gadget can match the look (including a personal look). */
 function readTheme(): Theme {
@@ -37,9 +41,34 @@ function useTheme(): Theme | null {
   return theme;
 }
 
-/** A ```widget:Title block: a gadget (small app) the model built, working right in the reply. */
-export function Widget({ title, html, streaming }: { title: string; html: string; streaming: boolean }) {
+/** What gadgets still in a reply remember, for this visit only (saved gadgets keep it for good). */
+const memory = new Map<string, string>();
+/** Gadgets saved from a reply during this visit, so the card says so after being redrawn. */
+const savedFrom = new Map<string, string>();
+
+type Spend = { last: number; total: number; model: string };
+
+/**
+ * A gadget: a small app the model built (a ```widget:Title block), working right in the reply,
+ * or full screen on its own page once saved (`gadgetId`). It runs sealed off (lib/widgets/frame.ts);
+ * this card answers what it asks for: an AI's answer (cost shown each time), the AIs it can
+ * offer, what it remembers, and text to offer to the chat.
+ */
+export function Widget({
+  title,
+  html,
+  streaming,
+  gadgetId,
+  full = false,
+}: {
+  title: string;
+  html: string;
+  streaming: boolean;
+  gadgetId?: string;
+  full?: boolean;
+}) {
   const run = useContext(Runner);
+  const path = usePathname();
   const theme = useTheme();
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(160);
@@ -47,33 +76,123 @@ export function Widget({ title, html, streaming }: { title: string; html: string
   const [offer, setOffer] = useState<string | null>(null);
   const [showCode, setShowCode] = useState(false);
   const [round, setRound] = useState(0);
+  const [spend, setSpend] = useState<Spend | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [saved, setSaved] = useState<string | null>(() => savedFrom.get(html) ?? null);
+  const [saving, setSaving] = useState(false);
   const doc = useMemo(() => (theme ? widgetDocument(html, theme) : null), [html, theme]);
+  // One question to an AI at a time; others wait their turn.
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
 
   useEffect(() => {
     if (streaming) return;
+    const reply = (id: number, ok: boolean, value: unknown) =>
+      frame.current?.contentWindow?.postMessage(ok ? { kind: "reply", id, ok, value } : { kind: "reply", id, ok, error: value }, "*");
     const listen = (e: MessageEvent) => {
       if (!frame.current || e.source !== frame.current.contentWindow) return;
       const ev = checkWidgetEvent(e.data);
       if (!ev) return;
-      if (ev.kind === "height") setHeight(ev.value);
-      else if (ev.kind === "error") setError(ev.text);
-      else setOffer(ev.text);
+      switch (ev.kind) {
+        case "height":
+          setHeight(ev.value);
+          return;
+        case "error":
+          setError(ev.text);
+          return;
+        case "send":
+          setOffer(ev.text);
+          return;
+        case "models":
+          fetch("/api/gadgets/ask")
+            .then((r) => r.json())
+            .then((b: { models?: unknown }) => reply(ev.id, true, Array.isArray(b.models) ? b.models : []))
+            .catch(() => reply(ev.id, false, "Couldn't reach Depeche."));
+          return;
+        case "load":
+          if (gadgetId) loadGadgetData(gadgetId).then((d) => reply(ev.id, true, d), () => reply(ev.id, false, "Couldn't load."));
+          else reply(ev.id, true, memory.get(html) ?? null);
+          return;
+        case "save":
+          if (gadgetId) saveGadgetData(gadgetId, ev.data).then((r) => reply(ev.id, r.ok, r.ok ? true : r.error), () => reply(ev.id, false, "Couldn't save."));
+          else {
+            memory.set(html, ev.data);
+            reply(ev.id, true, true);
+          }
+          return;
+        case "ask": {
+          const job = queue.current.then(async () => {
+            setAsking(true);
+            try {
+              const res = await fetch("/api/gadgets/ask", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ prompt: ev.prompt, system: ev.system, model: ev.model, gadget: gadgetId, title }),
+              });
+              const body = (await res.json().catch(() => ({}))) as { text?: string; error?: string; cost?: number; model?: string };
+              if (typeof body.cost === "number" && body.cost > 0) {
+                const cost = body.cost;
+                setSpend((s) => ({ last: cost, total: (s?.total ?? 0) + cost, model: body.model ?? s?.model ?? "" }));
+              }
+              if (res.ok && typeof body.text === "string") reply(ev.id, true, body.text);
+              else {
+                const why = body.error ?? "The AI didn't answer. Try again.";
+                setError(why);
+                reply(ev.id, false, why);
+              }
+            } catch {
+              reply(ev.id, false, "Couldn't reach Depeche. Check your connection.");
+            } finally {
+              setAsking(false);
+            }
+          });
+          queue.current = job.catch(() => {});
+          return;
+        }
+      }
     };
     addEventListener("message", listen);
     return () => removeEventListener("message", listen);
-  }, [streaming]);
+  }, [streaming, gadgetId, html, title]);
+
+  const chatId = /^\/c\/([0-9a-f-]{36})/.exec(path ?? "")?.[1] ?? null;
 
   return (
-    <div className="md-file flex flex-col gap-3" data-testid="widget">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span aria-hidden className="md-file-icon text-[8px]!">GADGET</span>
-          <div className="min-w-0">
-            <p className="truncate text-[15px] font-semibold">{title}</p>
-            <p className="text-[13px] text-mute">Made by the AI. It runs sealed off, with no access to your account or the internet.</p>
+    <div className={full ? "flex flex-col gap-3" : "md-file flex flex-col gap-3"} data-testid="widget">
+      {!full ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span aria-hidden className="md-file-icon text-[8px]!">GADGET</span>
+            <div className="min-w-0">
+              <p className="truncate text-[15px] font-semibold">{title}</p>
+              <p className="text-[13px] text-mute">Made by the AI. It runs sealed off, with no access to your account or the internet.</p>
+            </div>
           </div>
+          {!streaming && !gadgetId ? (
+            saved ? (
+              <Link href={`/gadgets/${saved}`} className="press text-[14px] underline underline-offset-4" data-testid="gadget-saved">
+                Saved · Open
+              </Link>
+            ) : (
+              <button
+                type="button"
+                disabled={saving}
+                className="press glass glass-pill flex h-10 items-center px-4 text-[14px] font-semibold disabled:opacity-50"
+                onClick={async () => {
+                  setSaving(true);
+                  const r = await saveGadget(title, html, chatId).catch(() => ({ ok: false as const, error: "Couldn't save the gadget. Try again." }));
+                  setSaving(false);
+                  if (r.ok && r.id) {
+                    savedFrom.set(html, r.id);
+                    setSaved(r.id);
+                  } else if (!r.ok) setError(r.error);
+                }}
+              >
+                <span>{saving ? "Saving…" : "Save to My gadgets"}</span>
+              </button>
+            )
+          ) : null}
         </div>
-      </div>
+      ) : null}
       {streaming ? (
         <p className="text-[14px] text-mute">Building…</p>
       ) : doc ? (
@@ -87,12 +206,19 @@ export function Widget({ title, html, streaming }: { title: string; html: string
           referrerPolicy="no-referrer"
           srcDoc={doc}
           className="w-full rounded-xl border border-line bg-transparent"
-          style={{ height, maxHeight: "75vh", colorScheme: theme?.dark ? "dark" : "light" }}
+          style={{ height: full ? Math.max(height, 480) : height, maxHeight: full ? "none" : "75vh", colorScheme: theme?.dark ? "dark" : "light" }}
         />
+      ) : null}
+      {asking || spend ? (
+        <p className="text-[13px] text-mute" role="status" data-testid="gadget-cost">
+          {asking
+            ? "Asking the AI…"
+            : `That cost ${costText(spend!.last)}${spend!.model ? ` (${spend!.model})` : ""} · ${costText(spend!.total)} so far. It counts toward your spending.`}
+        </p>
       ) : null}
       {error ? (
         <p role="alert" className="text-[14px] text-mute">
-          Part of this gadget didn&apos;t work: {error}
+          {error.startsWith("Part of") ? error : `Part of this gadget didn't work: ${error}`}
         </p>
       ) : null}
       {offer ? (
@@ -113,7 +239,7 @@ export function Widget({ title, html, streaming }: { title: string; html: string
               </button>
             ) : null}
             <button type="button" className="press h-9 rounded-full border border-line px-4 text-[14px]" onClick={() => setOffer(null)}>
-              Not now
+              {run?.onSend ? "Not now" : "Close"}
             </button>
           </div>
         </div>

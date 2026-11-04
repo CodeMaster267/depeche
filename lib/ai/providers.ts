@@ -842,6 +842,24 @@ const FAKE_TIP_WIDGET = String.raw`\`\`\`widget:Tip-calculator
 </body></html>
 \`\`\``.replaceAll("\\`", "`");
 
+const FAKE_GAME_WIDGET = String.raw`\`\`\`widget:Word-game
+<button id="ask">Your move, AI</button>
+<button id="remember">Remember the score</button>
+<p>AI: <span id="answer">waiting</span></p>
+<p>AIs: <span id="models">…</span></p>
+<p>Remembered: <span id="loaded">…</span></p>
+<script>
+  const $ = (id) => document.getElementById(id);
+  $("ask").onclick = async () => {
+    try { $("answer").textContent = await depeche.ask("What is your move?", { system: "Answer with one word." }); }
+    catch (e) { $("answer").textContent = "error: " + e.message; }
+  };
+  $("remember").onclick = async () => { await depeche.save({ score: 3 }); $("loaded").textContent = "saved"; };
+  depeche.models().then((m) => { $("models").textContent = m.map((x) => x.name).join(", "); });
+  depeche.load().then((d) => { $("loaded").textContent = d === null ? "nothing" : d; });
+</script>
+\`\`\``.replaceAll("\\`", "`");
+
 const FAKE_ESCAPE_WIDGET = String.raw`\`\`\`widget:Escape-test
 <ul id="out"></ul>
 <img id="pic" src="https://picsum.photos/20" alt="">
@@ -945,6 +963,21 @@ This is well documented[^1].
 async function* fakeReply({ turns, signal, search, model, system, chatSearch }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const last = turns.at(-1);
   const q = last?.text.slice(0, 80) ?? "";
+  // A gadget asking: answers "<model>: <question>", or a changed page when a gadget is being changed.
+  if (system.startsWith("You are answering a request from a gadget")) {
+    yield { type: "text", text: `${model.name} says: ${(last?.text ?? "").slice(0, 60)}` };
+    yield { type: "usage", input: 400, output: 12 };
+    return;
+  }
+  if (system.startsWith("You are changing a gadget")) {
+    const page = /The gadget's page now:\n(`{3,})widget:[^\n]*\n([\s\S]*?)\n\1/.exec(system)?.[2] ?? "<p>Gadget</p>";
+    const text = q.includes("refuse-test")
+      ? "I can't make that change."
+      : `I've made that change.\n\n\`\`\`widget:Changed\n${page}\n<p id="changed">Changed: ${q.replace(/[<>&]/g, "")}</p>\n\`\`\``;
+    yield { type: "text", text };
+    yield { type: "usage", input: 2000, output: 900 };
+    return;
+  }
   // "what did I say about X" looks X up in this chat, to test the search-this-chat tool.
   const recall = chatSearch ? /what did i say about (.+?)\??$/i.exec(last?.text ?? "") : null;
   if (chatSearch && recall) {
@@ -1031,8 +1064,9 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     (q.includes("analyse") ? FAKE_ANALYSIS.replace("{file}", seen.find((n) => /\.(csv|txt)$/i.test(n)) ?? "data.csv") : "");
   // "tip calculator" builds an interactive tool, and "escape test" one that tries to get out of
   // its sealed frame, to test interactive tools.
-  if (q.includes("tip calculator") || q.includes("escape test")) {
-    const tool = q.includes("escape test") ? FAKE_ESCAPE_WIDGET : FAKE_TIP_WIDGET;
+  // "game gadget" builds one that asks an AI, lists the AIs and remembers, to test saved gadgets.
+  if (q.includes("tip calculator") || q.includes("escape test") || q.includes("game gadget")) {
+    const tool = q.includes("escape test") ? FAKE_ESCAPE_WIDGET : q.includes("game gadget") ? FAKE_GAME_WIDGET : FAKE_TIP_WIDGET;
     const reply = `Here you go.\n\n${tool}\n\nTry it out.`;
     for (let i = 0; i < reply.length; i += 80) {
       if (signal.aborted) throw new DOMException("Aborted", "AbortError");

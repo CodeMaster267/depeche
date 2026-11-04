@@ -36,10 +36,36 @@ const CSP = [
   "base-uri 'none'",
 ].join("; ");
 
-/** Runs first in the widget: reports its height and errors, and gives it depeche.send(). */
+/**
+ * Runs first in the widget: reports its height and errors, and gives it window.depeche: send()
+ * offers text to the chat; ask(), models(), save() and load() are requests the page answers
+ * (asking an AI goes through Depeche's server, with the person's spending limit and the cost shown).
+ */
 const BRIDGE = `(() => {
   const post = (m) => parent.postMessage(m, "*");
-  window.depeche = Object.freeze({ send: (t) => post({ kind: "send", text: String(t) }) });
+  const waiting = new Map();
+  let next = 0;
+  const call = (kind, data) => new Promise((resolve, reject) => {
+    const id = ++next;
+    waiting.set(id, { resolve, reject });
+    post(Object.assign({ kind, id }, data));
+  });
+  addEventListener("message", (e) => {
+    if (e.source !== parent) return;
+    const m = e.data || {};
+    const w = m.kind === "reply" ? waiting.get(m.id) : null;
+    if (!w) return;
+    waiting.delete(m.id);
+    if (m.ok) w.resolve(m.value); else w.reject(new Error(String(m.error || "That didn't work.")));
+  });
+  const opt = (v) => (v == null ? undefined : String(v));
+  window.depeche = Object.freeze({
+    send: (t) => post({ kind: "send", text: String(t) }),
+    ask: (prompt, o) => call("ask", { prompt: String(prompt), system: opt(o && o.system), model: opt(o && o.model) }),
+    models: () => call("models", {}),
+    save: (t) => call("save", { data: typeof t === "string" ? t : JSON.stringify(t) }),
+    load: () => call("load", {}),
+  });
   let last = 0;
   const size = () => {
     const h = Math.ceil(Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0));
@@ -77,18 +103,41 @@ export function widgetDocument(html: string, theme: Theme): string {
   ].join("\n");
 }
 
-export type WidgetEvent = { kind: "height"; value: number } | { kind: "error"; text: string } | { kind: "send"; text: string };
+export const MAX_PROMPT = 12_000;
+export const MAX_SYSTEM = 4_000;
+export const MAX_DATA = 100_000;
+
+export type WidgetEvent =
+  | { kind: "height"; value: number }
+  | { kind: "error"; text: string }
+  | { kind: "send"; text: string }
+  | { kind: "ask"; id: number; prompt: string; system?: string; model?: string }
+  | { kind: "models"; id: number }
+  | { kind: "save"; id: number; data: string }
+  | { kind: "load"; id: number };
+
+const CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 
 /** Checks something a widget posted before the page uses it. */
 export function checkWidgetEvent(raw: unknown): WidgetEvent | null {
   if (!raw || typeof raw !== "object") return null;
-  const { kind, value, text } = raw as { kind?: unknown; value?: unknown; text?: unknown };
+  const { kind, value, text, id } = raw as { kind?: unknown; value?: unknown; text?: unknown; id?: unknown };
   if (kind === "height" && typeof value === "number" && Number.isFinite(value)) return { kind, value: Math.max(40, Math.min(MAX_HEIGHT, Math.round(value))) };
   if ((kind === "error" || kind === "send") && typeof text === "string") {
     // Control and direction characters can't sneak in; the text is shown and sent as plain text.
-    const clean = text.replace(/[\u0000-\u0008\u000B-\u001F\u007F‎‏‪-‮⁦-⁩]/g, "").trim();
+    const clean = text.replace(CONTROL, "").trim();
     if (!clean) return null;
     return { kind, text: clean.slice(0, kind === "send" ? MAX_SEND : 300) };
   }
+  if (typeof id !== "number" || !Number.isInteger(id) || id < 1) return null;
+  const r = raw as { prompt?: unknown; system?: unknown; model?: unknown; data?: unknown };
+  if (kind === "ask") {
+    if (typeof r.prompt !== "string" || !r.prompt.trim() || r.prompt.length > MAX_PROMPT) return null;
+    if (r.system !== undefined && (typeof r.system !== "string" || r.system.length > MAX_SYSTEM)) return null;
+    if (r.model !== undefined && (typeof r.model !== "string" || !/^[\w./:-]{1,80}$/.test(r.model))) return null;
+    return { kind, id, prompt: r.prompt, ...(r.system ? { system: r.system } : {}), ...(r.model ? { model: r.model } : {}) };
+  }
+  if (kind === "save") return typeof r.data === "string" && r.data.length <= MAX_DATA ? { kind, id, data: r.data } : null;
+  if (kind === "models" || kind === "load") return { kind, id };
   return null;
 }

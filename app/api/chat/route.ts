@@ -21,6 +21,7 @@ import { saveReplyCanvases } from "@/lib/chat/canvas";
 import { pictureReply } from "./picture";
 import { MAX_COMPARE } from "@/lib/chat/compare";
 import { DESIGN_INSTRUCTIONS } from "@/lib/design/instructions";
+import { WIDGET_INSTRUCTIONS } from "@/lib/widgets/instructions";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
 export const maxDuration = 300;
@@ -579,15 +580,6 @@ const CODE_INSTRUCTIONS = [
   "To analyse an attached spreadsheet or CSV, or to calculate something exactly, write Python in a ```python run code block: it runs in the person's browser (Python 3.13 with pandas, numpy and matplotlib; no internet, no installing packages).",
   "Attached files are in the current folder under their names (pd.read_csv(\"Sales.csv\"), pd.read_excel(\"Budget.xlsx\", sheet_name=…)). Print the results; call chart(df, x=\"Month\", y=[\"Total\"], type=\"line\") or chart({...same JSON as a chart block...}) for an interactive chart; matplotlib figures show too.",
   "Results appear under the block when it runs, and the person can send them back to you: don't state numbers the code will work out; say briefly what it does. Use plain ```python (without run) for code that is only to read or copy.",
-].join(" ");
-
-/** How a model builds gadgets, small interactive apps (components/markdown/Widget.tsx, sealed off in lib/widgets/frame.ts). */
-const WIDGET_INSTRUCTIONS = [
-  "You can also build gadgets: small interactive apps that work right in the reply: calculators, converters, quizzes, flashcards, simple games, timers, simulations with sliders, planners or small dashboards.",
-  "Build one when the person asks for something to click, play or try, or when trying it would explain far better than words. Write one complete HTML page (inline <style> and <script> only) in a fenced code block labelled widget: and a short title, for example ```widget:Tip-calculator.",
-  "It runs sealed off: no internet, no outside scripts, fonts or pictures (draw with SVG or <canvas>, or use emoji), no localStorage, cookies, alert or pop-ups, and no forms that submit; keep everything in memory. Keep it under 60 KB.",
-  "Use the app's colours and font with var(--depeche-fg), var(--depeche-bg), var(--depeche-mute), var(--depeche-line) and var(--depeche-font), and make it fit a phone. To hand a result back to the conversation, call depeche.send(\"text\") from a button; the person confirms before it is sent.",
-  "Say in a sentence what the gadget does outside the block. For charts of data use a ```chart block instead, and for documents use the canvas.",
 ].join(" ");
 
 type OpenCanvas = { title: string; content: string; byPerson: boolean };

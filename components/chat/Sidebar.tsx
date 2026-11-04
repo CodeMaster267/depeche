@@ -39,6 +39,7 @@ export function Sidebar({
   isAdmin,
   spent,
   cap,
+  noLimit = false,
   onNavigate,
   onNewChat,
   onClose,
@@ -52,6 +53,8 @@ export function Sidebar({
   isAdmin: boolean;
   spent: number;
   cap: number;
+  /** Their family admin took the monthly limit away. */
+  noLimit?: boolean;
   onNavigate: () => void;
   /** Start a new chat (the link alone can't restart the home screen a chat began on). */
   onNewChat: () => void;
@@ -77,7 +80,7 @@ export function Sidebar({
     onChatChange(next);
     if (showArchived) setArchived((list) => (list ?? []).flatMap((c) => (c.id !== next.id ? [c] : next.archived_at ? [next] : [])));
   };
-  const share = cap > 0 ? Math.min(1, spent / cap) : 1;
+  const share = noLimit ? 0 : cap > 0 ? Math.min(1, spent / cap) : 1;
 
   return (
     <nav aria-label="Chats" data-part="sidebar" className="flex h-full flex-col gap-4 px-4" style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}>
@@ -195,6 +198,7 @@ export function Sidebar({
               <NavLink href="/memory">Memory</NavLink>
               <NavLink href="/account">Account</NavLink>
               <NavLink href="/design">My look</NavLink>
+              <NavLink href="/gadgets">Gadgets</NavLink>
               <span data-part="report-link" className="contents">
                 <NavLink href={`/report?from=${encodeURIComponent(activeId ? `/c/${activeId}` : "/")}`}>Report a bug</NavLink>
               </span>
@@ -207,7 +211,7 @@ export function Sidebar({
           </div>
           <div className="mt-1.5 flex justify-between font-mono text-[12px] text-mute">
             <span>${spent.toFixed(2)} this month</span>
-            <span>limit ${cap.toFixed(0)}</span>
+            <span>{noLimit ? "no limit" : `limit $${cap.toFixed(0)}`}</span>
           </div>
         </div>
       </div>
