@@ -74,7 +74,7 @@ test.describe("family keys", () => {
 
     // A free-tier key can't use Gemini 4 Argon, so nobody is offered it.
     await replaceWith("test-google-free-key-000000free");
-    await expect(row.getByTestId("key-models")).toHaveText("Can use Gemini 3.8 Flash, Flash-Lite");
+    await expect(row.getByTestId("key-models")).toHaveText("Can use Gemini 3.8 Flash, Flash-Lite, Nano Banana 2.1, Nano Banana Pro");
     await page.goto("/");
     await page.getByRole("button", { name: /Change model/ }).click();
     const dialog = page.getByRole("dialog", { name: "Choose a model" });
@@ -84,7 +84,7 @@ test.describe("family keys", () => {
     // A full key brings it back.
     await page.goto("/family");
     await replaceWith("test-google-key-1234567890abcd");
-    await expect(row.getByTestId("key-models")).toHaveText("Can use Gemini 4 Argon, Gemini 3.8 Flash, Flash-Lite");
+    await expect(row.getByTestId("key-models")).toHaveText("Can use Gemini 4 Argon, Gemini 3.8 Flash, Flash-Lite, Nano Banana 2.1, Nano Banana Pro");
   });
 });
 

@@ -25,7 +25,11 @@ export type StreamEvent =
   | { type: "text"; text: string }
   /** The model's reasoning (a summary, for providers that only share one), shown collapsed. */
   | { type: "thinking"; text: string }
-  | { type: "usage"; input: number; output: number }
+  /**
+   * Tokens used. `input` is all of it; `cacheRead` and `cacheWrite` are the parts of it the provider
+   * served from, or stored in, its prompt cache, which are priced differently.
+   */
+  | { type: "usage"; input: number; output: number; cacheRead?: number; cacheWrite?: number }
   | { type: "notice"; text: string }
   /** Another model answered (the chosen one was busy). */
   | { type: "model"; id: string }
@@ -55,6 +59,13 @@ export type ReplyRequest = {
   chatSearch?: ChatSearch;
   /** Ask for the model's reasoning. Turned off for a model that turns out not to offer it. */
   think?: boolean;
+  /**
+   * Turns on prompt caching where Depeche has to ask for it (Claude), and keeps each chat's cached
+   * prompt together and apart from other people's where the provider allows (OpenAI's and xAI's
+   * prompt_cache_key). The chat's id, never a name. Left out for one-off requests, which would pay
+   * to write a cache never read.
+   */
+  cacheKey?: string;
 };
 
 /** A provider error, worded for the person chatting. */
@@ -245,8 +256,8 @@ const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-
 /** Long searches can pause a Claude turn; it is continued this many times at most. */
 const MAX_CONTINUES = 3;
 
-async function* anthropicReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
-  const client = new Anthropic({ apiKey, maxRetries: 1 });
+async function* anthropicReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
+  const client = new Anthropic({ apiKey, maxRetries: 1, baseURL: testUrl("DEPECHE_ANTHROPIC_URL") });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
   const messages: Msg[] = turns.map((t) =>
@@ -272,6 +283,8 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, t
   ];
   let input = 0;
   let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
   let searches = 0;
   let lookups = 0;
   let wrote = false;
@@ -290,6 +303,10 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, t
         max_tokens: left,
         system,
         messages: messages as never,
+        // Claude caches the conversation so far (up to the newest message), so the next message in
+        // this chat, and each round of searching within this reply, reads it back at a tenth of the
+        // price or less. The cache lasts 5 minutes from its last use.
+        ...(cacheKey ? { cache_control: { type: "ephemeral" as const } } : {}),
         output_config: { effort: "medium" },
         // Claude decides when to think; a summary of it is shown collapsed above the reply.
         ...(think ? { thinking: { type: "adaptive" as const, display: "summarized" as const } } : {}),
@@ -358,6 +375,8 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, t
     const final = await stream.finalMessage();
     const u = final.usage;
     input += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    cacheRead += u.cache_read_input_tokens ?? 0;
+    cacheWrite += u.cache_creation_input_tokens ?? 0;
     output += u.output_tokens ?? 0;
     searches += u.server_tool_use?.web_search_requests ?? 0;
     if (final.stop_reason === "pause_turn" && continues < MAX_CONTINUES) {
@@ -391,11 +410,11 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, t
     if (sources.length) yield { type: "sources", sources };
     if (searches) yield { type: "searches", count: searches };
   }
-  yield { type: "usage", input, output };
+  yield { type: "usage", input, output, cacheRead, cacheWrite };
 }
 
-async function* openaiReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
-  const client = new OpenAI({ apiKey, maxRetries: 1 });
+async function* openaiReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
+  const client = new OpenAI({ apiKey, maxRetries: 1, baseURL: testUrl("DEPECHE_OPENAI_URL") });
   const input: unknown[] = turns.map((t) =>
     t.role === "user" && t.files?.length
       ? {
@@ -422,6 +441,8 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, thin
   let lookups = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
   let wrote = false;
   for (let round = 0; ; round++) {
     // Every round counts toward the same reply length, so the whole reply stays within the hold.
@@ -438,6 +459,8 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, thin
         max_output_tokens: Math.max(16, left),
         store: false,
         stream: true,
+        // OpenAI caches long prompts by itself; the key keeps each person's cache separate.
+        ...(cacheKey ? { prompt_cache_key: cacheKey } : {}),
         ...(tools.length ? { tools: tools as never } : {}),
         ...(search ? { max_tool_calls: MAX_SEARCHES } : {}),
         // OpenAI shares a summary of its reasoning, not the reasoning itself.
@@ -484,6 +507,10 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, thin
         searches += Math.max(roundSearches, billed);
         inputTokens += u?.input_tokens ?? 0;
         outputTokens += u?.output_tokens ?? 0;
+        // Both are part of input_tokens; reads don't include tokens charged as writes.
+        const details = u?.input_tokens_details as { cached_tokens?: number; cache_write_tokens?: number } | undefined;
+        cacheRead += details?.cached_tokens ?? 0;
+        cacheWrite += details?.cache_write_tokens ?? 0;
         produced = ev.response.output ?? [];
         if (ev.type === "response.incomplete") yield { type: "notice", text: "The reply was cut short." };
       } else if (ev.type === "response.failed") {
@@ -504,11 +531,12 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, thin
   }
   if (sources.length) yield { type: "sources", sources };
   if (searches) yield { type: "searches", count: searches };
-  yield { type: "usage", input: inputTokens, output: outputTokens };
+  yield { type: "usage", input: inputTokens, output: outputTokens, cacheRead, cacheWrite };
 }
 
 async function* googleReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
-  const ai = new GoogleGenAI({ apiKey });
+  const base = testUrl("DEPECHE_GOOGLE_URL");
+  const ai = new GoogleGenAI({ apiKey, ...(base ? { httpOptions: { baseUrl: base } } : {}) });
   type Content = { role: "user" | "model"; parts: Part[] };
   const contents: Content[] = turns.map((t) => ({
     role: t.role === "assistant" ? "model" : "user",
@@ -525,6 +553,8 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, thin
   ];
   let input = 0;
   let output = 0;
+  // Gemini caches repeated prompts by itself ("implicit caching"), with no fee to write.
+  let cacheRead = 0;
   let lookups = 0;
   const sources: Source[] = [];
   const queries = new Set<string>();
@@ -558,6 +588,7 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, thin
     let roundText = false;
     let roundInput = 0;
     let roundOutput = 0;
+    let roundCached = 0;
     for await (const chunk of stream) {
       const candidate = chunk.candidates?.[0];
       parts.push(...(candidate?.content?.parts ?? []));
@@ -593,11 +624,13 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, thin
       const u = chunk.usageMetadata;
       if (u) {
         roundInput = u.promptTokenCount ?? roundInput;
+        roundCached = u.cachedContentTokenCount ?? roundCached;
         roundOutput = (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0) || roundOutput;
       }
     }
     input += roundInput;
     output += roundOutput;
+    cacheRead += Math.min(roundCached, roundInput);
     const calls = parts.filter((p) => p.functionCall?.name === CHAT_SEARCH_TOOL.name);
     if (!chatSearch || !calls.length) break;
     // Gemini asked to look back through the chat: hand back its turn and the results.
@@ -616,16 +649,21 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, thin
   // Google bills each search query the model runs.
   if (queries.size || sources.length) yield { type: "searches", count: Math.max(queries.size, 1) };
   if (suggestions) yield { type: "suggestions", html: suggestions.slice(0, 20_000) };
-  yield { type: "usage", input, output };
+  yield { type: "usage", input, output, cacheRead };
 }
 
-function status(e: unknown): number | undefined {
+/** Tests point a provider at a local stand-in through this variable; never on Vercel. */
+function testUrl(name: string): string | undefined {
+  return (!process.env.VERCEL && process.env[name]) || undefined;
+}
+
+export function status(e: unknown): number | undefined {
   const s = (e as { status?: unknown; code?: unknown })?.status ?? (e as { code?: unknown })?.code;
   return typeof s === "number" ? s : undefined;
 }
 
 /** The provider's own explanation, unwrapped from the JSON some SDKs nest it in. */
-function detail(e: unknown): string {
+export function detail(e: unknown): string {
   let msg = e instanceof Error ? e.message : String(e ?? "");
   for (let i = 0; i < 3; i++) {
     try {
@@ -642,7 +680,7 @@ function detail(e: unknown): string {
   return msg.replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
-function describe(provider: Provider, e: unknown): string {
+export function describe(provider: Provider, e: unknown): string {
   const text = friendlyError(provider, e);
   const said = detail(e);
   // Logged for debugging in Vercel; never includes the key.
@@ -959,5 +997,6 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     await new Promise((r) => setTimeout(r, slow ? 120 : 8));
     yield { type: "text", text: reply.slice(i, i + 24) };
   }
-  yield { type: "usage", input: 1200, output: 400 };
+  // "cached" makes it report most of the input as read from the prompt cache, to test cache prices.
+  yield { type: "usage", input: 1200, output: 400, ...(q.includes("cached") ? { cacheRead: 1000 } : {}) };
 }

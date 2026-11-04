@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
 
   const model = findModel(body.model);
   if (!model) return fail(400, "Pick a model first.");
+  if (model.image) return fail(400, `${model.name} makes pictures. Pick a chat model for deep research.`);
   if (!canSearch(model)) return fail(400, `${model.name} can't search the web. Pick another model for deep research.`);
   const text = typeof body.text === "string" ? body.text.trim() : "";
   if (!text) return fail(400, "Type what you'd like researched first.");
