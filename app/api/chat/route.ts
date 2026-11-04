@@ -13,10 +13,12 @@ import { documentText } from "@/lib/docs/read";
 import { FOLLOWUPS_CLOSE, FOLLOWUPS_OPEN, cleanQuote, followUpInstructions, parseFollowUps, tagFilter, withQuote } from "@/lib/chat/followups";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
+import { notifyIfAway } from "@/lib/push/notify";
 import { MAX_QUERIES, MAX_REASONING_CHARS, thinkingClock } from "@/lib/chat/activity";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
 import { CANVAS_PROMPT_CHARS, fenceFor, withoutCanvasBlocks } from "@/lib/canvas";
 import { saveReplyCanvases } from "@/lib/chat/canvas";
+import { pictureReply } from "./picture";
 import { MAX_COMPARE } from "@/lib/chat/compare";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
@@ -130,6 +132,15 @@ export async function POST(req: NextRequest) {
   }
   // An edit or a reply to an earlier version must follow a message in this same chat.
   if (parentGiven && body.parent && !all.some((m) => m.id === body.parent)) return fail(404, "That message doesn't exist.");
+
+  // Picture models make or edit a picture instead of writing a reply.
+  if (model.image) {
+    return pictureReply({
+      me, db, admin, model, apiKey, chatId, all, text, files: fileRefs,
+      clientRequestId: body.clientRequestId, regenerate: body.regenerate,
+      parent: parentGiven ? (body.parent ?? null) : undefined,
+    });
+  }
 
   // The monthly limit is a hard one: reserve the most this reply could cost before anything is
   // spent, counting other replies still being written. The reply is then kept short enough to fit.
@@ -308,6 +319,10 @@ export async function POST(req: NextRequest) {
         }
       }
     }
+    // Pictures a picture model made are named, so a chat model knows they're there.
+    if (m.role === "assistant" && m.content.files?.length) {
+      t += `\n\n${m.content.files.map((f) => `[Made the picture "${f.name.replace(/"/g, "'")}".]`).join(" ")}`;
+    }
     t = t.trim();
     if ((!t && !attached.length) || m.role === "system" || (m.role === "assistant" && m.status === "failed")) {
       sent.add(m.id);
@@ -356,7 +371,7 @@ export async function POST(req: NextRequest) {
       const followups = tagFilter(FOLLOWUPS_OPEN, FOLLOWUPS_CLOSE);
       let used = model;
       let notice: string | undefined;
-      let usage: { input: number; output: number } | undefined;
+      let usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number } | undefined;
       let sources: Source[] = [];
       let searches = 0;
       let queried = 0;
@@ -370,7 +385,7 @@ export async function POST(req: NextRequest) {
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch })) {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch, cacheKey: finalChatId })) {
           if (ev.type !== "thinking") clock.stopped();
           if (ev.type === "thinking") {
             clock.thinking();
@@ -387,7 +402,7 @@ export async function POST(req: NextRequest) {
               reply += shown;
               send({ type: "text", text: shown });
             }
-          } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
+          } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output, cacheRead: ev.cacheRead, cacheWrite: ev.cacheWrite };
           else if (ev.type === "model") used = findModel(ev.id) ?? model;
           else if (ev.type === "searching") {
             // Looking back through this chat is free; only web searches have a fee.
@@ -422,7 +437,8 @@ export async function POST(req: NextRequest) {
         send({ type: "text", text: tail });
       }
 
-      // Stopped replies have no usage report, so estimate about four characters per token.
+      // Stopped replies have no usage report, so estimate about four characters per token, all of it
+      // charged as uncached input.
       const estimated = !usage;
       if (!usage) {
         const inputChars = turns.reduce((n, t) => n + t.text.length, system.length);
@@ -431,7 +447,9 @@ export async function POST(req: NextRequest) {
       // A reply stopped mid-search gets no report, so count the searches seen instead (erring high).
       searches = Math.max(searches, queried);
       // Each web search has a fee on top of tokens, so it counts toward the monthly limit too.
-      const cost = estimateCost(used, usage.input, usage.output) + searchCost(used.provider, searches);
+      // Input read from the provider's prompt cache costs a fraction; input written to it a little more.
+      const cost =
+        estimateCost(used, usage.input, usage.output, { read: usage.cacheRead, write: usage.cacheWrite }) + searchCost(used.provider, searches);
 
       const { data: saved } = await admin
         .from("messages")
@@ -448,7 +466,12 @@ export async function POST(req: NextRequest) {
             ...(searches ? { searches } : {}),
             ...(suggestions ? { suggestions } : {}),
             ...(status === "completed" && parseFollowUps(followups.found).length ? { followups: parseFollowUps(followups.found) } : {}),
-            usage: { input: usage.input, output: usage.output, ...(estimated ? { estimated } : {}) },
+            usage: {
+              input: usage.input,
+              output: usage.output,
+              ...(usage.cacheRead ? { cached: usage.cacheRead } : {}),
+              ...(estimated ? { estimated } : {}),
+            },
             ...(reasoning.trim() ? { reasoning, thoughtMs: clock.ms } : {}),
             ...(queries.length ? { queries } : {}),
             ...(lookups.length ? { lookups } : {}),
@@ -500,6 +523,10 @@ export async function POST(req: NextRequest) {
         if (open) controller.close();
       } catch {
         // The browser already went away.
+      }
+      // Left the app while this was being written? A notification says it's ready.
+      if (status !== "stopped" && UUID.test(body.clientRequestId ?? "")) {
+        await notifyIfAway(me.userId, body.clientRequestId!, finalChatId, status === "completed").catch(() => {});
       }
       finished();
     },
