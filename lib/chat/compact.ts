@@ -36,7 +36,7 @@ export function compactOverride(): number | undefined {
  */
 export function summariserFor(chatModel: Model, keyModels: readonly string[] | null): Model | undefined {
   if (chatModel.provider === "groq") return undefined;
-  return MODELS.filter((m) => m.provider === chatModel.provider && (!keyModels?.length || keyModels.includes(m.id)))
+  return MODELS.filter((m) => m.provider === chatModel.provider && !m.image && (!keyModels?.length || keyModels.includes(m.id)))
     .sort((a, b) => a.price.input + a.price.output * 0.1 - (b.price.input + b.price.output * 0.1))[0];
 }
 

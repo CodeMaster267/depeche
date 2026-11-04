@@ -21,6 +21,8 @@ export type MessageRow = {
     searches?: number;
     /** Google's "Search suggestions" chips (its own HTML), shown in a sandbox as Google requires. */
     suggestions?: string;
+    /** Set on a deep research report: what was researched. */
+    research?: { title: string; questions: string[]; sources: number };
     /** On a question: the part of an earlier answer it asks about (selected by the person). */
     quote?: string;
     /** On a reply: questions the person might ask next, shown as buttons under the newest answer. */

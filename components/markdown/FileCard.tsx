@@ -13,7 +13,6 @@ import { saveFile } from "@/lib/docs/save";
  */
 const load = () => import("@/lib/docs/write");
 
-const save = (built: Built, name: string) => saveFile(built.blob, name);
 
 export function FileCard({ name, kind, content, streaming }: { name: string; kind: DocKind; content: string; streaming: boolean }) {
   const [built, setBuilt] = useState<Built | null>(null);
@@ -45,7 +44,7 @@ export function FileCard({ name, kind, content, streaming }: { name: string; kin
     setBusy(as);
     try {
       const b = made.current[as] ?? (made.current[as] = await (await load()).buildFile(as, content, withKind(name, as)));
-      await save(b, as === kind ? name : withKind(name, as));
+      await saveFile(b.blob, as === kind ? name : withKind(name, as));
     } catch {
       setFailed(true);
     } finally {

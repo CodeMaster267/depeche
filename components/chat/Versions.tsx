@@ -72,7 +72,7 @@ export function UserMessage({
   const local = m.id.startsWith("local-");
 
   return (
-    <div className="msg-row flex flex-col items-end gap-1.5">
+    <div data-part="user-row" className="msg-row flex flex-col items-end gap-1.5">
       {m.content.quote ? <QuoteLine quote={m.content.quote} /> : null}
       {m.content.files?.length ? <MessageFiles files={m.content.files} /> : null}
       {editing ? (
@@ -89,6 +89,7 @@ export function UserMessage({
       ) : text ? (
         <div
           data-testid="user-message"
+          data-part="user-message"
           className="max-w-[85%] whitespace-pre-wrap break-words rounded-[22px] bg-inv px-5 py-3 text-[17px] leading-relaxed text-on-inv"
         >
           {text}

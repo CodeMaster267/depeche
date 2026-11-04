@@ -24,7 +24,21 @@ export type Model = {
   price: { input: number; output: number; long?: { from: number; input: number; output: number }; cache?: CachePrice };
   /** The model's context window in tokens, when known (auto-compaction keeps chats well inside it). */
   context?: number;
+  /**
+   * Set for models that make and edit pictures instead of writing replies. Each message to one is
+   * a description of the picture wanted; pictures attached to it are edited. `price` above is then
+   * per million tokens of the prompt text (input) and of the picture made (output).
+   */
+  image?: ImagePricing;
 };
+
+/**
+ * Picture models are billed per picture (xAI) or by tokens counted per picture (OpenAI, Google).
+ * `hold` is the most one picture could cost at the size and quality Depeche asks for, reserved
+ * against the monthly limit before it is made; `perInput` is the most each attached picture adds.
+ * `imageInput` and `textOutput` are per million tokens, for providers that report tokens.
+ */
+export type ImagePricing = { hold: number; perInput: number; imageInput?: number; textOutput?: number; flat?: number };
 
 /**
  * Prompt cache prices, as multiples of the input rate: `read` for input served from the cache,
@@ -98,7 +112,22 @@ export const MODELS: Model[] = [
   // xAI doubles every token's price once a request's input reaches 200,000 tokens.
   { id: "grok-4.7", provider: "xai", name: "Grok 4.7", short: "Grok 4.7", tags: ["Most capable"], price: { input: 2, output: 6, long: { from: 200_000, input: 4, output: 12 }, cache: { read: 0.25, write: 1 } } },
   { id: "grok-4.3", provider: "xai", name: "Grok 4.3", short: "Grok 4.3", tags: ["Fast", "Long context"], price: { input: 1.25, output: 2.5, long: { from: 200_000, input: 2.5, output: 5 }, cache: { read: 0.16, write: 1 } } },
+
+  // Picture models (prices checked 4 Nov 2026). OpenAI's GPT Image 2.5: text $5, pictures in $8,
+  // pictures out $30 per million tokens; a 1024px picture at the highest quality is about $0.21.
+  // Flare is asked for medium quality (quick), Sunburst for high quality (best at precise edits).
+  { id: "gpt-image-2.5-flare", provider: "openai", name: "GPT Image 2.5 Flare", short: "GPT Image Flare", tags: ["Images", "Fast"], price: { input: 5, output: 30 }, image: { hold: 0.12, perInput: 0.06, imageInput: 8, textOutput: 30 } },
+  { id: "gpt-image-2.5-sunburst", provider: "openai", name: "GPT Image 2.5 Sunburst", short: "GPT Image Sunburst", tags: ["Images", "Best edits"], price: { input: 5, output: 30 }, image: { hold: 0.3, perInput: 0.06, imageInput: 8, textOutput: 30 } },
+  // Google's picture models think before drawing, billed as text output. A 1K picture is $0.0336 on
+  // Nano Banana 2.1 and $0.134 on Nano Banana Pro. Neither works on a free key.
+  { id: "gemini-nano-banana-2.1", provider: "google", name: "Nano Banana 2.1", short: "Nano Banana 2.1", tags: ["Images", "Fast"], price: { input: 1.5, output: 30 }, image: { hold: 0.1, perInput: 0.01, imageInput: 1.5, textOutput: 12 } },
+  { id: "gemini-3-pro-image", provider: "google", name: "Nano Banana Pro", short: "Nano Banana Pro", tags: ["Images", "Most capable"], price: { input: 2, output: 120 }, image: { hold: 0.3, perInput: 0.01, imageInput: 2, textOutput: 12 } },
+  // xAI charges $0.04 a picture; for edits it also bills the picture sent, at a rate it doesn't
+  // publish, so $0.02 is assumed.
+  { id: "grok-imagine-image-2.0", provider: "xai", name: "Grok Imagine 2.0", short: "Grok Imagine", tags: ["Images"], price: { input: 0, output: 0 }, image: { hold: 0.06, perInput: 0.02, flat: 0.04 } },
 ];
+
+export const isImageModel = (m: Pick<Model, "image"> | undefined | null): boolean => !!m?.image;
 
 /** What a new person starts with, if their family has the provider. */
 export const PREFERRED_DEFAULTS = ["claude-sonnet-5-5", "gpt-6.1-sol", "gemini-3.8-flash", "openai/gpt-oss-120b", "grok-4.7", "deepseek-v4-pro"];
@@ -119,6 +148,7 @@ export function modelsFor(keys: readonly { provider: string; models?: readonly s
 
 /** Price band shown in the picker: $ to $$$$. */
 export function priceBand(m: Model): string {
+  if (m.image) return m.image.hold < 0.08 ? "$" : m.image.hold < 0.2 ? "$$" : "$$$";
   const blended = m.price.input + m.price.output * 3;
   return blended < 10 ? "$" : blended < 40 ? "$$" : blended < 100 ? "$$$" : "$$$$";
 }
@@ -149,8 +179,9 @@ export function priceFor(m: Model, inputTokens: number): { input: number; output
 
 export function chooseDefault(available: Model[], last?: string | null): Model | undefined {
   return (
-    available.find((m) => m.id === last) ??
+    available.find((m) => m.id === last && !m.image) ??
     PREFERRED_DEFAULTS.map((id) => available.find((m) => m.id === id)).find(Boolean) ??
+    available.find((m) => !m.image) ??
     available[0]
   );
 }
@@ -169,9 +200,9 @@ export const SEARCH_PRICE: Record<Provider, number> = { anthropic: 0.01, openai:
  * counted so limits err high). Groq retired its Compound search models in October 2026. DeepSeek's
  * API has no web search. xAI's Grok searches with its web_search tool at $5 per 1,000 searches.
  */
-export function canSearch(model: Pick<Model, "id" | "provider"> | undefined): boolean {
+export function canSearch(model: Pick<Model, "id" | "provider" | "image"> | undefined): boolean {
   if (!model) return true;
-  if (model.provider === "deepseek") return false;
+  if (model.provider === "deepseek" || isImageModel(model)) return false;
   return model.provider !== "groq" || model.id.startsWith("openai/gpt-oss");
 }
 

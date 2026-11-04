@@ -5,7 +5,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { UPLOAD_BUCKET, type FileRef } from "@/lib/chat/files";
-import { chatFileName, chatMarkdown, type ExportChat, type ExportData, type ExportMemory, type ExportMessage, type ExportUsage, type FetchedFile } from "./archive";
+import { chatFileName, chatMarkdown, type ExportCanvas, type ExportCanvasVersion, type ExportChat, type ExportData, type ExportMemory, type ExportMessage, type ExportUsage, type FetchedFile } from "./archive";
 
 const PAGE = 1000; // Supabase returns at most this many rows per request
 
@@ -62,12 +62,27 @@ export async function collectData(db: SupabaseClient, userId: string, extra: Rec
       .order("id")
       .range(a, b),
   );
+  progress("Gathering your canvases");
+  const canvases = await all<ExportCanvas>((a, b) =>
+    db.from("canvases").select("id, chat_id, title, created_at, updated_at").eq("owner_id", userId).order("created_at").order("id").range(a, b),
+  );
+  const canvasVersions = canvases.length
+    ? await all<ExportCanvasVersion>((a, b) =>
+        db
+          .from("canvas_versions")
+          .select("canvas_id, content, author, message_id, created_at")
+          .eq("owner_id", userId)
+          .order("created_at")
+          .order("id")
+          .range(a, b),
+      )
+    : [];
   const { data: profile } = await db
     .from("profiles")
     .select("display_name, username, role, monthly_cap_usd, share_titles, keep_chats, last_model, created_at")
     .eq("id", userId)
     .maybeSingle();
-  return { exportedAt: new Date().toISOString(), profile: { ...extra, ...(profile ?? {}) }, chats, messages, memories, usage, instructions };
+  return { exportedAt: new Date().toISOString(), profile: { ...extra, ...(profile ?? {}) }, chats, messages, memories, usage, instructions, canvases, canvasVersions };
 }
 
 /** The files the person's own messages point at, each downloaded once. Missing ones come back empty. */
