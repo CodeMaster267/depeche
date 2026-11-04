@@ -6,7 +6,15 @@ export const MAX_FILES_PER_MESSAGE = 5;
 export const UPLOAD_BUCKET = "uploads";
 
 export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
-export const ALLOWED_TYPES = [...IMAGE_TYPES, "application/pdf", "text/plain"];
+export const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+export const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+export const PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+/** Word, Excel and PowerPoint files: the server reads their text and sends it to the model. */
+export const OFFICE_TYPES = [DOCX, XLSX, PPTX];
+export const ALLOWED_TYPES = [...IMAGE_TYPES, "application/pdf", "text/plain", ...OFFICE_TYPES];
+
+/** Sent to the model as text (read on the server), rather than as a file the provider opens. */
+export const readAsText = (mime: string) => mime === "text/plain" || OFFICE_TYPES.includes(mime);
 
 /** Files with these endings are read as text, whatever type the browser guesses. */
 const TEXT_ENDINGS =
@@ -17,8 +25,18 @@ export function storedType(file: { name: string; type: string }): string | null 
   if (IMAGE_TYPES.includes(file.type)) return file.type;
   if (file.type.startsWith("image/")) return "image/jpeg"; // converted in the browser, e.g. iPhone HEIC photos
   if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return "application/pdf";
+  if (file.type === DOCX || /\.docx$/i.test(file.name)) return DOCX;
+  if (file.type === XLSX || /\.xlsx$/i.test(file.name)) return XLSX;
+  if (file.type === PPTX || /\.pptx$/i.test(file.name)) return PPTX;
   if (file.type.startsWith("text/") || file.type === "application/json" || TEXT_ENDINGS.test(file.name)) return "text/plain";
   return null;
+}
+
+/** Why a picked file can't be sent, in a few words. */
+export function refusal(file: { name: string }): string {
+  if (/\.(doc|xls|ppt|rtf|odt|ods|odp)$/i.test(file.name)) return "Save it as .docx, .xlsx or .pptx";
+  if (/\.(pages|numbers|key)$/i.test(file.name)) return "Export it to Word, Excel or PDF";
+  return "Can't send this kind of file";
 }
 
 export function isFileRef(v: unknown, ownerId: string): v is FileRef {

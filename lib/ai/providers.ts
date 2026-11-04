@@ -714,6 +714,39 @@ export function fakeAi(): boolean {
   return process.env.DEPECHE_FAKE_AI === "1" && !process.env.VERCEL;
 }
 
+const FAKE_FILES = String.raw`Here are your files.
+
+\`\`\`\`file:Trip-plan.docx
+# Trip plan
+
+A **short** trip to Lisbon. Café stop on day one.
+
+- Passport
+- Chargers
+
+| Day | Plan |
+| --- | --- |
+| Mon | Museum |
+
+\`\`\`text
+pack light
+\`\`\`
+\`\`\`\`
+
+\`\`\`file:Budget.xlsx
+Item,Cost
+Flights,240
+Hotel,310
+Total,=SUM(B2:B3)
+\`\`\`
+
+\`\`\`file:Budget.csv
+Item,Cost
+Flights,240
+\`\`\`
+
+`.replaceAll("\\`", "`");
+
 const FAKE_REPLY = String.raw`Here's a worked answer to "{q}".
 
 ## The formula
@@ -822,7 +855,13 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   const seen = [...(last?.files ?? []).map((f) => f.name), ...[...(last?.text ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1])];
   // "favourite colour" makes it suggest a memory, to test memory suggestions.
   const remember = q.includes("favourite colour") ? "\n\n<remember>Their favourite colour is black.</remember>" : "";
-  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + FAKE_REPLY.replace("{q}", q) + remember;
+  // "quote" makes it repeat the start of each text it was given, to test documents are read.
+  const quoted = q.includes("quote")
+    ? [...(last?.text ?? "").matchAll(/<file name="([^"]+)">\n([\s\S]*?)\n<\/file>/g)].map((m) => `${m[1]} says: ${m[2].replace(/\s+/g, " ").slice(0, 120)}\n\n`).join("")
+    : "";
+  // "make files" makes it write files to download, to test generated documents.
+  const made = q.includes("make files") ? FAKE_FILES : "";
+  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
