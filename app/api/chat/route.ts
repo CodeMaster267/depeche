@@ -21,6 +21,8 @@ import { saveReplyCanvases } from "@/lib/chat/canvas";
 import { pictureReply } from "./picture";
 import { MAX_COMPARE } from "@/lib/chat/compare";
 import { DESIGN_INSTRUCTIONS } from "@/lib/design/instructions";
+import { chooseSkills, skillsPrompt } from "@/lib/skills/match";
+import { mySkills, skillsUsedEarlier } from "@/lib/skills/load";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
 export const maxDuration = 300;
@@ -161,13 +163,16 @@ export async function POST(req: NextRequest) {
     .select("about_me, answer_style, enabled")
     .eq("owner_id", me.userId)
     .maybeSingle<PersonalInstructions>();
+  // Skills from the person's own list that fit this message (or were used earlier in this chat).
+  const asked = text || all.find((m) => m.id === body.regenerate)?.content.text || "";
+  const skills = chooseSkills(await mySkills(db, me.userId), `${asked}\n${quote ?? ""}`, skillsUsedEarlier(activePath(all)));
   const system = systemPrompt(
     me.profile.display_name,
     Boolean(body.voice),
     remembered ?? [],
     instructions,
     canvas,
-  );
+  ) + (skills.length ? `\n\n${skillsPrompt(me.profile.display_name, skills)}` : "");
   let historyChars = 0;
   const seen = [system, text, quote ?? ""];
   for (const m of [...all].reverse()) {
@@ -477,6 +482,7 @@ export async function POST(req: NextRequest) {
             ...(queries.length ? { queries } : {}),
             ...(lookups.length ? { lookups } : {}),
             ...(read.length ? { read } : {}),
+            ...(skills.length ? { skills: skills.map((s) => ({ id: s.id, name: s.name })) } : {}),
             ...(compare ? { compare } : {}),
             cost,
           },
