@@ -39,9 +39,11 @@ describe("modelsFor", () => {
     const { modelsFor } = await import("@/lib/ai/models");
     const ids = (keys: Parameters<typeof modelsFor>[0]) => modelsFor(keys).map((m) => m.id);
     expect(ids([])).toEqual([]);
-    expect(ids([{ provider: "google", models: null }])).toEqual(["gemini-4-argon", "gemini-3.8-flash", "gemini-3.5-flash-lite"]);
+    expect(ids([{ provider: "google", models: null }])).toEqual([
+      "gemini-4-argon", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-nano-banana-2.1", "gemini-3-pro-image",
+    ]);
     expect(ids([{ provider: "google", models: ["gemini-3.8-flash"] }])).toEqual(["gemini-3.8-flash"]);
-    expect(ids([{ provider: "google", models: [] }])).toHaveLength(3);
+    expect(ids([{ provider: "google", models: [] }])).toHaveLength(5);
   });
 });
 

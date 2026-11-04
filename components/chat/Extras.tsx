@@ -185,6 +185,12 @@ export function CostButton({ content }: { content: MessageRow["content"] }) {
                   <span className="text-mute">Read</span>
                   <span>{tokens(usage.input)}</span>
                 </span>
+                {usage.cached ? (
+                  <span className="flex justify-between gap-3" data-testid="cost-cached">
+                    <span className="text-mute">Of that, reused</span>
+                    <span>{tokens(usage.cached)}</span>
+                  </span>
+                ) : null}
                 <span className="flex justify-between gap-3">
                   <span className="text-mute">Wrote</span>
                   <span>{tokens(usage.output)}</span>
@@ -199,6 +205,7 @@ export function CostButton({ content }: { content: MessageRow["content"] }) {
             ) : null}
             <span className="mt-1 text-[12px] leading-snug text-mute">
               {usage?.estimated ? "Estimated, as the answer was stopped early. " : ""}
+              {usage?.cached ? "Reused tokens were read back from the provider's cache at a much lower price. " : ""}
               Worked out from the provider&apos;s list prices; your family&apos;s bill may differ slightly.
             </span>
           </span>
