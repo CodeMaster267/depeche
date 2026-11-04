@@ -65,7 +65,8 @@ test("answers suggest follow-ups, show their cost, and parts of them can be aske
   const details = page.getByTestId("cost-details");
   await expect(details).toContainText("1,200 tokens");
   await expect(details).toContainText("400 tokens");
-  await page.getByRole("button", { name: "Close" }).first().click();
+  // Tap outside it: the corner of the screen, which the details never cover (the middle can be).
+  await page.getByRole("button", { name: "Close" }).first().click({ position: { x: 4, y: 4 } });
   await expect(details).toHaveCount(0);
 
   // Kept with the answer, so they're still offered after a reload.

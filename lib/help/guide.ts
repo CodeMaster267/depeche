@@ -99,9 +99,9 @@ naming the page you're on to switch). "Ask Concierge", under your chats, opens t
   },
   {
     id: "composer",
-    title: "Attaching files, web search, deep research",
+    title: "Attaching files, web search, deep research, saved prompts, think harder",
     text: `
-The buttons next to the message box:
+The buttons in the row under the message box:
 - Paperclip ("Attach"): opens a menu with three choices.
   - "Photos and files": photos, PDFs, Word, Excel, PowerPoint, and text or code files. Up to 5 files a message and
     10 MB each. You can also paste or drag files in. Word, Excel and PowerPoint files are read by Depeche and sent as
@@ -116,7 +116,21 @@ The buttons next to the message box:
   has a small fee. DeepSeek models can't search, so the globe is greyed out for them.
 - Deep research (the magnifier with lines): for this one message, the model runs several web searches and writes a long
   report with sources. It takes a few minutes and costs more than a normal reply; progress shows in the chat.
-- Microphone: see Voice.`,
+- Light bulb ("Think harder"): asks Claude, GPT or Gemini to reason longer and more carefully before answering. Slower
+  and a little dearer; the reply says "thought harder" next to the model's name. It stays on until you turn it off or
+  leave the page. Greyed out for DeepSeek and Grok, which can't be asked.
+- Bookmark ("Saved prompts"): messages you use often. Tap "New prompt", or "Save what I typed" to keep what's in the box.
+  Put a word in double curly brackets, like {{language}}, and you're asked to fill it in each time you use the prompt;
+  then it goes into the message box for you to check and send. Tap Edit on a prompt to change or delete it. Only you
+  can see your saved prompts.
+- Microphone: see Voice.
+
+While a reply is being written you can keep typing. Tap the outlined arrow ("Send after this reply"), or press Enter on
+a computer, and your message waits above the box and is sent as soon as the reply finishes (up to 5 can wait). Tap ×
+to take one back. If you stop a reply, waiting messages stay until you tap "Send now".
+
+Anything you type but don't send is kept as a draft for that chat on this device, so it's still there when you come
+back. Drafts are cleared when you sign out.`,
   },
   {
     id: "files-out",

@@ -1,7 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { FunctionCallingConfigMode, GoogleGenAI, type Part } from "@google/genai";
+import { FunctionCallingConfigMode, GoogleGenAI, ThinkingLevel, type Part } from "@google/genai";
 import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canLookUp, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
 import { MAX_OUTPUT } from "@/lib/ai/budget";
 import { CHAT_SEARCH_TOOL, MAX_CHAT_SEARCHES, type ChatSearch } from "@/lib/chat/search";
@@ -58,6 +58,8 @@ export type ReplyRequest = {
   chatSearch?: ChatSearch;
   /** Ask for the model's reasoning. Turned off for a model that turns out not to offer it. */
   think?: boolean;
+  /** "Think harder": ask for the model's highest usual reasoning effort, where it takes one. */
+  harder?: boolean;
   /**
    * Turns on prompt caching where Depeche has to ask for it (Claude), and keeps each chat's cached
    * prompt together and apart from other people's where the provider allows (OpenAI's and xAI's
@@ -234,7 +236,7 @@ const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-
 /** Long searches can pause a Claude turn; it is continued this many times at most. */
 const MAX_CONTINUES = 3;
 
-async function* anthropicReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* anthropicReply({ model, apiKey, system, turns, signal, search, think, harder, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new Anthropic({ apiKey, maxRetries: 1, baseURL: testUrl("DEPECHE_ANTHROPIC_URL") });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
@@ -285,7 +287,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, t
         // this chat, and each round of searching within this reply, reads it back at a tenth of the
         // price or less. The cache lasts 5 minutes from its last use.
         ...(cacheKey ? { cache_control: { type: "ephemeral" as const } } : {}),
-        output_config: { effort: "medium" },
+        output_config: { effort: harder ? "high" : "medium" },
         // Claude decides when to think; a summary of it is shown collapsed above the reply.
         ...(think ? { thinking: { type: "adaptive" as const, display: "summarized" as const } } : {}),
         ...(tools.length ? { tools: tools as never } : {}),
@@ -391,7 +393,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, t
   yield { type: "usage", input, output, cacheRead, cacheWrite };
 }
 
-async function* openaiReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* openaiReply({ model, apiKey, system, turns, signal, search, think, harder, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new OpenAI({ apiKey, maxRetries: 1, baseURL: testUrl("DEPECHE_OPENAI_URL") });
   const input: unknown[] = turns.map((t) =>
     t.role === "user" && t.files?.length
@@ -442,7 +444,10 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, thin
         ...(tools.length ? { tools: tools as never } : {}),
         ...(search ? { max_tool_calls: MAX_SEARCHES } : {}),
         // OpenAI shares a summary of its reasoning, not the reasoning itself.
-        ...(think ? { reasoning: { summary: "auto" as const } } : {}),
+        // "Think harder" raises its reasoning effort.
+        ...(think || harder
+          ? { reasoning: { ...(think ? { summary: "auto" as const } : {}), ...(harder ? { effort: "high" as const } : {}) } }
+          : {}),
         // Nothing is stored at OpenAI, so the model's reasoning comes back encrypted to be handed
         // back after a lookup.
         ...(chatSearch
@@ -512,7 +517,7 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, thin
   yield { type: "usage", input: inputTokens, output: outputTokens, cacheRead, cacheWrite };
 }
 
-async function* googleReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* googleReply({ model, apiKey, system, turns, signal, search, think, harder, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const base = testUrl("DEPECHE_GOOGLE_URL");
   const ai = new GoogleGenAI({ apiKey, ...(base ? { httpOptions: { baseUrl: base } } : {}) });
   type Content = { role: "user" | "model"; parts: Part[] };
@@ -554,7 +559,10 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, thin
         maxOutputTokens: left,
         abortSignal: signal,
         // Gemini shares summaries of its thoughts when asked.
-        ...(think ? { thinkingConfig: { includeThoughts: true } } : {}),
+        // "Think harder" raises its thinking level.
+        ...(think || harder
+          ? { thinkingConfig: { ...(think ? { includeThoughts: true } : {}), ...(harder ? { thinkingLevel: ThinkingLevel.HIGH } : {}) } }
+          : {}),
         ...(tools.length ? { tools } : {}),
         ...(chatSearch && lookups >= MAX_CHAT_SEARCHES
           ? { toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.NONE } } }
@@ -932,7 +940,7 @@ This is well documented[^1].
 [^1]: [Quadratic formula](https://en.wikipedia.org/wiki/Quadratic_formula), Wikipedia.
 `.replaceAll("\\`", "`");
 
-async function* fakeReply({ turns, signal, search, model, system, chatSearch }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
+async function* fakeReply({ turns, signal, search, model, system, chatSearch, harder }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const last = turns.at(-1);
   const q = last?.text.slice(0, 80) ?? "";
   // Asked to summarise a chat (auto-compaction): a short summary naming the first message, and facts.
@@ -1098,7 +1106,8 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   }
   // "my first message" makes it repeat the conversation's first message, to test what history it got.
   const first = q.includes("my first message") ? `Your first message was: "${turns[0]?.text.split("\n")[0].slice(0, 80)}" (${turns.length} turns).\n\n` : "";
-  const reply = first + asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + skilled + fromProject + asAssistant + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
+  // Says when it was asked to think harder, to test the switch reaches the model.
+  const reply = (harder ? "I thought harder about this.\n\n" : "") + first + asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + skilled + fromProject + asAssistant + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

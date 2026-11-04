@@ -107,6 +107,8 @@ test("a person redesigns Depeche from a chat, keeps it, and goes back to standar
   // The new button goes where it says.
   await page.getByRole("link", { name: "My memory" }).filter({ visible: true }).click();
   await expect(page).toHaveURL(/\/memory/);
+  // Let that navigation finish, or Safari treats the next one as interrupting it.
+  await page.waitForLoadState("networkidle");
 
   // My look shows it, and the way back.
   await page.goto("/design");
