@@ -169,6 +169,20 @@ describe("DeepSeek", () => {
     expect(text(events)).toBe("Flash here.");
   }, 20_000);
 
+  it("answers without reasoning when a model refuses it, without a notice", async () => {
+    let n = 0;
+    handler = () =>
+      ++n === 1
+        ? { status: 400, json: { error: { message: "reasoning is not supported with this model" } } }
+        : { sse: [{ choices: [{ index: 0, delta: { reasoning_content: "hmm", content: "Blue light scatters most." }, finish_reason: "stop" }] }] };
+    const events = await run("deepseek-flash", [{ role: "user", text: "Why is the sky blue?" }]);
+    expect(seen).toHaveLength(2);
+    expect(text(events)).toBe("Blue light scatters most.");
+    // Asked again without reasoning, so none is shown.
+    expect(events.some((e) => e.type === "thinking")).toBe(false);
+    expect(events.some((e) => e.type === "notice")).toBe(false);
+  });
+
   it("counts thinking whichever way usage reports it", () => {
     expect(completionUsage({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 40 })).toEqual({ input: 10, output: 30 });
     expect(completionUsage({ prompt_tokens: 10, completion_tokens: 30, total_tokens: 40 })).toEqual({ input: 10, output: 30 });
