@@ -100,6 +100,7 @@ type Member = {
   username: string | null;
   role: string;
   monthly_cap_usd: string;
+  no_spend_limit: boolean;
   share_titles: boolean;
 };
 
@@ -125,6 +126,7 @@ export function MemberRow({
     undefined,
   );
   const cap = Number(member.monthly_cap_usd);
+  const [noLimit, setNoLimit] = useState(member.no_spend_limit);
   const isAdmin = member.role === "admin";
 
   return (
@@ -141,14 +143,22 @@ export function MemberRow({
           </span>
         </span>
         <span className="shrink-0 text-right text-[15px] tabular-nums">
-          ${spent.toFixed(2)} <span className="text-mute">of ${cap.toFixed(0)}</span>
+          ${spent.toFixed(2)} <span className="text-mute">{member.no_spend_limit ? "· no limit" : `of $${cap.toFixed(0)}`}</span>
         </span>
       </button>
       {open ? (
         <div className="flex flex-col gap-4 pb-2">
           <form action={capAction} className="flex flex-col gap-2">
             <Kept values={capState?.values}>
-            <Field label="Monthly limit in dollars" name="cap" inputMode="decimal" defaultValue={cap.toFixed(2)} hint="Monthly limit in dollars. Chats stop when it's reached." />
+            <label className="flex items-center gap-3 text-[15px]">
+              <input type="checkbox" name="nolimit" checked={noLimit} onChange={(e) => setNoLimit(e.target.checked)} className="h-5 w-5 accent-current" />
+              No limit
+            </label>
+            {noLimit ? (
+              <p className="text-[13px] text-mute">Everything they use is still counted and shown, but nothing stops them.</p>
+            ) : (
+              <Field label="Monthly limit in dollars" name="cap" inputMode="decimal" defaultValue={cap.toFixed(2)} hint="Monthly limit in dollars. Chats stop when it's reached." />
+            )}
             </Kept>
             {capState?.error ? <Notice tone="error">{capState.error}</Notice> : capState?.ok ? <Notice>{capState.ok}</Notice> : null}
             <Button variant="secondary" disabled={capPending}>Save limit</Button>
