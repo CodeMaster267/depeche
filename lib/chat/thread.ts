@@ -37,6 +37,8 @@ export type MessageRow = {
     lookups?: string[];
     /** Files the reply read (those sent with the question). */
     read?: string[];
+    /** Set when two or three models answered the same question side by side (see lib/chat/compare.ts). */
+    compare?: { id: string; slot: number };
   };
   status: "pending" | "streaming" | "completed" | "failed" | "stopped";
   model: string | null;
@@ -45,7 +47,18 @@ export type MessageRow = {
   memory?: { id: string; content: string };
 };
 
-export type ChatRow = { id: string; title: string; model: string | null; pinned: boolean; updated_at: string };
+export type ChatRow = {
+  id: string;
+  title: string;
+  model: string | null;
+  pinned: boolean;
+  updated_at: string;
+  /** Set while the chat is archived: out of the list until restored or written in. */
+  archived_at?: string | null;
+  /** Set on chats brought in from another app's export. */
+  imported_from?: "chatgpt" | "claude" | "gemini" | null;
+  created_at?: string;
+};
 
 /**
  * Messages are never edited or deleted. A regenerated reply is a new message with the same parent,
