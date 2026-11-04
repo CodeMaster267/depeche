@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MODELS, PROVIDERS, priceBand, type Model } from "@/lib/ai/models";
+import { MAX_COMPARE, toggleCompare } from "@/lib/chat/compare";
 import { CheckIcon, CloseIcon, SearchIcon } from "./icons";
 
 /**
@@ -13,13 +14,24 @@ export function ModelPicker({
   current,
   onPick,
   onClose,
+  comparing,
+  onCompare,
 }: {
   available: string[];
   current: string | null;
   onPick: (id: string) => void;
   onClose: () => void;
+  /** Models chosen to answer the next message side by side (empty when not comparing). */
+  comparing?: string[];
+  /** Ask two or three models at once; an empty list turns comparing off. */
+  onCompare?: (ids: string[]) => void;
 }) {
   const [q, setQ] = useState("");
+  // Comparing: tap two or three models, then confirm. Starts with the current model ticked.
+  const [multi, setMulti] = useState(Boolean(comparing?.length));
+  const [chosen, setChosen] = useState<string[]>(
+    comparing?.length ? comparing : current && available.includes(current) ? [current] : [],
+  );
   const panel = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,9 +49,10 @@ export function ModelPicker({
     // Chat models by provider, then the models that make pictures together under their own heading.
     return [
       ...PROVIDERS.map((p) => ({ key: p.id, title: p.name.split(" (")[0], models: models.filter((m) => m.provider === p.id && !m.image) })),
-      { key: "pictures", title: "Make pictures", models: models.filter((m) => m.image) },
+      // Comparing is for written answers, so picture models aren't offered then.
+      { key: "pictures", title: "Make pictures", models: multi ? [] : models.filter((m) => m.image) },
     ].filter((g) => g.models.length);
-  }, [available, q]);
+  }, [available, q, multi]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-start sm:pt-[12vh]" role="presentation">
@@ -70,6 +83,21 @@ export function ModelPicker({
             className="h-full w-full bg-transparent text-[17px] text-fg outline-none placeholder:text-faint"
           />
         </label>
+        {onCompare && available.length > 1 ? (
+          <div className="mx-6 mb-1 mt-2 flex items-center justify-between gap-3">
+            <span className="text-[15px] text-mute">
+              {multi ? `Pick 2 or ${MAX_COMPARE} models to answer side by side` : "Ask several models at once"}
+            </span>
+            <button
+              type="button"
+              aria-pressed={multi}
+              onClick={() => setMulti(!multi)}
+              className={`press shrink-0 rounded-full border px-3.5 py-1.5 text-[14px] ${multi ? "border-fg bg-inv text-on-inv" : "border-line"}`}
+            >
+              Compare
+            </button>
+          </div>
+        ) : null}
         <div className="overflow-y-auto overscroll-contain pb-4">
           {groups.map((g) => (
             <section key={g.key}>
@@ -77,27 +105,69 @@ export function ModelPicker({
                 {g.title}
               </h3>
               <ul>
-                {g.models.map((m) => (
-                  <ModelRow key={m.id} model={m} selected={m.id === current} onPick={onPick} />
-                ))}
+                {g.models.map((m) =>
+                  multi ? (
+                    <ModelRow
+                      key={m.id}
+                      model={m}
+                      selected={chosen.includes(m.id)}
+                      order={chosen.includes(m.id) ? chosen.indexOf(m.id) + 1 : undefined}
+                      disabled={!chosen.includes(m.id) && chosen.length >= MAX_COMPARE}
+                      onPick={(id) => setChosen((c) => toggleCompare(c, id))}
+                    />
+                  ) : (
+                    <ModelRow key={m.id} model={m} selected={m.id === current} onPick={onPick} />
+                  ),
+                )}
               </ul>
             </section>
           ))}
           {!groups.length ? <p className="px-6 py-6 text-[15px] text-mute">No models match.</p> : null}
         </div>
+        {multi && onCompare ? (
+          <div className="flex items-center gap-3 border-t border-line px-6 py-3">
+            {comparing?.length ? (
+              <button type="button" className="press rounded-full px-3 py-2.5 text-[15px] text-mute" onClick={() => onCompare([])}>
+                Stop comparing
+              </button>
+            ) : null}
+            <button
+              type="button"
+              disabled={chosen.length < 2}
+              onClick={() => onCompare(chosen)}
+              className="press glass ml-auto rounded-full px-5 py-2.5 text-[16px] font-medium disabled:opacity-40"
+            >
+              {chosen.length < 2 ? "Pick at least 2" : `Compare ${chosen.length} models`}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function ModelRow({ model, selected, onPick }: { model: Model; selected: boolean; onPick: (id: string) => void }) {
+function ModelRow({
+  model,
+  selected,
+  onPick,
+  order,
+  disabled,
+}: {
+  model: Model;
+  selected: boolean;
+  onPick: (id: string) => void;
+  /** In compare mode: this model's place in the row of answers. */
+  order?: number;
+  disabled?: boolean;
+}) {
   return (
     <li>
       <button
         type="button"
         onClick={() => onPick(model.id)}
         aria-pressed={selected}
-        className={`flex w-full items-center justify-between gap-4 border-b border-line px-6 py-3.5 text-left ${selected ? "bg-soft" : ""}`}
+        disabled={disabled}
+        className={`flex w-full items-center justify-between gap-4 border-b border-line px-6 py-3.5 text-left disabled:opacity-40 ${selected ? "bg-soft" : ""}`}
       >
         <span className="min-w-0">
           <span className="block text-[18px]">{model.name}</span>
@@ -109,7 +179,13 @@ function ModelRow({ model, selected, onPick }: { model: Model; selected: boolean
             ))}
           </span>
         </span>
-        {selected ? <CheckIcon className="shrink-0" /> : null}
+        {order ? (
+          <span aria-hidden className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-inv font-mono text-[13px] text-on-inv">
+            {order}
+          </span>
+        ) : selected ? (
+          <CheckIcon className="shrink-0" />
+        ) : null}
       </button>
     </li>
   );

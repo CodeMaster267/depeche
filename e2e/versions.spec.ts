@@ -74,11 +74,11 @@ test("edit a sent message, flip between versions, and keep both after reloading"
   // Reloading opens the newest conversation, and the other version is still one tap away.
   await page.reload();
   await expect(page.getByTestId("user-message")).toHaveText(["Plan a picnic", "Make it vegetarian", "Add dessert"]);
-  // A tap the moment the page appears can land before it is ready (seen in Safari), so it is
-  // repeated until the other version shows.
+  // A tap that lands before the page has finished loading does nothing, so tap until it takes.
   await expect(async () => {
-    await page.getByTestId("message-versions").getByRole("button", { name: "Next version of this message" }).click();
-    await expect(page.getByTestId("user-message")).toHaveText(["Plan a beach day"], { timeout: 1500 });
+    const next = page.getByTestId("message-versions").getByRole("button", { name: "Next version of this message" });
+    if (await next.isEnabled()) await next.click();
+    await expect(page.getByTestId("user-message")).toHaveText(["Plan a beach day"], { timeout: 1_000 });
   }).toPass({ timeout: 10_000 });
   await noSidewaysScroll(page);
   expect(errors.filter((e) => !/_rsc=.*access control checks/.test(e))).toEqual([]);
