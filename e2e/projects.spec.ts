@@ -54,9 +54,6 @@ async function chatList(page: Page) {
   return nav;
 }
 
-async function closeList(page: Page) {
-  if (phone(page)) await page.getByRole("navigation", { name: "Chats" }).getByRole("button", { name: "Close menu" }).click();
-}
 
 test("make a project with instructions and files, chat in it, and move chats in and out", async ({ page, browser }) => {
   test.setTimeout(180_000);
@@ -163,7 +160,6 @@ test("make a project with instructions and files, chat in it, and move chats in 
     "Travel",
   ]);
   await noSidewaysScroll(page);
-  await closeList(page).catch(() => {});
   expect(errors).toEqual([]);
 });
 
