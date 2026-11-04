@@ -17,10 +17,10 @@ import { Compare } from "./Compare";
 import { comparedWith } from "@/lib/chat/compare";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
+import { UserMessage, VersionSwitch } from "./Versions";
 import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
-import { UserMessage, VersionSwitch } from "./Versions";
 import type { Source } from "@/lib/chat/thread";
 
 type Live = MessageRow & LiveActivity;
@@ -607,12 +607,6 @@ export function ChatApp({
   );
 }
 
-/** The reply stopped thinking (it started writing or searching): bank the time it spent. */
-function stopThinking(m: Live): Live {
-  if (!m.thinkingNow) return m;
-  return { ...m, thinkingNow: false, thinkingSince: undefined, thoughtSoFar: (m.thoughtSoFar ?? 0) + (m.thinkingSince ? Date.now() - m.thinkingSince : 0) };
-}
-
 function ReplyVersions({ message, tree, busy, onPick }: { message: Live; tree: Live[]; busy: boolean; onPick: (id: string) => void }) {
   const versions = versionsOf(tree, message);
   return (
@@ -624,6 +618,12 @@ function ReplyVersions({ message, tree, busy, onPick }: { message: Live; tree: L
       onPick={(i) => onPick(versions[i].id)}
     />
   );
+}
+
+/** The reply stopped thinking (it started writing or searching): bank the time it spent. */
+function stopThinking(m: Live): Live {
+  if (!m.thinkingNow) return m;
+  return { ...m, thinkingNow: false, thinkingSince: undefined, thoughtSoFar: (m.thoughtSoFar ?? 0) + (m.thinkingSince ? Date.now() - m.thinkingSince : 0) };
 }
 
 function Reply({
