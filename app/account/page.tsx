@@ -10,6 +10,8 @@ import { signOutEverywhere } from "./actions";
 import { lockSession } from "@/lib/lock/server";
 import { AppLock } from "./lock";
 import { ExportButton } from "@/components/ExportButton";
+import { vapidKeys } from "@/lib/push/server";
+import { NotificationsToggle } from "./Notifications";
 import { ImportChats } from "@/components/ImportChats";
 import { DeleteEverythingForm, KeepChatsToggle, PasswordForm, ProfileForm, ShareTitlesToggle } from "./forms";
 
@@ -63,6 +65,9 @@ export default async function Account() {
             temporary one.
           </p>
           <PasswordForm />
+        </Section>
+        <Section title="Notifications">
+          <NotificationsToggle publicKey={vapidKeys()?.publicKey ?? null} />
         </Section>
         <Section title="App lock">
           <AppLock

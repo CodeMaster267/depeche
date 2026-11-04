@@ -36,6 +36,7 @@ describe("spending holds", () => {
   it("add web search fees and the pages searches read", () => {
     const plain = planReply([sonnet], 1000);
     const searching = planReply([sonnet], 1000, { extraUsd: 0.05, extraInputTokens: 60_000 });
-    expect(searching.want - plain.want).toBeCloseTo(0.05 + (60_000 * 2) / 1e6);
+    // Input is held at Claude's cache write price ($2.50 per million on Sonnet), as it may all be cached.
+    expect(searching.want - plain.want).toBeCloseTo(0.05 + (60_000 * 2.5) / 1e6);
   });
 });

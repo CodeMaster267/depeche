@@ -46,10 +46,13 @@ export function ModelPicker({
     const models = MODELS.filter(
       (m) => available.includes(m.id) && (!needle || `${m.name} ${m.tags.join(" ")}`.toLowerCase().includes(needle)),
     );
-    return PROVIDERS.map((p) => ({ provider: p, models: models.filter((m) => m.provider === p.id) })).filter(
-      (g) => g.models.length,
-    );
-  }, [available, q]);
+    // Chat models by provider, then the models that make pictures together under their own heading.
+    return [
+      ...PROVIDERS.map((p) => ({ key: p.id, title: p.name.split(" (")[0], models: models.filter((m) => m.provider === p.id && !m.image) })),
+      // Comparing is for written answers, so picture models aren't offered then.
+      { key: "pictures", title: "Make pictures", models: multi ? [] : models.filter((m) => m.image) },
+    ].filter((g) => g.models.length);
+  }, [available, q, multi]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-start sm:pt-[12vh]" role="presentation">
@@ -97,9 +100,9 @@ export function ModelPicker({
         ) : null}
         <div className="overflow-y-auto overscroll-contain pb-4">
           {groups.map((g) => (
-            <section key={g.provider.id}>
+            <section key={g.key}>
               <h3 className="px-6 pb-1 pt-5 text-[12px] font-semibold uppercase tracking-[0.1em] text-mute">
-                {g.provider.name.split(" (")[0]}
+                {g.title}
               </h3>
               <ul>
                 {g.models.map((m) =>
