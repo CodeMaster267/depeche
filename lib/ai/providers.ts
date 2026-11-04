@@ -1057,6 +1057,10 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   const told = q.includes("my instructions")
     ? [...system.matchAll(/<(about_me|how_to_answer)>\n([\s\S]*?)\n<\/\1>/g)].map((m) => `${m[1] === "about_me" ? "About you" : "How to answer"}: ${m[2]}\n\n`).join("") || "No personal instructions.\n\n"
     : "";
+  // "which skills" makes it name the skills it was given, to test skills are picked up.
+  const skilled = q.includes("which skills")
+    ? `Skills I was given: ${[...system.matchAll(/<skill name="([^"]+)"/g)].map((m) => m[1]).join(", ") || "none"}.\n\n`
+    : "";
   // "make files" makes it write files to download, to test generated documents.
   const made =
     (q.includes("make files") ? FAKE_FILES : "") +
@@ -1106,7 +1110,7 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     yield { type: "usage", input: 900, output: 120 };
     return;
   }
-  const reply = asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
+  const reply = asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + skilled + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
