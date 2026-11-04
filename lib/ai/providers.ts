@@ -861,7 +861,9 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     : "";
   // "make files" makes it write files to download, to test generated documents.
   const made = q.includes("make files") ? FAKE_FILES : "";
-  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
+  // "my first message" makes it repeat the conversation's first message, to test what history it got.
+  const first = q.includes("my first message") ? `Your first message was: "${turns[0]?.text.split("\n")[0].slice(0, 80)}" (${turns.length} turns).\n\n` : "";
+  const reply = first + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

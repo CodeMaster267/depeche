@@ -31,16 +31,15 @@ export const TemporaryIcon = () => (
  * Turns a new chat into a temporary one (and back). Shown in the header of an empty new chat; once
  * a temporary chat has messages it stays temporary, and New chat leaves it.
  */
-export function TemporaryToggle({ on, locked, onToggle }: { on: boolean; locked: boolean; onToggle: () => void }) {
+export function TemporaryToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   return (
     <button
       type="button"
-      onClick={locked ? undefined : onToggle}
+      onClick={onToggle}
       aria-pressed={on}
-      aria-disabled={locked || undefined}
-      aria-label={on ? "Temporary chat on" : "Temporary chat"}
+      aria-label="Temporary chat"
       title={on ? "Temporary chat: not saved, nothing remembered" : "Start a temporary chat"}
-      className={`press flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-full px-2.5 text-[14px] ${
+      className={`press flex h-10 min-w-10 shrink-0 items-center justify-center gap-1.5 rounded-full px-2 text-[14px] ${
         on ? "border border-fg text-fg" : "text-mute hover:text-fg"
       }`}
     >

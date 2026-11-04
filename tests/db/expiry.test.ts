@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { PGlite } from "@electric-sql/pglite";
 import { as, freshDatabase, rows } from "./harness";
 
-/** Chats unused for a month are deleted, unless pinned or their owner chose to keep chats. */
+/** Chats unused for a month are deleted, unless pinned, archived, or their owner chose to keep chats. */
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const P = { hasan: id(1), amir: id(2) };
 const F = id(101);
@@ -27,7 +27,9 @@ beforeAll(async () => {
       ('${P.amir}', 'old', false, now() - interval '31 days'),
       ('${P.amir}', 'old but pinned', true, now() - interval '90 days'),
       ('${P.amir}', 'recent', false, now() - interval '29 days'),
+      ('${P.amir}', 'old but archived', false, now() - interval '90 days'),
       ('${P.hasan}', 'hasan old', false, now() - interval '60 days');
+    update public.chats set archived_at = now() - interval '60 days' where title = 'old but archived';
   `);
 });
 
@@ -41,10 +43,10 @@ describe("chat expiry", () => {
     ]);
   });
 
-  it("deletes month-old chats, keeping pinned ones and those of people who keep chats", async () => {
+  it("deletes month-old chats, keeping pinned and archived ones and those of people who keep chats", async () => {
     expect(await asServer("select public.expire_old_chats() as n")).toEqual([{ n: 1 }]);
     const left = await asServer<{ title: string }>("select title from chats order by title");
-    expect(left.map((r) => r.title)).toEqual(["hasan old", "old but pinned", "recent"]);
+    expect(left.map((r) => r.title)).toEqual(["hasan old", "old but archived", "old but pinned", "recent"]);
   });
 
   it("can only be run by the server", async () => {
