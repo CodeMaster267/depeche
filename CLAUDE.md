@@ -77,4 +77,8 @@ under reduced motion. Mockups: `/mnt/project-files/depeche/screens/` in the proj
   Supabase (`npm run db:start`, needs Docker; emails land in Mailpit). The `setup` project wipes the
   local data and does first-time owner setup before the rest. Report results for both browsers.
   Claude's cloud container can run both browsers and Docker (start `dockerd` if it isn't running).
+- **Vercel builds only `main`** (`git.deploymentEnabled` in `vercel.json`), because Hobby allows 100
+  deployments a day and every branch push used to make a preview. Merging to main deploys to
+  depai.vercel.app within minutes. When Hasan wants to see unmerged work, push the same commit to a
+  `preview/<name>` branch (those still deploy) and send him that preview link; delete the branch after.
 - Migrations are forward-only SQL files in `supabase/migrations/`, named by timestamp.
