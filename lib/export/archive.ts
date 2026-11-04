@@ -23,7 +23,7 @@ export type ExportChat = {
 
 export type ExportMessage = Omit<MessageRow, "memory"> & { provider?: string | null };
 
-export type ExportMemory = { id: string; content: string; status: string; created_at: string; updated_at: string };
+export type ExportMemory = { id: string; content: string; about?: string | null; status: string; created_at: string; updated_at: string };
 
 export type ExportUsage = {
   created_at: string;
@@ -134,7 +134,7 @@ export function memoriesMarkdown(memories: ExportMemory[]): string {
   for (const [status, heading] of groups) {
     const list = memories.filter((m) => m.status === status);
     if (!list.length) continue;
-    out.push(`## ${heading}`, "", ...list.map((m) => `- ${m.content.replace(/\s*\n\s*/g, " ")}`), "");
+    out.push(`## ${heading}`, "", ...list.map((m) => `- ${m.about ? `(${m.about === "me" ? "you" : m.about}) ` : ""}${m.content.replace(/\s*\n\s*/g, " ")}`), "");
   }
   if (out.length === 2) out.push("No memories.", "");
   return out.join("\n");

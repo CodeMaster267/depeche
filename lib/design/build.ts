@@ -23,7 +23,6 @@ export const BUILDERS = [
   "claude-sonnet-5-5",
   "deepseek-v4-pro",
   "gemini-3.8-flash",
-  "openai/gpt-oss-120b",
 ];
 
 /** The most a build's answer may be. A design is about 1,500 tokens; this leaves room. */

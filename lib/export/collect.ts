@@ -45,7 +45,7 @@ export async function collectData(db: SupabaseClient, userId: string, extra: Rec
   );
   progress("Gathering your memories");
   const memories = await all<ExportMemory>((a, b) =>
-    db.from("memories").select("id, content, status, created_at, updated_at").eq("owner_id", userId).order("created_at").order("id").range(a, b),
+    db.from("memories").select("id, content, about, status, created_at, updated_at").eq("owner_id", userId).order("created_at").order("id").range(a, b),
   );
   const { data: instructions, error: instructionsError } = await db
     .from("personal_instructions")

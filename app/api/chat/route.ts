@@ -6,7 +6,7 @@ import { decryptSecret, fromBytea } from "@/lib/crypto";
 import { MAX_SEARCHES, canLookUp, estimateCost, findModel, searchCost } from "@/lib/ai/models";
 import { ProviderError, fakeAi, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
 import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOfferChatSearch } from "@/lib/chat/search";
-import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
+import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions, type RememberedFact } from "@/lib/chat/memory";
 import { personalInstructions, type PersonalInstructions } from "@/lib/chat/instructions";
 import { MAX_FILES_PER_MESSAGE, OFFICE_TYPES, UPLOAD_BUCKET, isFileRef, readAsText, type FileRef } from "@/lib/chat/files";
 import { documentText } from "@/lib/docs/read";
@@ -176,12 +176,12 @@ export async function POST(req: NextRequest) {
   // What the person asked Depeche to remember. Their own rows only, read as them.
   const { data: remembered } = await db
     .from("memories")
-    .select("content")
+    .select("content, about")
     .eq("owner_id", me.userId)
     .eq("status", "active")
     .order("updated_at", { ascending: false })
     .limit(MEMORY_PROMPT_LIMIT)
-    .returns<{ content: string }[]>();
+    .returns<RememberedFact[]>();
   // Their personal instructions ("About you", "How should Depeche answer"), also read as them.
   const { data: instructions } = await db
     .from("personal_instructions")
@@ -205,7 +205,7 @@ export async function POST(req: NextRequest) {
   const system = systemPrompt(
     me.profile.display_name,
     Boolean(body.voice),
-    (remembered ?? []).map((m) => m.content),
+    remembered ?? [],
     instructions,
     project,
     assistant,
@@ -695,7 +695,7 @@ function canvasPrompt(name: string, c: OpenCanvas): string {
 function systemPrompt(
   name: string,
   voice: boolean,
-  memories: string[],
+  memories: RememberedFact[],
   instructions: PersonalInstructions | null,
   project: ProjectContext | null,
   assistant: AssistantContext | null,

@@ -594,6 +594,18 @@ body {
   .voice-orb-speaking, .voice-orb-busy, .voice-dots { animation: none; }
 }
 
+/* A message opened from a search result: a ring that fades, in the text colour (no accent). */
+.found-mark {
+  border-radius: 22px;
+  outline: 2px solid transparent;
+  outline-offset: 8px;
+  transition: outline-color 0.6s ease;
+}
+.found-mark[data-found] {
+  outline-color: var(--fg);
+  transition: none;
+}
+
 /* App lock: the PIN dots shake once after a wrong PIN. */
 @keyframes lock-shake {
   0%, 100% { transform: translateX(0); }
@@ -634,3 +646,48 @@ body {
   .msg-row:not(:hover):not(:focus-within) .msg-tools[data-idle] { opacity: 0; }
 }
 .msg-tools { transition: opacity 150ms ease; }
+
+/*
+ * Waiting for the first word (components/chat/Waiting.tsx): three thin bars rise in turn like a
+ * signal meter, now and then jolting with the red/cyan split, and the status letters flip as the
+ * wait goes on. Reduced motion: still bars, no flips.
+ */
+.waiting { min-height: 1.5rem; }
+.waiting-signal { display: inline-flex; align-items: center; gap: 3px; height: 14px; }
+.waiting-signal i {
+  display: block; width: 2px; height: 14px; border-radius: 1px; background: var(--fg);
+  transform-origin: 50% 50%;
+  animation: waiting-bar 1.2s ease-in-out infinite;
+}
+.waiting-signal i:nth-child(2) { animation-delay: 0.15s; }
+.waiting-signal i:nth-child(3) { animation-delay: 0.3s; }
+.waiting-signal { animation: waiting-jolt 3.4s steps(1, end) infinite; }
+@keyframes waiting-bar {
+  0%, 100% { transform: scaleY(0.25); opacity: 0.35; }
+  40% { transform: scaleY(1); opacity: 1; }
+}
+@keyframes waiting-jolt {
+  0%, 100% { filter: none; transform: none; }
+  61% { filter: drop-shadow(-2px 0 0 #ff1e3c) drop-shadow(2px 0 0 #00e5ff); transform: translateX(1px); }
+  64% { filter: none; transform: none; }
+  88% { filter: drop-shadow(2px 0 0 #ff1e3c) drop-shadow(-2px 0 0 #00e5ff); transform: translateX(-1px); }
+  90% { filter: none; transform: none; }
+}
+.waiting-flip { color: var(--fg); text-shadow: -1px 0 0 rgba(255, 30, 60, 0.7), 1px 0 0 rgba(0, 229, 255, 0.7); }
+@media (prefers-reduced-motion: reduce) {
+  .waiting-signal, .waiting-signal i { animation: none; }
+  .waiting-signal i { transform: scaleY(0.6); opacity: 0.6; }
+}
+
+/* The account row at the foot of the chats list, and the menu it opens. */
+.account-menu { animation: account-in 160ms ease-out both; transform-origin: 50% 100%; }
+@keyframes account-in {
+  0% { opacity: 0; transform: translateY(6px) scale(0.98); filter: drop-shadow(-2px 0 0 rgba(255, 30, 60, 0.45)) drop-shadow(2px 0 0 rgba(0, 229, 255, 0.45)); }
+  100% { opacity: 1; transform: none; filter: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .account-menu { animation: none; }
+}
+
+/* The message box's hint stays on one line on narrow phones (cut with "…") instead of wrapping. */
+.composer-input::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
