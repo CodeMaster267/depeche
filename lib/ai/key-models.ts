@@ -2,7 +2,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
 import { listKeyModels } from "@/lib/ai/providers";
-import { MODELS, type Provider } from "@/lib/ai/models";
+import { MODELS, PROVIDER_NAME, type Provider } from "@/lib/ai/models";
 
 export type KeyModels = { provider: string; models: string[] | null; checked_at: string | null };
 
@@ -18,6 +18,8 @@ const PICTURE_MODELS = MODELS.filter((m) => m.image);
 /** Keys whose usable models haven't been checked, or not for a day. */
 export function staleKeys(keys: KeyModels[]): KeyModels[] {
   return keys.filter((k) => {
+    // A key for a provider Depeche no longer offers (an old Groq key) is left alone.
+    if (!(k.provider in PROVIDER_NAME)) return false;
     if (!k.checked_at) return true;
     const at = new Date(k.checked_at).getTime();
     const before = at < IMAGES_ADDED && PICTURE_MODELS.some((m) => m.provider === k.provider) && !k.models?.some((id) => PICTURE_MODELS.some((m) => m.id === id));
