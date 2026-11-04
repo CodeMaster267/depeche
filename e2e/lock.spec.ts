@@ -21,11 +21,13 @@ async function newPerson(page: Page, name: string) {
 
 async function turnOnLock(page: Page, timeoutLabel: string) {
   await page.goto("/account");
+  // Wait until the page is interactive, so the form goes through the app and not a plain post.
+  await expect(page.locator("form[data-ready]").first()).toBeAttached();
   await page.getByLabel("New PIN (4 to 8 digits)").fill(PIN);
   await page.getByLabel("Type the new PIN again").fill(PIN);
   await page.getByLabel("Lock Depeche").selectOption({ label: timeoutLabel });
   await page.getByRole("button", { name: "Turn on app lock" }).click();
-  await expect(page.getByText("App lock is on.")).toBeVisible();
+  await expect(page.getByText("App lock is on.")).toBeVisible({ timeout: 15_000 });
 }
 
 /** Locks this device on the server, as the page does when it's left or the timer runs out. */
@@ -43,6 +45,7 @@ test("a PIN locks Depeche on the server, and unlocks it again", async ({ page })
   await newPerson(page, "Lena");
   // Too-easy PINs are refused.
   await page.goto("/account");
+  await expect(page.locator("form[data-ready]").first()).toBeAttached();
   await page.getByLabel("New PIN (4 to 8 digits)").fill("1234");
   await page.getByLabel("Type the new PIN again").fill("1234");
   await page.getByRole("button", { name: "Turn on app lock" }).click();

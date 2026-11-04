@@ -62,8 +62,11 @@ function TurnOn() {
 
 function PinForm({ needsCurrent, label, withTimeout = false }: { needsCurrent: boolean; label: string; withTimeout?: boolean }) {
   const [state, action, pending] = useActionState(savePin, undefined);
+  // Marks the form ready once the page is interactive (the browser tests wait for it).
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
   return (
-    <form action={action} className="mt-3 flex flex-col gap-3">
+    <form action={action} className="mt-3 flex flex-col gap-3" data-ready={ready ? "" : undefined}>
       {needsCurrent ? <Field label="Current PIN" name="current" {...pinProps} /> : null}
       <Field label="New PIN (4 to 8 digits)" name="pin" {...pinProps} />
       <Field label="Type the new PIN again" name="confirm" {...pinProps} />
