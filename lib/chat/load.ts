@@ -52,8 +52,11 @@ export async function loadShell(me: Me): Promise<Shell> {
   };
 }
 
-/** One of your chats with the conversation as currently shown, or null if it isn't yours. */
-export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow; messages: MessageRow[] } | null> {
+/**
+ * One of your chats, or null if it isn't yours: the conversation as shown (`messages`, the newest
+ * branch) and every version of every message (`all`), so the screen can flip between versions.
+ */
+export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow; messages: MessageRow[]; all: MessageRow[] } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(chatId)) return null;
   const db = await supabaseServer();
   const { data: chat } = await db
@@ -69,9 +72,10 @@ export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow;
     .eq("chat_id", chatId)
     .order("created_at")
     .returns<MessageRow[]>();
-  const path = activePath(messages ?? []);
+  const all = messages ?? [];
+  const path = activePath(all);
   // Memory suggestions still waiting for an answer, shown under the reply that made them.
-  const replies = path.filter((m) => m.role === "assistant").map((m) => m.id);
+  const replies = all.filter((m) => m.role === "assistant").map((m) => m.id);
   if (replies.length) {
     const { data: waiting } = await db
       .from("memories")
@@ -81,9 +85,9 @@ export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow;
       .in("source_message_id", replies)
       .returns<{ id: string; content: string; source_message_id: string }[]>();
     for (const w of waiting ?? []) {
-      const m = path.find((x) => x.id === w.source_message_id);
+      const m = all.find((x) => x.id === w.source_message_id);
       if (m) m.memory = { id: w.id, content: w.content };
     }
   }
-  return { chat, messages: path };
+  return { chat, messages: path, all };
 }
