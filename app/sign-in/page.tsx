@@ -28,7 +28,7 @@ export default async function SignIn({ searchParams }: { searchParams: Promise<{
 
   return (
     <>
-      {/* Desktop only: the letterflip field fills the screen and keeps clear of the sign-in column. */}
+      {/* The letterflip field fills the screen and keeps clear of the sign-in column. */}
       <RippleField className="fixed inset-0" clear="[data-ripple-clear]" />
       <TitleCardPage>
         <div data-ripple-clear className="relative flex flex-col gap-4">
