@@ -142,11 +142,20 @@ describe("importing chats", () => {
     }
   });
 
-  it("imported chats are kept by the monthly clean-up; others still go", async () => {
-    await asServer("update chats set updated_at = now() - interval '90 days'");
+  it("imported chats get a month from the day they were imported, then go like any chat", async () => {
+    // Old original dates don't count: a fresh import is safe for a month.
+    await asServer("update chats set updated_at = now() - interval '400 days' where imported_from is not null");
+    const kept = await asServer<{ n: string }>("select count(*) as n from chats where imported_from is not null and kept_at > now() - interval '1 minute'");
+    expect(Number(kept[0].n)).toBeGreaterThan(0);
     await asServer("select public.expire_old_chats()");
-    const left = await asServer<{ title: string; imported_from: string | null }>("select title, imported_from from chats order by title");
-    expect(left.length).toBeGreaterThan(0);
-    expect(left.every((c) => c.imported_from)).toBe(true);
+    const before = Number((await asServer<{ n: string }>("select count(*) as n from chats where imported_from is not null"))[0].n);
+    expect(before).toBeGreaterThan(0);
+    // Their owners are told before they go, like any chat.
+    await asServer("update chats set kept_at = now() - interval '28 days' where imported_from is not null");
+    expect((await rows(db, P.amir, "select title from public.my_expiring_chats(3)")).length).toBeGreaterThan(0);
+    // A month after the import, unused, they're deleted.
+    await asServer("update chats set kept_at = now() - interval '31 days' where imported_from is not null");
+    await asServer("select public.expire_old_chats()");
+    expect(await asServer("select title from chats where imported_from is not null")).toEqual([]);
   });
 });
