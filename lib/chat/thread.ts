@@ -23,6 +23,16 @@ export type MessageRow = {
     suggestions?: string;
     /** Set on a deep research report: what was researched. */
     research?: { title: string; questions: string[]; sources: number };
+    /** The model's reasoning, or its provider's summary of it, shown collapsed above the reply. */
+    reasoning?: string;
+    /** How long the model thought, in milliseconds. */
+    thoughtMs?: number;
+    /** What the reply searched the web for. */
+    queries?: string[];
+    /** What the reply looked up in earlier messages of this chat. */
+    lookups?: string[];
+    /** Files the reply read (those sent with the question). */
+    read?: string[];
   };
   status: "pending" | "streaming" | "completed" | "failed" | "stopped";
   model: string | null;
