@@ -7,6 +7,8 @@ import { supabaseServer } from "@/lib/supabase/server";
 import { describeLog, when, type LogRow } from "@/lib/family/log";
 import { signOut } from "@/app/sign-in/actions";
 import { signOutEverywhere } from "./actions";
+import { lockSession } from "@/lib/lock/server";
+import { AppLock } from "./lock";
 import { ExportButton } from "@/components/ExportButton";
 import { ImportChats } from "@/components/ImportChats";
 import { DeleteEverythingForm, KeepChatsToggle, PasswordForm, ProfileForm, ShareTitlesToggle } from "./forms";
@@ -29,6 +31,12 @@ export default async function Account() {
     db.from("profiles").select("id, display_name").returns<{ id: string; display_name: string }[]>(),
   ]);
   const { data: prefs } = await db.from("profiles").select("keep_chats").eq("id", me.userId).maybeSingle<{ keep_chats: boolean }>();
+  const lock = await lockSession();
+  const { data: passkeys } = await db
+    .from("lock_passkeys")
+    .select("id, label, created_at, last_used_at")
+    .order("created_at")
+    .returns<{ id: string; label: string; created_at: string; last_used_at: string | null }[]>();
   const names = new Map((people ?? []).map((p) => [p.id, p.display_name]));
 
   return (
@@ -55,6 +63,14 @@ export default async function Account() {
             temporary one.
           </p>
           <PasswordForm />
+        </Section>
+        <Section title="App lock">
+          <AppLock
+            on={Boolean(lock?.meta)}
+            timeout={lock?.meta?.t ?? 300}
+            needsCurrent={Boolean(lock?.meta) && !lock?.fresh}
+            passkeys={passkeys ?? []}
+          />
         </Section>
         <Section title="My look">
           <p className="text-[15px] text-mute">Redesign your own Depeche: colours, fonts, layout and buttons. Only you see it.</p>

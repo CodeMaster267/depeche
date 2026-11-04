@@ -3,6 +3,7 @@ import { Archivo, Atkinson_Hyperlegible, Baloo_2, Caveat, Comic_Neue, Fraunces, 
 import "./globals.css";
 import { PressFeedback } from "@/components/Press";
 import { GlassEffects } from "@/components/Glass";
+import { LockGuard } from "@/components/lock/LockGuard";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-geist" });
 const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
@@ -45,6 +46,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <PressFeedback />
         <GlassEffects />
         {children}
+        <LockGuard />
       </body>
     </html>
   );

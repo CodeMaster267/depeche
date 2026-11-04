@@ -56,6 +56,7 @@ export const PIECES = {
   "keep-chats": { label: "Keep my chats", kind: "link", href: "/account#old-chats" },
   "share-titles": { label: "Privacy", kind: "link", href: "/account#privacy" },
   password: { label: "Password", kind: "link", href: "/account#password" },
+  "app-lock": { label: "App lock", kind: "link", href: "/account#app-lock" },
   export: { label: "Download my data", kind: "link", href: "/account#your-data" },
   import: { label: "Bring in old chats", kind: "link", href: "/account#bring-in-old-chats" },
   "sign-out-everywhere": { label: "Sign out everywhere", kind: "link", href: "/account#devices" },

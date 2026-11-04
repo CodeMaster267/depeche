@@ -524,6 +524,18 @@ const FILE_INSTRUCTIONS = [
   "Use a short file name without spaces. If the file contains ``` fences, open and close the file block with ```` instead. Only make a file when one is wanted, and keep remarks outside the block.",
 ].join(" ");
 
+/** How a model draws charts and analyses data (components/markdown/Chart.tsx and RunCode.tsx). */
+const CHART_INSTRUCTIONS = [
+  "When a chart would help, draw one with a ```chart code block holding JSON, for example",
+  '{"type":"bar","title":"Spending by month","x":["Jan","Feb","Mar"],"series":[{"name":"Food","values":[320,290,350]}],"yLabel":"£","format":{"prefix":"£"}}.',
+  'type is bar, line, area, scatter or pie; add "stacked":true or "horizontal":true for bars; scatter series give "points":[[x,y],…]; pie uses one series. Up to 8 series. The app draws it, so never write charts as images, SVG or HTML.',
+].join(" ");
+const CODE_INSTRUCTIONS = [
+  "To analyse an attached spreadsheet or CSV, or to calculate something exactly, write Python in a ```python run code block: it runs in the person's browser (Python 3.13 with pandas, numpy and matplotlib; no internet, no installing packages).",
+  "Attached files are in the current folder under their names (pd.read_csv(\"Sales.csv\"), pd.read_excel(\"Budget.xlsx\", sheet_name=…)). Print the results; call chart(df, x=\"Month\", y=[\"Total\"], type=\"line\") or chart({...same JSON as a chart block...}) for an interactive chart; matplotlib figures show too.",
+  "Results appear under the block when it runs, and the person can send them back to you: don't state numbers the code will work out; say briefly what it does. Use plain ```python (without run) for code that is only to read or copy.",
+].join(" ");
+
 function systemPrompt(name: string, voice: boolean, memories: string[], instructions: PersonalInstructions | null): string {
   return [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
@@ -532,6 +544,8 @@ function systemPrompt(name: string, voice: boolean, memories: string[], instruct
     memoryInstructions(name, memories),
     personalInstructions(name, instructions),
     voice ? "" : FILE_INSTRUCTIONS,
+    voice ? "" : CHART_INSTRUCTIONS,
+    voice ? "" : CODE_INSTRUCTIONS,
     voice ? "" : DESIGN_INSTRUCTIONS,
     voice ? "" : followUpInstructions(name),
     voice
