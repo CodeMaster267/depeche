@@ -28,7 +28,7 @@ export async function collectData(db: SupabaseClient, userId: string, extra: Rec
   const chats = await all<ExportChat>((a, b) =>
     db
       .from("chats")
-      .select("id, title, model, pinned, archived_at, created_at, updated_at")
+      .select("id, title, model, pinned, archived_at, project_id, assistant_id, created_at, updated_at")
       .eq("owner_id", userId)
       .order("created_at")
       .order("id")
@@ -61,12 +61,38 @@ export async function collectData(db: SupabaseClient, userId: string, extra: Rec
     .select("display_name, username, role, monthly_cap_usd, share_titles, keep_chats, last_model, created_at")
     .eq("id", userId)
     .maybeSingle();
-  return { exportedAt: new Date().toISOString(), profile: { ...extra, ...(profile ?? {}) }, chats, messages, memories, usage };
+  progress("Gathering your projects and assistants");
+  const [{ data: projects }, { data: projectFiles }, { data: assistants }, { data: assistantFiles }] = await Promise.all([
+    db.from("projects").select("id, name, instructions, created_at, updated_at").eq("owner_id", userId).order("created_at"),
+    db.from("project_files").select("project_id, path, name, mime, size").eq("owner_id", userId).order("created_at"),
+    db.from("assistants").select("id, name, description, instructions, model, shared, created_at, updated_at").eq("owner_id", userId).order("created_at"),
+    db.from("assistant_files").select("assistant_id, path, name, mime, size").eq("owner_id", userId).order("created_at"),
+  ]);
+  const filesOf = (rows: Record<string, unknown>[] | null, key: string, id: unknown) =>
+    (rows ?? []).filter((f) => f[key] === id).map(({ path, name, mime, size }) => ({ path, name, mime, size }) as FileRef);
+  return {
+    exportedAt: new Date().toISOString(),
+    profile: { ...extra, ...(profile ?? {}) },
+    chats,
+    messages,
+    memories,
+    usage,
+    projects: (projects ?? []).map((p) => ({ ...p, files: filesOf(projectFiles, "project_id", p.id) })),
+    assistants: (assistants ?? []).map((a) => ({ ...a, files: filesOf(assistantFiles, "assistant_id", a.id) })),
+  };
 }
 
 /** The files the person's own messages point at, each downloaded once. Missing ones come back empty. */
-export async function collectFiles(db: SupabaseClient, userId: string, messages: ExportMessage[], progress: Progress = () => {}): Promise<FetchedFile[]> {
+export async function collectFiles(
+  db: SupabaseClient,
+  userId: string,
+  messages: ExportMessage[],
+  progress: Progress = () => {},
+  kept: FileRef[] = [],
+): Promise<FetchedFile[]> {
   const refs = new Map<string, FileRef>();
+  // Files kept with your projects and assistants too.
+  for (const f of kept) if (f.path.startsWith(`${userId}/`) && !refs.has(f.path)) refs.set(f.path, f);
   for (const m of messages) {
     if (m.role !== "user") continue;
     for (const f of m.content.files ?? []) if (f.path.startsWith(`${userId}/`) && !refs.has(f.path)) refs.set(f.path, f);

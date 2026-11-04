@@ -14,6 +14,8 @@ export type ExportChat = {
   model: string | null;
   pinned: boolean;
   archived_at: string | null;
+  project_id?: string | null;
+  assistant_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -39,7 +41,14 @@ export type ExportData = {
   messages: ExportMessage[];
   memories: ExportMemory[];
   usage: ExportUsage[];
+  /** Your projects (folders) with their instructions and file lists; chats name theirs by project_id. */
+  projects?: ExportKept[];
+  /** The assistants you made, with their instructions and file lists. */
+  assistants?: ExportKept[];
 };
+
+/** A project or saved assistant, as exported. */
+export type ExportKept = Record<string, unknown> & { files: FileRef[] };
 
 /** A downloaded upload, or null when it has already been deleted (files go after 3 idle days). */
 export type FetchedFile = { ref: FileRef; data: Uint8Array | null };
@@ -179,6 +188,9 @@ export function exportEntries(data: ExportData, files: FetchedFile[]): Record<st
   entries["memories.json"] = json(data.memories);
   entries["memories.md"] = strToU8(memoriesMarkdown(data.memories));
   entries["usage.csv"] = strToU8(usageCsv(data.usage));
+  const withLinks = (list: ExportKept[]) => list.map((x) => ({ ...x, files: x.files.map((f) => ({ ...f, saved_as: links.get(f.path)?.replace("../", "") ?? null })) }));
+  if (data.projects?.length) entries["projects.json"] = json(withLinks(data.projects));
+  if (data.assistants?.length) entries["assistants.json"] = json(withLinks(data.assistants));
   return entries;
 }
 

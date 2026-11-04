@@ -72,4 +72,17 @@ describe("export", () => {
     expect(chats[1].messages).toEqual([]);
     expect(JSON.parse(strFromU8(out["depeche-export-2026-11-03/profile.json"]))).toEqual(data.profile);
   });
+
+  it("includes your projects and assistants, with where their files were saved", () => {
+    const ref = { path: `${me}/p/syllabus.pdf`, name: "syllabus.pdf", mime: "application/pdf", size: 3 };
+    const entries = exportEntries(
+      { ...data, projects: [{ id: "p1", name: "Chemistry", instructions: "Be a tutor", files: [ref] }], assistants: [{ id: "a1", name: "Helper", files: [] }] },
+      [{ ref, data: new Uint8Array([1, 2, 3]) }],
+    );
+    const projects = JSON.parse(strFromU8(entries["projects.json"]));
+    expect(projects[0]).toMatchObject({ name: "Chemistry", instructions: "Be a tutor", files: [{ name: "syllabus.pdf", saved_as: "files/syllabus.pdf" }] });
+    expect(JSON.parse(strFromU8(entries["assistants.json"]))[0].name).toBe("Helper");
+    expect(entries["files/syllabus.pdf"]).toBeDefined();
+    expect(exportEntries(data, [])["projects.json"]).toBeUndefined();
+  });
 });
