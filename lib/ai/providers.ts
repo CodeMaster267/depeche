@@ -23,6 +23,8 @@ export type TurnFile = { name: string; mime: string; data: string };
 
 export type StreamEvent =
   | { type: "text"; text: string }
+  /** The model's reasoning (a summary, for providers that only share one), shown collapsed. */
+  | { type: "thinking"; text: string }
   | { type: "usage"; input: number; output: number }
   | { type: "notice"; text: string }
   /** Another model answered (the chosen one was busy). */
@@ -51,8 +53,10 @@ export type ReplyRequest = {
    * chat"), offered when some of them are summarised or left out. Not on Groq (test-only).
    */
   chatSearch?: ChatSearch;
-  /** "Think harder": ask for the model's highest usual reasoning effort, where it takes one. */
+  /** Ask for the model's reasoning. Turned off for a model that turns out not to offer it. */
   think?: boolean;
+  /** "Think harder": ask for the model's highest usual reasoning effort, where it takes one. */
+  harder?: boolean;
 };
 
 /** A provider error, worded for the person chatting. */
@@ -115,6 +119,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
   let lastError: unknown;
   let search = !!req.search && canSearch(req.model);
   let chatSearch = req.chatSearch;
+  let think = req.think !== false;
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
     if (attempt.wait) await pause(attempt.wait, req.signal);
@@ -129,7 +134,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       // Telling a model it can search without giving it the tool makes some reply with nothing.
       const lookup = canLookUp(attempt.model.provider) ? chatSearch : undefined;
       const system = [req.system, search ? SEARCH_HINT : "", lookup ? CHAT_SEARCH_HINT : ""].filter(Boolean).join(" ");
-      const r = { ...req, model: attempt.model, search, chatSearch: lookup, system };
+      const r = { ...req, model: attempt.model, search, chatSearch: lookup, think, system };
       const inner = fakeAi()
         ? fakeReply(r, attempt.model.id === req.model.id)
         : r.model.provider === "anthropic"
@@ -144,7 +149,8 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
                   ? xaiReply(r)
                   : googleReply(r);
       for await (const ev of inner) {
-        if (ev.type === "text") wrote = true;
+        // Retrying after reasoning was shown would show it twice, so that counts as written too.
+        if (ev.type === "text" || ev.type === "thinking") wrote = true;
         yield ev;
       }
       return;
@@ -153,6 +159,13 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       lastError = e;
       // Retrying after part of a reply was shown would repeat it.
       if (wrote) break;
+      // A model that doesn't share its reasoning answers without being asked to.
+      if (think && thinkingUnsupported(e)) {
+        think = false;
+        console.error("[chat] reasoning not offered, answering without it", status(e), detail(e));
+        i--;
+        continue;
+      }
       // If a provider won't take the chat-search tool (some can't mix it with their own web
       // search), answer without it rather than failing or dropping web search.
       if (chatSearch && canLookUp(attempt.model.provider) && status(e) === 400) {
@@ -182,6 +195,11 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
     }
   }
   throw new ProviderError(describe(req.model.provider, lastError));
+}
+
+/** A request refused because of the reasoning options (an older or smaller model). */
+export function thinkingUnsupported(e: unknown): boolean {
+  return status(e) === 400 && /thinking|reasoning|thought/i.test(detail(e));
 }
 
 const CHAT_SEARCH_HINT =
@@ -229,7 +247,7 @@ const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-
 /** Long searches can pause a Claude turn; it is continued this many times at most. */
 const MAX_CONTINUES = 3;
 
-async function* anthropicReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch, think }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* anthropicReply({ model, apiKey, system, turns, signal, search, think, harder, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new Anthropic({ apiKey, maxRetries: 1 });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
@@ -274,7 +292,9 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
         max_tokens: left,
         system,
         messages: messages as never,
-        output_config: { effort: think ? "high" : "medium" },
+        output_config: { effort: harder ? "high" : "medium" },
+        // Claude decides when to think; a summary of it is shown collapsed above the reply.
+        ...(think ? { thinking: { type: "adaptive" as const, display: "summarized" as const } } : {}),
         ...(tools.length ? { tools: tools as never } : {}),
         // Once the lookups are used up the tool stays defined (earlier rounds used it) but can't be called.
         ...(chatSearch && lookups >= MAX_CHAT_SEARCHES ? { tool_choice: { type: "none" as const } } : {}),
@@ -304,6 +324,8 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
           if (!roundText && wrote) yield { type: "text", text: "\n\n" };
           roundText = wrote = true;
           yield { type: "text", text: ev.delta.text };
+        } else if (ev.delta.type === "thinking_delta" && ev.delta.thinking) {
+          yield { type: "thinking", text: ev.delta.thinking };
         } else if (ev.delta.type === "input_json_delta" && queryJson.has(ev.index)) {
           queryJson.set(ev.index, queryJson.get(ev.index) + ev.delta.partial_json);
         } else if (ev.delta.type === "citations_delta" && ev.delta.citation.type === "web_search_result_location") {
@@ -374,7 +396,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
   yield { type: "usage", input, output };
 }
 
-async function* openaiReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch, think }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* openaiReply({ model, apiKey, system, turns, signal, search, think, harder, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new OpenAI({ apiKey, maxRetries: 1 });
   const input: unknown[] = turns.map((t) =>
     t.role === "user" && t.files?.length
@@ -420,7 +442,11 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
         stream: true,
         ...(tools.length ? { tools: tools as never } : {}),
         ...(search ? { max_tool_calls: MAX_SEARCHES } : {}),
-        ...(think ? { reasoning: { effort: "high" as const } } : {}),
+        // OpenAI shares a summary of its reasoning, not the reasoning itself.
+        // "Think harder" raises its reasoning effort.
+        ...(think || harder
+          ? { reasoning: { ...(think ? { summary: "auto" as const } : {}), ...(harder ? { effort: "high" as const } : {}) } }
+          : {}),
         // Nothing is stored at OpenAI, so the model's reasoning comes back encrypted to be handed
         // back after a lookup.
         ...(chatSearch
@@ -438,7 +464,9 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
         if (!roundText && wrote) yield { type: "text", text: "\n\n" };
         roundText = wrote = true;
         yield { type: "text", text: ev.delta };
-      } else if (ev.type === "response.output_item.added" && ev.item.type === "web_search_call") yield { type: "searching" };
+      } else if (ev.type === "response.reasoning_summary_text.delta") yield { type: "thinking", text: ev.delta };
+      else if (ev.type === "response.reasoning_summary_part.added" && ev.summary_index > 0) yield { type: "thinking", text: "\n\n" };
+      else if (ev.type === "response.output_item.added" && ev.item.type === "web_search_call") yield { type: "searching" };
       else if (ev.type === "response.output_item.done" && ev.item.type === "web_search_call") {
         const action = ev.item.action as { type?: string; query?: string; queries?: string[] } | undefined;
         if (action?.type === "search") {
@@ -484,7 +512,7 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
   yield { type: "usage", input: inputTokens, output: outputTokens };
 }
 
-async function* googleReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch, think }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* googleReply({ model, apiKey, system, turns, signal, search, think, harder, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const ai = new GoogleGenAI({ apiKey });
   type Content = { role: "user" | "model"; parts: Part[] };
   const contents: Content[] = turns.map((t) => ({
@@ -522,7 +550,11 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, maxO
         systemInstruction: system,
         maxOutputTokens: left,
         abortSignal: signal,
-        ...(think ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+        // Gemini shares summaries of its thoughts when asked.
+        // "Think harder" raises its thinking level.
+        ...(think || harder
+          ? { thinkingConfig: { ...(think ? { includeThoughts: true } : {}), ...(harder ? { thinkingLevel: ThinkingLevel.HIGH } : {}) } }
+          : {}),
         ...(tools.length ? { tools } : {}),
         ...(chatSearch && lookups >= MAX_CHAT_SEARCHES
           ? { toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.NONE } } }
@@ -537,6 +569,11 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, maxO
     for await (const chunk of stream) {
       const candidate = chunk.candidates?.[0];
       parts.push(...(candidate?.content?.parts ?? []));
+      const thought = candidate?.content?.parts
+        ?.filter((p) => p.text && p.thought)
+        .map((p) => p.text)
+        .join("");
+      if (thought) yield { type: "thinking", text: thought };
       const text = candidate?.content?.parts
         ?.filter((p) => p.text && !p.thought)
         .map((p) => p.text)
@@ -794,7 +831,7 @@ This is well documented[^1].
 [^1]: [Quadratic formula](https://en.wikipedia.org/wiki/Quadratic_formula), Wikipedia.
 `.replaceAll("\\`", "`");
 
-async function* fakeReply({ turns, signal, search, model, system, chatSearch, think }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
+async function* fakeReply({ turns, signal, search, model, system, chatSearch, harder }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const last = turns.at(-1);
   const q = last?.text.slice(0, 80) ?? "";
   // "what did I say about X" looks X up in this chat, to test the search-this-chat tool.
@@ -855,6 +892,15 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch, th
     yield { type: "usage", input: 3000, output: 200 };
     return;
   }
+  // "think" makes it reason first ("think hard" slowly), as models that share their reasoning do.
+  if (q.includes("think")) {
+    const thought = "**Weighing the approach**\n\nThe person wants the quadratic formula, so I'll start from the discriminant.\n\n**Checking the roots**\n\nFor $2x^2 - 7x + 3 = 0$ the discriminant is 25, so the roots are 3 and 0.5.";
+    for (let i = 0; i < thought.length; i += 20) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      await new Promise((r) => setTimeout(r, q.includes("think hard") ? 150 : 10));
+      yield { type: "thinking", text: thought.slice(i, i + 20) };
+    }
+  }
   // Say which files arrived, so tests can check that attachments reach the model.
   const seen = [...(last?.files ?? []).map((f) => f.name), ...[...(last?.text ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1])];
   // "favourite colour" makes it suggest a memory, to test memory suggestions.
@@ -866,7 +912,7 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch, th
   // "make files" makes it write files to download, to test generated documents.
   const made = q.includes("make files") ? FAKE_FILES : "";
   // Says when it was asked to think harder, to test the switch reaches the model.
-  const reply = (think ? "I thought harder about this.\n\n" : "") + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
+  const reply = (harder ? "I thought harder about this.\n\n" : "") + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
