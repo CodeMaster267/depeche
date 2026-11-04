@@ -121,3 +121,8 @@ export const ChevronRightIcon = (p: P) => (
     <path d="M9.5 6l6 6-6 6" />
   </svg>
 );
+export const CodeIcon = (p: P) => (
+  <svg {...base} width={18} height={18} {...p}>
+    <path d="M8.5 7.5L4 12l4.5 4.5M15.5 7.5L20 12l-4.5 4.5M13.5 5l-3 14" />
+  </svg>
+);
