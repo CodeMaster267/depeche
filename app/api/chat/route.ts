@@ -16,6 +16,8 @@ import { allow } from "@/lib/rate-limit";
 import { notifyIfAway } from "@/lib/push/notify";
 import { MAX_QUERIES, MAX_REASONING_CHARS, thinkingClock } from "@/lib/chat/activity";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
+import { CANVAS_PROMPT_CHARS, fenceFor, withoutCanvasBlocks } from "@/lib/canvas";
+import { saveReplyCanvases } from "@/lib/chat/canvas";
 import { pictureReply } from "./picture";
 import { MAX_COMPARE } from "@/lib/chat/compare";
 import { DESIGN_INSTRUCTIONS } from "@/lib/design/instructions";
@@ -41,6 +43,8 @@ type Body = {
   search?: boolean;
   /** Sent from voice chat: the reply will be read aloud. */
   voice?: boolean;
+  /** The canvas open beside the chat, if any; otherwise the chat's most recent canvas is used. */
+  canvasId?: string | null;
   /** The part of an earlier answer this message asks about. */
   quote?: unknown;
   /** One of two or three models answering the same question side by side: the group and its place. */
@@ -86,6 +90,7 @@ export async function POST(req: NextRequest) {
   if (!body.regenerate && !UUID.test(body.clientRequestId ?? "")) return fail(400, "Something went wrong. Try again.");
   if (body.chatId && !UUID.test(body.chatId)) return fail(404, "That chat doesn't exist.");
   if (body.regenerate && !UUID.test(body.regenerate)) return fail(404, "That message doesn't exist.");
+  if (body.canvasId && !UUID.test(body.canvasId)) return fail(404, "That canvas doesn't exist.");
   const parentGiven = "parent" in body && !body.regenerate;
   if (parentGiven && body.parent !== null && !UUID.test(String(body.parent))) return fail(404, "That message doesn't exist.");
   const compare = compareTag(body.compare);
@@ -111,6 +116,7 @@ export async function POST(req: NextRequest) {
   // The chat: an existing one of yours, or (once the spending hold is in place) a new one.
   let chatId = body.chatId ?? null;
   let all: MessageRow[] = [];
+  let canvas: OpenCanvas | null = null;
   if (chatId) {
     const { data: chat } = await db.from("chats").select("id").eq("id", chatId).eq("owner_id", me.userId).maybeSingle();
     if (!chat) return fail(404, "That chat doesn't exist.");
@@ -121,6 +127,7 @@ export async function POST(req: NextRequest) {
       .order("created_at")
       .returns<MessageRow[]>();
     all = existing ?? [];
+    canvas = await currentCanvas(db, me.userId, chatId, body.canvasId ?? null);
   } else if (body.regenerate || (parentGiven && body.parent)) {
     return fail(404, "That chat doesn't exist.");
   }
@@ -159,6 +166,7 @@ export async function POST(req: NextRequest) {
     Boolean(body.voice),
     (remembered ?? []).map((m) => m.content),
     instructions,
+    canvas,
   );
   let historyChars = 0;
   const seen = [system, text, quote ?? ""];
@@ -278,7 +286,13 @@ export async function POST(req: NextRequest) {
   let fileBudget = FILE_BYTES_BUDGET;
   const storage = supabaseAdmin().storage.from(UPLOAD_BUCKET);
   for (const m of [...path].reverse()) {
-    let t = m.role === "user" ? withQuote(m.content.text ?? "", cleanQuote(m.content.quote)) : (m.content.text ?? "");
+    // Old canvas texts aren't sent again: the canvas as it is now is in the instructions.
+    let t =
+      m.role === "user"
+        ? withQuote(m.content.text ?? "", cleanQuote(m.content.quote))
+        : m.role === "assistant"
+          ? withoutCanvasBlocks(m.content.text ?? "")
+          : (m.content.text ?? "");
     const attached: TurnFile[] = [];
     if (m.role === "user") {
       for (const f of m.content.files ?? []) {
@@ -489,6 +503,10 @@ export async function POST(req: NextRequest) {
         admin.from("profiles").update({ last_model: model.id }).eq("id", me.userId),
       ]);
 
+      // Canvases the reply wrote become the AI's new versions, kept even if the reply was stopped
+      // after the block was finished.
+      if (saved && reply) await saveReplyCanvases(admin, me.userId, finalChatId, saved.id, reply).catch(() => {});
+
       // A suggested memory waits for the person to keep or dismiss it; nothing is used until then.
       const fact = status === "completed" ? memory.suggestions[0] : undefined;
       if (saved && fact) {
@@ -563,7 +581,46 @@ const CODE_INSTRUCTIONS = [
   "Results appear under the block when it runs, and the person can send them back to you: don't state numbers the code will work out; say briefly what it does. Use plain ```python (without run) for code that is only to read or copy.",
 ].join(" ");
 
-function systemPrompt(name: string, voice: boolean, memories: string[], instructions: PersonalInstructions | null): string {
+
+type OpenCanvas = { title: string; content: string; byPerson: boolean };
+
+/** The canvas the model should work on: the one open beside the chat, or the chat's newest. */
+async function currentCanvas(db: Awaited<ReturnType<typeof supabaseServer>>, ownerId: string, chatId: string, wanted: string | null): Promise<OpenCanvas | null> {
+  let q = db.from("canvases").select("id, title").eq("chat_id", chatId).eq("owner_id", ownerId);
+  q = wanted ? q.eq("id", wanted) : q.order("updated_at", { ascending: false }).limit(1);
+  const { data: c } = await q.maybeSingle<{ id: string; title: string }>();
+  if (!c) return null;
+  const { data: v } = await db
+    .from("canvas_versions")
+    .select("content, author")
+    .eq("canvas_id", c.id)
+    .eq("owner_id", ownerId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ content: string; author: string }>();
+  return v ? { title: c.title, content: v.content.slice(0, CANVAS_PROMPT_CHARS), byPerson: v.author === "person" } : null;
+}
+
+/** How a model writes and changes a canvas (shown beside the chat by components/chat/Canvas.tsx). */
+const CANVAS_INSTRUCTIONS = (name: string) =>
+  [
+    `You also have a canvas: a pane beside the chat holding a document or code that you and ${name} both edit.`,
+    "Use it when asked to write or work on something meant to be refined: an essay, letter, speech, story, report, plan, CV, or a program or script longer than a few lines; or whenever the canvas is mentioned. Short answers stay in the chat.",
+    "To write a canvas, put the whole text in one fenced code block labelled canvas: and a short title without spaces: ```canvas:Wedding-speech for a document (written in Markdown), or a file name such as ```canvas:budget.py for code (the ending gives the language).",
+    "To change a canvas, write the whole updated text again in a block with exactly the same title; it replaces the old text, so never leave parts out or write placeholders like \"rest unchanged\". If the canvas contains ``` fences, open and close the block with ```` instead.",
+    "Outside the block, say in a sentence or two what you wrote or changed; don't repeat the canvas in the chat.",
+  ].join(" ");
+
+function canvasPrompt(name: string, c: OpenCanvas): string {
+  const fence = fenceFor(c.content);
+  return [
+    `This chat has the canvas "${c.title}".${c.byPerson ? ` ${name} has edited it since your last version.` : ""} Its current text is below; work from this text, not from earlier versions in the chat. Unless ${name} asks for a new canvas, changes go in a block titled exactly canvas:${c.title}.`,
+    // The closing fence ends its line, so hints added after the instructions stay outside it.
+    `${fence}canvas:${c.title}\n${c.content}\n${fence}\n`,
+  ].join("\n");
+}
+
+function systemPrompt(name: string, voice: boolean, memories: string[], instructions: PersonalInstructions | null, canvas: OpenCanvas | null = null): string {
   return [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
@@ -574,11 +631,12 @@ function systemPrompt(name: string, voice: boolean, memories: string[], instruct
     voice ? "" : CHART_INSTRUCTIONS,
     voice ? "" : CODE_INSTRUCTIONS,
     voice ? "" : DESIGN_INSTRUCTIONS,
+    voice ? "" : CANVAS_INSTRUCTIONS(name),
     voice ? "" : followUpInstructions(name),
     voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."
       : "",
   ]
     .filter(Boolean)
-    .join(" ");
+    .join(" ") + (canvas && !voice ? `\n\n${canvasPrompt(name, canvas)}` : "");
 }
