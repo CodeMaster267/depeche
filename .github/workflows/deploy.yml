@@ -1,0 +1,61 @@
+name: Deploy to Vercel (hourly batch)
+
+# Vercel Hobby allows 100 deployments a day, and threads merge to main 50+ times a day. So Vercel
+# no longer builds every push to main (vercel.json: git.deploymentEnabled.main = false). Instead,
+# once an hour this asks Vercel to build main if anything was merged since the last hour, so many
+# merges go live together in one deployment: at most 24 a day. Run it by hand (Actions → this
+# workflow → Run workflow) to deploy straight away.
+#
+# Secret: VERCEL_DEPLOY_HOOK, the Deploy Hook URL for branch main (Vercel → depeche → Settings →
+# Git → Deploy Hooks). Anyone with that URL can start a deploy, so it lives only in secrets.
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+    steps:
+      - name: Check the deploy hook is set
+        id: ready
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::warning::VERCEL_DEPLOY_HOOK is not set, so nothing was deployed."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.ready.outputs.go == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 50
+          persist-credentials: false
+      - name: Anything new on main?
+        if: steps.ready.outputs.go == 'true'
+        id: new
+        run: |
+          # 75 minutes, not 60: GitHub sometimes starts scheduled runs late, and a merge must never
+          # fall between two runs. An occasional extra deploy is harmless.
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ -n "$(git log --since='75 minutes ago' --format=%H -1)" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            echo "Deploying main at $(git rev-parse --short HEAD): $(git log -1 --format=%s)"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing merged in the last hour; no deploy."
+          fi
+      - name: Ask Vercel to build and publish main
+        if: steps.new.outputs.deploy == 'true'
+        run: curl -fsS -X POST "$HOOK" -o /dev/null && echo "Vercel is building main; it's live on depai.vercel.app in a few minutes."
