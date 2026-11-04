@@ -9,11 +9,12 @@ import { cleanProjectName } from "@/lib/chat/projects";
 import { useProjects } from "./projects-context";
 import type { ChatRow } from "@/lib/chat/thread";
 import { CheckIcon, FolderIcon, FolderPlusIcon, MoreIcon } from "./icons";
+import { ShareBody } from "./ShareSheet";
 
 const ITEM = "flex w-full items-center px-4 py-3 text-left text-[16px] hover:bg-soft focus-visible:bg-soft outline-none";
 
 /**
- * The three dots on a chat (in the chat list and in an open chat's header): rename, pin, archive
+ * The three dots on a chat (in the chat list and in an open chat's header): rename, share, pin, archive
  * or restore, download, and delete. The menu floats above everything (it is drawn at the end of the page),
  * so the chat list's scrolling never cuts it off, and it opens upwards near the bottom of the screen.
  * Rename and delete open a small sheet of their own rather than the browser's prompt boxes.
@@ -36,7 +37,7 @@ export function ChatMenu({
   label?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [sheet, setSheet] = useState<"rename" | "delete" | "move" | null>(null);
+  const [sheet, setSheet] = useState<"rename" | "share" | "delete" | "move" | null>(null);
   const projects = useProjects();
   const [at, setAt] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -111,6 +112,9 @@ export function ChatMenu({
               >
                 <button type="button" role="menuitem" className={ITEM} onClick={pick(() => setSheet("rename"))}>
                   Rename
+                </button>
+                <button type="button" role="menuitem" className={ITEM} onClick={pick(() => setSheet("share"))}>
+                  Share
                 </button>
                 {!archived ? (
                   <button
@@ -188,6 +192,11 @@ export function ChatMenu({
             moveChat(chat.id, projectId).catch(() => {});
           }}
         />
+      ) : null}
+      {sheet === "share" ? (
+        <Sheet label="Share chat" onClose={() => setSheet(null)}>
+          <ShareBody chatId={chat.id} onClose={() => setSheet(null)} />
+        </Sheet>
       ) : null}
       {sheet === "delete" ? (
         <Sheet label="Delete chat" onClose={() => setSheet(null)}>

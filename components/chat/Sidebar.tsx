@@ -50,6 +50,7 @@ export function Sidebar({
   isAdmin,
   spent,
   cap,
+  noLimit = false,
   onNavigate,
   onNewChat,
   onClose,
@@ -67,6 +68,8 @@ export function Sidebar({
   isAdmin: boolean;
   spent: number;
   cap: number;
+  /** Their family admin took the monthly limit away. */
+  noLimit?: boolean;
   onNavigate: () => void;
   /** Start a new chat (the link alone can't restart the home screen a chat began on). */
   onNewChat: () => void;
@@ -307,6 +310,7 @@ export function Sidebar({
         isAdmin={isAdmin}
         spent={spent}
         cap={cap}
+        noLimit={noLimit}
         reportFrom={activeId ? `/c/${activeId}` : "/"}
         onNavigate={onNavigate}
       />

@@ -8,7 +8,7 @@ import { PersonalLook } from "@/components/design/PersonalLook";
 export const dynamic = "force-dynamic";
 
 /** Home is a new chat. */
-export default async function Home({ searchParams }: { searchParams: Promise<{ new?: string; assistant?: string }> }) {
+export default async function Home({ searchParams }: { searchParams: Promise<{ new?: string; assistant?: string; temporary?: string }> }) {
   if (!isConfigured()) {
     // Before Supabase is connected, show the title card so a fresh deployment visibly works.
     return (
@@ -26,8 +26,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ n
 
   const me = await requireMe();
   const shell = await loadShell(me);
-  // "New chat" from a chat begun on this screen adds ?new=… so the screen starts over.
-  const { new: fresh, assistant: assistantId } = await searchParams;
+  // "New chat" from a chat begun on this screen adds ?new=… so the screen starts over, and
+  // /?temporary opens a temporary chat straight away.
+  const { new: fresh, assistant: assistantId, temporary } = await searchParams;
   // ?assistant=… starts the chat with one of your saved assistants (or one your family shared).
   const assistant = shell.assistants.find((a) => a.id === assistantId) ?? null;
   return (
@@ -38,6 +39,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ n
         chat={null}
         messages={[]}
         assistant={assistant}
+        temporary={temporary !== undefined}
       />
     </PersonalLook>
   );
