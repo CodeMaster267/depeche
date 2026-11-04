@@ -22,12 +22,16 @@ export type Shell = {
   defaultModel: string | null;
   spent: number;
   cap: number;
+  /** Your chats the daily clean-up deletes in the next three days, soonest first. */
+  expiring: Expiring[];
 };
+
+export type Expiring = { id: string; title: string; archived: boolean; deletes_at: string };
 
 /** Everything the chat screen needs around the conversation: your chats, models and spending. */
 export async function loadShell(me: Me): Promise<Shell> {
   const db = await supabaseServer();
-  const [{ data: chats }, { data: providers }, { data: spent }, { data: projects }, { data: assistants }] = await Promise.all([
+  const [{ data: chats }, { data: providers }, { data: spent }, { data: expiring }, { data: projects }, { data: assistants }] = await Promise.all([
     // Admins can read their members' chat titles, so ask only for your own.
     db
       .from("chats")
@@ -39,6 +43,7 @@ export async function loadShell(me: Me): Promise<Shell> {
       .returns<ChatRow[]>(),
     db.rpc("family_models"),
     supabaseAdmin().rpc("month_spend", { p_person: me.userId }),
+    db.rpc("my_expiring_chats", { p_days: 3 }),
     db
       .from("projects")
       .select("id, name, updated_at")
@@ -73,6 +78,7 @@ export async function loadShell(me: Me): Promise<Shell> {
     defaultModel: chooseDefault(models, last?.last_model)?.id ?? null,
     spent: Number(spent ?? 0),
     cap: Number(me.profile.monthly_cap_usd),
+    expiring: (expiring as Expiring[] | null) ?? [],
   };
 }
 

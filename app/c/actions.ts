@@ -56,6 +56,14 @@ export async function listArchived(): Promise<ChatRow[]> {
   return data ?? [];
 }
 
+/** Keep chats the clean-up was about to delete: their month starts again, their place in the list stays. */
+export async function keepChats(chatIds: string[]) {
+  const me = await requireMe();
+  const ids = chatIds.filter((id) => /^[0-9a-f-]{36}$/i.test(id)).slice(0, 50);
+  if (!ids.length) return;
+  await (await supabaseServer()).from("chats").update({ kept_at: new Date().toISOString() }).in("id", ids).eq("owner_id", me.userId);
+}
+
 export async function deleteChat(chatId: string) {
   const me = await requireMe();
   const db = await supabaseServer();
