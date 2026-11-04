@@ -8,6 +8,7 @@ import { describeLog, when, type LogRow } from "@/lib/family/log";
 import { signOut } from "@/app/sign-in/actions";
 import { signOutEverywhere } from "./actions";
 import { ExportButton } from "@/components/ExportButton";
+import { ImportChats } from "@/components/ImportChats";
 import { DeleteEverythingForm, KeepChatsToggle, PasswordForm, ProfileForm, ShareTitlesToggle } from "./forms";
 
 export const metadata: Metadata = { title: "Account · Depeche" };
@@ -89,6 +90,9 @@ export default async function Account() {
             Chats come as Markdown you can read anywhere, plus JSON with every detail. Only your own data is in it.
           </p>
           <ExportButton userId={me.userId} email={me.email} />
+        </Section>
+        <Section title="Bring in old chats">
+          <ImportChats />
         </Section>
         <Section title="Delete">
           <p className="text-[15px] text-mute">
