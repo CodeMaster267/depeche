@@ -27,6 +27,7 @@ export type Decision = {
 /** Never changed by a bug fix, whoever reported the bug. */
 export const ALWAYS_BLOCKED = [
   ".github/",
+  "ops/",
   ".git/",
   ".bugfix/",
   "scripts/",

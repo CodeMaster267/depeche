@@ -4,16 +4,16 @@
 
 | When | What | Where |
 | --- | --- | --- |
-| Every night, 03:17 UTC | Dump the live database and any Storage files, encrypt, **restore into a separate empty database and check every table and file**, keep the encrypted file | `.github/workflows/backup.yml` |
-| Every day, 15:41 UTC | Wake the app and database so Supabase's free plan never pauses; check a good backup happened in the last 36 hours, and start one if not | `.github/workflows/keep-alive.yml` |
+| Every night, 03:17 UTC | Dump the live database and any Storage files, encrypt, **restore into a separate empty database and check every table and file**, keep the encrypted file | `backup.yml` in the private repo CodeMaster267/depeche-private (copy at `ops/private-repo/`) |
+| Every day, 15:41 UTC | Wake the app and database so Supabase's free plan never pauses; check a good backup happened in the last 36 hours, and open an issue if not | `.github/workflows/keep-alive.yml` |
 | Every day (Vercel picks the minute in the 09:00 UTC hour) | Wake the database again, independently of GitHub | `vercel.json` → `/api/keep-alive` |
 
 All of it is free: GitHub Actions minutes on a private repository (about 3 minutes a night) and
 Vercel Hobby's daily cron.
 
 **Where backups live.** Each night's encrypted file is a private artifact of that night's run
-(GitHub → Actions → Nightly backup → a run → Artifacts). Each copy is kept 30 days, then GitHub deletes it.
-Nothing older is kept, so a chat or memory someone deletes is gone from every backup within 30 days. Nothing is committed to git. Only people with access to this private repository can
+in the **private** repo CodeMaster267/depeche-private (GitHub → depeche-private → Actions → Nightly backup → a run → Artifacts). The app repo is public, so backups never run there. Each copy is kept 30 days, then GitHub deletes it.
+Nothing older is kept, so a chat or memory someone deletes is gone from every backup within 30 days. Nothing is committed to git. Only people with access to the private repository can
 download them, and without the passphrase they are unreadable (AES-256, via `gpg --symmetric`).
 
 **What a backup holds.** Supabase's own dump format (`roles.sql`, `schema.sql`, `data.sql`), so
@@ -42,7 +42,7 @@ Changing `BACKUP_PASSPHRASE` only affects new backups. Keep the old one until it
 
 Ask Claude to do it, or:
 
-1. Download the artifact you want from the Actions tab and unzip it, giving
+1. Download the artifact you want from the Actions tab of the private repo CodeMaster267/depeche-private and unzip it, giving
    `depeche-backup-<date>.tar.gz.gpg`.
 2. Create a **new, empty** Supabase project (never restore over the live one) and copy its
    "Session pooler" connection string.

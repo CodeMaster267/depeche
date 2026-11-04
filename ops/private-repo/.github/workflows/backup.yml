@@ -1,5 +1,9 @@
 name: Nightly backup
 
+# Lives in the PRIVATE repo CodeMaster267/depeche-private (copy kept in the app repo at
+# ops/private-repo/), because the app repo is public and anyone signed in to GitHub can download a
+# public repo's artifacts. It checks out the app repo's main branch for the scripts.
+#
 # Every night: dump the live database (and any Storage files), encrypt it with BACKUP_PASSPHRASE,
 # restore it into a separate empty database and check every table and file, then keep the
 # encrypted file as a private artifact of this run for 30 days, then GitHub deletes it. Nothing
@@ -7,10 +11,10 @@ name: Nightly backup
 # Nothing readable is stored anywhere, and nothing is committed to git.
 #
 # If anything fails, an issue is opened (GitHub emails it to Hasan); the next good run closes it.
-# keep-alive.yml checks every day that this actually ran, and starts it if it didn't.
+# The app repo's keep-alive.yml checks every day (in backup_runs) that this actually ran.
 #
 # Secrets (Settings → Secrets and variables → Actions):
-#   SUPABASE_DB_URL            already set, shared with database.yml
+#   SUPABASE_DB_URL            the live database (same value as in the app repo)
 #   BACKUP_PASSPHRASE          a long password, also saved in Hasan's password manager. Without it
 #                              the backups cannot be opened, so it must be kept somewhere safe.
 #   SUPABASE_SERVICE_ROLE_KEY  only needed once the app stores files (images, documents)
@@ -51,6 +55,10 @@ jobs:
           echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
           echo "stamp=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
+        with:
+          repository: CodeMaster267/depeche  # the app's public repo: scripts only, no secrets in it
+          ref: main
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -98,6 +106,10 @@ jobs:
       DB_URL: ${{ secrets.SUPABASE_DB_URL }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: CodeMaster267/depeche  # the app's public repo: scripts only, no secrets in it
+          ref: main
+          persist-credentials: false
       - name: Show the failure on the Health screen
         run: |
           scripts/backup/record-check.sh backup false "$(date -u +%Y-%m-%d): backup failed, see $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -116,6 +128,10 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: CodeMaster267/depeche  # the app's public repo: scripts only, no secrets in it
+          ref: main
+          persist-credentials: false
       - name: Close any open backup alert
         run: |
           scripts/backup/alert.sh close backup-failed "Fixed: tonight's backup worked and its restore test passed ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
