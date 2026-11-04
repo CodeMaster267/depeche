@@ -9,7 +9,14 @@ import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOffer
 import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
 import { MAX_FILES_PER_MESSAGE, OFFICE_TYPES, UPLOAD_BUCKET, isFileRef, readAsText, type FileRef } from "@/lib/chat/files";
 import { documentText } from "@/lib/docs/read";
-import { projectContext, projectInstructions, type ProjectContext } from "@/lib/chat/project-context";
+import {
+  assistantContext,
+  assistantInstructions,
+  projectContext,
+  projectInstructions,
+  type AssistantContext,
+  type ProjectContext,
+} from "@/lib/chat/project-context";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
@@ -32,6 +39,8 @@ type Body = {
   voice?: boolean;
   /** Start the new chat inside this project of yours. */
   projectId?: string | null;
+  /** Start the new chat with this saved assistant (yours, or one shared with your family). */
+  assistantId?: string | null;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -73,6 +82,7 @@ export async function POST(req: NextRequest) {
   if (body.chatId && !UUID.test(body.chatId)) return fail(404, "That chat doesn't exist.");
   if (body.regenerate && !UUID.test(body.regenerate)) return fail(404, "That message doesn't exist.");
   if (body.projectId && !UUID.test(body.projectId)) return fail(404, "That project doesn't exist.");
+  if (body.assistantId && !UUID.test(body.assistantId)) return fail(404, "That assistant isn't available.");
 
   const db = await supabaseServer();
   const admin = supabaseAdmin();
@@ -97,15 +107,18 @@ export async function POST(req: NextRequest) {
   let all: MessageRow[] = [];
   // A chat in a project brings the project's instructions and files.
   let projectId: string | null = chatId ? null : (body.projectId ?? null);
+  // So does a chat started with a saved assistant.
+  let assistantId: string | null = chatId ? null : (body.assistantId ?? null);
   if (chatId) {
     const { data: chat } = await db
       .from("chats")
-      .select("id, project_id")
+      .select("id, project_id, assistant_id")
       .eq("id", chatId)
       .eq("owner_id", me.userId)
-      .maybeSingle<{ id: string; project_id: string | null }>();
+      .maybeSingle<{ id: string; project_id: string | null; assistant_id: string | null }>();
     if (!chat) return fail(404, "That chat doesn't exist.");
     projectId = chat.project_id;
+    assistantId = chat.assistant_id;
     const { data: existing } = await db
       .from("messages")
       .select("id, chat_id, parent_id, role, content, status, model, created_at")
@@ -134,11 +147,18 @@ export async function POST(req: NextRequest) {
     project = await projectContext(db, me.userId, projectId);
     if (!project && !chatId) return fail(404, "That project doesn't exist.");
   }
+  // An assistant no longer shared simply stops applying to chats already made with it.
+  let assistant: AssistantContext | null = null;
+  if (assistantId) {
+    assistant = await assistantContext(db, assistantId);
+    if (!assistant && !chatId) return fail(404, "That assistant isn't available.");
+  }
   const system = systemPrompt(
     me.profile.display_name,
     Boolean(body.voice),
     (remembered ?? []).map((m) => m.content),
     project,
+    assistant,
   );
   let historyChars = 0;
   const seen = [system, text];
@@ -151,7 +171,15 @@ export async function POST(req: NextRequest) {
   // Attached files count too: text files as text, images and PDFs by size, erring high.
   let fileTokens = 0;
   let binaryBytes = 0;
-  for (const f of [...fileRefs, ...all.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : [])), ...(project?.binaries ?? [])]) {
+  for (const f of [...fileRefs, ...all.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : [])), ...(project?.binaries ?? []), ...(assistant?.binaries ?? [])]) {
+    // A saved assistant's files are in its maker's folder.
+    if (assistant?.binaries.includes(f as FileRef)) {
+      if (binaryBytes + f.size <= FILE_BYTES_BUDGET) {
+        binaryBytes += f.size;
+        fileTokens += f.mime === "application/pdf" ? Math.ceil(f.size / 40) + 3_000 : 5_000;
+      }
+      continue;
+    }
     if (!isFileRef(f, me.userId)) continue;
     if (f.mime === "text/plain") fileTokens += Math.ceil(Math.min(f.size, 200_000) / 2);
     // Word, Excel and PowerPoint files are zipped, so their text can be several times their size.
@@ -205,6 +233,7 @@ export async function POST(req: NextRequest) {
         title: titleFrom(text || fileRefs[0]?.name || ""),
         model: model.id,
         ...(projectId && project ? { project_id: projectId } : {}),
+        ...(assistantId && assistant ? { assistant_id: assistantId } : {}),
       })
       .select("id")
       .single<{ id: string }>();
@@ -255,7 +284,8 @@ export async function POST(req: NextRequest) {
   const turns: Turn[] = [];
   // Messages the model gets word for word (or that have nothing to send); the rest can be looked up.
   const sent = new Set<string>([question.id]);
-  let budget = HISTORY_CHARS;
+  // Project and assistant files are sent every time, so they come out of the history's share.
+  let budget = HISTORY_CHARS - (project?.text.length ?? 0) - (assistant?.text.length ?? 0);
   let fileBudget = FILE_BYTES_BUDGET;
   const storage = supabaseAdmin().storage.from(UPLOAD_BUCKET);
   for (const m of [...path].reverse()) {
@@ -302,9 +332,10 @@ export async function POST(req: NextRequest) {
   }
   while (turns[0]?.role === "assistant") turns.shift();
   // The project's photos and PDFs go with the first message the model sees, within the same budget.
-  if (project?.binaries.length && turns[0]) {
+  const contextFiles = [...(assistant?.binaries ?? []), ...(project?.binaries ?? [])];
+  if (contextFiles.length && turns[0]) {
     const extra: TurnFile[] = [];
-    for (const f of project.binaries) {
+    for (const f of contextFiles) {
       if (fileBudget - f.size <= 0) continue;
       const { data: blob } = await storage.download(f.path);
       if (!blob) continue;
@@ -488,7 +519,13 @@ const FILE_INSTRUCTIONS = [
   "Use a short file name without spaces. If the file contains ``` fences, open and close the file block with ```` instead. Only make a file when one is wanted, and keep remarks outside the block.",
 ].join(" ");
 
-function systemPrompt(name: string, voice: boolean, memories: string[], project: ProjectContext | null): string {
+function systemPrompt(
+  name: string,
+  voice: boolean,
+  memories: string[],
+  project: ProjectContext | null,
+  assistant: AssistantContext | null,
+): string {
   const base = [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
@@ -501,5 +538,5 @@ function systemPrompt(name: string, voice: boolean, memories: string[], project:
   ]
     .filter(Boolean)
     .join(" ");
-  return project ? `${base}\n\n${projectInstructions(project)}` : base;
+  return [base, assistant ? assistantInstructions(assistant) : "", project ? projectInstructions(project) : ""].filter(Boolean).join("\n\n");
 }

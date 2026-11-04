@@ -7,6 +7,7 @@ import { after } from "next/server";
 import { refreshKeyModels, staleKeys, type KeyModels } from "@/lib/ai/key-models";
 import { activePath, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { ProjectDetail, ProjectRow } from "@/lib/chat/projects";
+import type { AssistantDetail, AssistantRow } from "@/lib/chat/assistants";
 
 export type Shell = {
   userId: string;
@@ -15,6 +16,8 @@ export type Shell = {
   chats: ChatRow[];
   /** Your projects (folders), most recently used first. */
   projects: ProjectRow[];
+  /** Your saved assistants and the ones your family shared, yours first. */
+  assistants: AssistantRow[];
   modelIds: string[];
   defaultModel: string | null;
   spent: number;
@@ -24,11 +27,11 @@ export type Shell = {
 /** Everything the chat screen needs around the conversation: your chats, models and spending. */
 export async function loadShell(me: Me): Promise<Shell> {
   const db = await supabaseServer();
-  const [{ data: chats }, { data: providers }, { data: spent }, { data: projects }] = await Promise.all([
+  const [{ data: chats }, { data: providers }, { data: spent }, { data: projects }, { data: assistants }] = await Promise.all([
     // Admins can read their members' chat titles, so ask only for your own.
     db
       .from("chats")
-      .select("id, title, model, pinned, updated_at, project_id")
+      .select("id, title, model, pinned, updated_at, project_id, assistant_id")
       .eq("owner_id", me.userId)
       .is("archived_at", null)
       .order("updated_at", { ascending: false })
@@ -43,6 +46,13 @@ export async function loadShell(me: Me): Promise<Shell> {
       .order("updated_at", { ascending: false })
       .limit(200)
       .returns<ProjectRow[]>(),
+    // Yours, and those shared with your family (row-level security decides which).
+    db
+      .from("assistants")
+      .select("id, owner_id, name, description, model, shared")
+      .order("name")
+      .limit(200)
+      .returns<(Omit<AssistantRow, "mine"> & { owner_id: string })[]>(),
   ]);
   const keys = (providers as KeyModels[] | null) ?? [];
   const models = modelsFor(keys);
@@ -56,6 +66,9 @@ export async function loadShell(me: Me): Promise<Shell> {
     isAdmin: me.profile.role === "admin",
     chats: chats ?? [],
     projects: projects ?? [],
+    assistants: (assistants ?? [])
+      .map(({ owner_id, ...a }) => ({ ...a, mine: owner_id === me.userId }))
+      .sort((a, b) => Number(b.mine) - Number(a.mine)),
     modelIds: models.map((m) => m.id),
     defaultModel: chooseDefault(models, last?.last_model)?.id ?? null,
     spent: Number(spent ?? 0),
@@ -69,7 +82,7 @@ export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow;
   const db = await supabaseServer();
   const { data: chat } = await db
     .from("chats")
-    .select("id, title, model, pinned, updated_at, archived_at, project_id")
+    .select("id, title, model, pinned, updated_at, archived_at, project_id, assistant_id")
     .eq("id", chatId)
     .eq("owner_id", me.userId)
     .maybeSingle<ChatRow>();
@@ -120,4 +133,24 @@ export async function loadProject(me: Me, projectId: string): Promise<ProjectDet
   ]);
   if (!project) return null;
   return { ...project, files: files ?? [] };
+}
+
+/** A saved assistant you can see (yours, or shared with your family), with its instructions and files. */
+export async function loadAssistant(me: Me, assistantId: string): Promise<AssistantDetail | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(assistantId)) return null;
+  const db = await supabaseServer();
+  const { data: a } = await db
+    .from("assistants")
+    .select("id, owner_id, name, description, instructions, model, shared")
+    .eq("id", assistantId)
+    .maybeSingle<Omit<AssistantDetail, "mine" | "files"> & { owner_id: string }>();
+  if (!a) return null;
+  const { data: files } = await db
+    .from("assistant_files")
+    .select("id, path, name, mime, size")
+    .eq("assistant_id", assistantId)
+    .order("created_at")
+    .returns<AssistantDetail["files"]>();
+  const { owner_id, ...rest } = a;
+  return { ...rest, mine: owner_id === me.userId, files: files ?? [] };
 }

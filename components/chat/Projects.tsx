@@ -6,7 +6,7 @@ import { useRef, useState } from "react";
 import { GlassCode } from "@/components/Glass";
 import { addProjectFile, deleteProject, removeProjectFile, renameProject, saveInstructions } from "@/app/p/actions";
 import { MAX_PROJECT_FILES, MAX_PROJECT_INSTRUCTIONS, cleanProjectName, type ProjectDetail, type ProjectFile } from "@/lib/chat/projects";
-import { refusal, sizeLabel, storedType } from "@/lib/chat/files";
+import { refusal, sizeLabel, storedType, type FileRef } from "@/lib/chat/files";
 import type { ChatRow } from "@/lib/chat/thread";
 import { ACCEPT, uploadFile } from "./Attachments";
 import { ChatMenu, Sheet } from "./ChatMenu";
@@ -106,35 +106,8 @@ export function ProjectPanel({
 }) {
   const router = useRouter();
   const [sheet, setSheet] = useState<"instructions" | "rename" | "delete" | null>(null);
-  const [uploading, setUploading] = useState<{ id: string; name: string; error?: string }[]>([]);
-  const picker = useRef<HTMLInputElement>(null);
   const live = useRef(project);
   live.current = project;
-
-  async function addFiles(files: File[]) {
-    const room = MAX_PROJECT_FILES - live.current.files.length - uploading.filter((u) => !u.error).length;
-    const picked = files.slice(0, Math.max(0, room));
-    const tooMany = files.slice(picked.length).map((f) => ({ id: crypto.randomUUID(), name: f.name, error: `Up to ${MAX_PROJECT_FILES} files` }));
-    const jobs = picked.map((file) => ({ file, id: crypto.randomUUID(), type: storedType(file) }));
-    setUploading((u) => [
-      ...u.filter((x) => !x.error),
-      ...jobs.map((j) => ({ id: j.id, name: j.file.name, error: j.type ? undefined : refusal(j.file) })),
-      ...tooMany,
-    ]);
-    await Promise.all(
-      jobs.map(async ({ file, id, type }) => {
-        if (!type) return;
-        const up = await uploadFile(userId, file, type, id);
-        const kept = "error" in up ? up : await addProjectFile(project.id, up).catch(() => ({ error: "Upload failed" }));
-        if ("error" in kept) {
-          setUploading((u) => u.map((x) => (x.id === id ? { ...x, error: kept.error } : x)));
-          return;
-        }
-        setUploading((u) => u.filter((x) => x.id !== id));
-        onChange({ ...live.current, files: [...live.current.files, kept as ProjectFile] });
-      }),
-    );
-  }
 
   const card = "rounded-[22px] border border-line p-4";
 
@@ -168,75 +141,16 @@ export function ProjectPanel({
       </section>
 
       <section className={card} aria-label="Files">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-[17px] font-semibold">Files</h3>
-          <button
-            type="button"
-            className="press flex items-center gap-1 rounded-full border border-line px-3.5 py-1.5 text-[14px] disabled:opacity-40"
-            onClick={() => picker.current?.click()}
-            disabled={project.files.length >= MAX_PROJECT_FILES}
-          >
-            <PlusIcon className="h-4 w-4" /> Add files
-          </button>
-          <input
-            ref={picker}
-            type="file"
-            multiple
-            accept={ACCEPT}
-            className="hidden"
-            data-testid="project-file-input"
-            onChange={(e) => {
-              const files = [...(e.target.files ?? [])];
-              e.target.value = "";
-              if (files.length) addFiles(files);
-            }}
-          />
-        </div>
-        {project.files.length || uploading.length ? (
-          <ul className="mt-3 flex flex-col gap-2">
-            {project.files.map((f) => (
-              <li key={f.id} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5" data-testid="project-file">
-                <FileIcon className="shrink-0" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[15px]">{f.name}</span>
-                  <span className="block text-[12px] text-mute">{sizeLabel(f.size)}</span>
-                </span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${f.name}`}
-                  className="press flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg"
-                  onClick={() => {
-                    onChange({ ...live.current, files: live.current.files.filter((x) => x.id !== f.id) });
-                    removeProjectFile(f.id).catch(() => {});
-                  }}
-                >
-                  <CloseIcon className="h-4 w-4" />
-                </button>
-              </li>
-            ))}
-            {uploading.map((u) => (
-              <li key={u.id} className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 ${u.error ? "border border-fg" : "bg-soft"}`}>
-                <FileIcon className="shrink-0 text-mute" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[15px]">{u.name}</span>
-                  <span className="block text-[12px] text-mute">{u.error ?? "Uploading…"}</span>
-                </span>
-                {u.error ? (
-                  <button
-                    type="button"
-                    aria-label={`Dismiss ${u.name}`}
-                    className="press flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-mute"
-                    onClick={() => setUploading((list) => list.filter((x) => x.id !== u.id))}
-                  >
-                    <CloseIcon className="h-4 w-4" />
-                  </button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-2 text-[15px] text-mute">Every chat in this project can read these. Photos, PDFs, Word, Excel, PowerPoint and text files.</p>
-        )}
+        <ContextFiles
+          userId={userId}
+          files={project.files}
+          max={MAX_PROJECT_FILES}
+          hint="Every chat in this project can read these. Photos, PDFs, Word, Excel, PowerPoint and text files."
+          testId="project-file"
+          onAdd={(ref) => addProjectFile(project.id, ref)}
+          onRemove={(id) => removeProjectFile(id)}
+          onChange={(files) => onChange({ ...live.current, files })}
+        />
       </section>
 
       <section aria-label="Chats in this project">
@@ -374,5 +288,135 @@ function RenameProjectSheet({ name, onSave, onClose }: { name: string; onSave: (
         <SheetButtons onCancel={onClose} label="Save" disabled={!clean} />
       </form>
     </Sheet>
+  );
+}
+
+/**
+ * Files kept with a project or an assistant: added from the picker (uploaded to your own private
+ * folder, then listed), and removed with their ×.
+ */
+export function ContextFiles({
+  userId,
+  files,
+  max,
+  hint,
+  testId,
+  onAdd,
+  onRemove,
+  onChange,
+}: {
+  userId: string;
+  files: ProjectFile[];
+  max: number;
+  hint: string;
+  testId: string;
+  onAdd: (ref: FileRef) => Promise<ProjectFile | { error: string }>;
+  onRemove: (id: string) => Promise<void>;
+  onChange: (files: ProjectFile[]) => void;
+}) {
+  const [uploading, setUploading] = useState<{ id: string; name: string; error?: string }[]>([]);
+  const picker = useRef<HTMLInputElement>(null);
+  const live = useRef(files);
+  live.current = files;
+
+  async function addFiles(picked: File[]) {
+    const room = max - live.current.length - uploading.filter((u) => !u.error).length;
+    const take = picked.slice(0, Math.max(0, room));
+    const tooMany = picked.slice(take.length).map((f) => ({ id: crypto.randomUUID(), name: f.name, error: `Up to ${max} files` }));
+    const jobs = take.map((file) => ({ file, id: crypto.randomUUID(), type: storedType(file) }));
+    setUploading((u) => [
+      ...u.filter((x) => !x.error),
+      ...jobs.map((j) => ({ id: j.id, name: j.file.name, error: j.type ? undefined : refusal(j.file) })),
+      ...tooMany,
+    ]);
+    await Promise.all(
+      jobs.map(async ({ file, id, type }) => {
+        if (!type) return;
+        const up = await uploadFile(userId, file, type, id);
+        const kept = "error" in up ? up : await onAdd(up).catch(() => ({ error: "Upload failed" }));
+        if ("error" in kept) {
+          setUploading((u) => u.map((x) => (x.id === id ? { ...x, error: kept.error } : x)));
+          return;
+        }
+        setUploading((u) => u.filter((x) => x.id !== id));
+        live.current = [...live.current, kept];
+        onChange(live.current);
+      }),
+    );
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-[17px] font-semibold">Files</h3>
+        <button
+          type="button"
+          className="press flex items-center gap-1 rounded-full border border-line px-3.5 py-1.5 text-[14px] disabled:opacity-40"
+          onClick={() => picker.current?.click()}
+          disabled={files.length >= max}
+        >
+          <PlusIcon className="h-4 w-4" /> Add files
+        </button>
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          accept={ACCEPT}
+          className="hidden"
+          data-testid={`${testId}-input`}
+          onChange={(e) => {
+            const picked = [...(e.target.files ?? [])];
+            e.target.value = "";
+            if (picked.length) addFiles(picked);
+          }}
+        />
+      </div>
+      {files.length || uploading.length ? (
+        <ul className="mt-3 flex flex-col gap-2">
+          {files.map((f) => (
+            <li key={f.id} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5" data-testid={testId}>
+              <FileIcon className="shrink-0" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[15px]">{f.name}</span>
+                <span className="block text-[12px] text-mute">{sizeLabel(f.size)}</span>
+              </span>
+              <button
+                type="button"
+                aria-label={`Remove ${f.name}`}
+                className="press flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg"
+                onClick={() => {
+                  live.current = live.current.filter((x) => x.id !== f.id);
+                  onChange(live.current);
+                  onRemove(f.id).catch(() => {});
+                }}
+              >
+                <CloseIcon className="h-4 w-4" />
+              </button>
+            </li>
+          ))}
+          {uploading.map((u) => (
+            <li key={u.id} className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 ${u.error ? "border border-fg" : "bg-soft"}`}>
+              <FileIcon className="shrink-0 text-mute" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[15px]">{u.name}</span>
+                <span className="block text-[12px] text-mute">{u.error ?? "Uploading…"}</span>
+              </span>
+              {u.error ? (
+                <button
+                  type="button"
+                  aria-label={`Dismiss ${u.name}`}
+                  className="press flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-mute"
+                  onClick={() => setUploading((list) => list.filter((x) => x.id !== u.id))}
+                >
+                  <CloseIcon className="h-4 w-4" />
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-[15px] text-mute">{hint}</p>
+      )}
+    </>
   );
 }

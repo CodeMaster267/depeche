@@ -10,6 +10,7 @@ import type { Shell } from "@/lib/chat/load";
 import { archiveChat, refreshChat, refreshShell, rememberModel } from "@/app/c/actions";
 import { createProject } from "@/app/p/actions";
 import type { ProjectDetail } from "@/lib/chat/projects";
+import type { AssistantRow } from "@/lib/chat/assistants";
 import { ProjectsContext, type ProjectsValue } from "./projects-context";
 import { ProjectPanel } from "./Projects";
 import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
@@ -20,7 +21,7 @@ import { ModelPicker } from "./ModelPicker";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
 import { ChatMenu } from "./ChatMenu";
-import { ArrowUpIcon, ChevronDownIcon, CopyIcon, FolderIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
+import { ArrowUpIcon, ChevronDownIcon, CopyIcon, FolderIcon, SparkIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions, Searching, Sources } from "./Sources";
 import type { Source } from "@/lib/chat/thread";
 
@@ -39,12 +40,15 @@ export function ChatApp({
   chat: initialChat,
   messages: initial,
   project: initialProject = null,
+  assistant = null,
 }: {
   shell: Shell;
   chat: ChatRow | null;
   messages: MessageRow[];
   /** On a project's own screen: new chats start inside it. */
   project?: ProjectDetail | null;
+  /** Starting a chat with a saved assistant. */
+  assistant?: AssistantRow | null;
 }) {
   const router = useRouter();
   const [shell, setShell] = useState(initialShell);
@@ -61,9 +65,16 @@ export function ChatApp({
   // The project this screen is in: the one open, or the open chat's.
   const projectId = chat ? (chat.project_id ?? null) : (project?.id ?? null);
   const projectName = shell.projects.find((p) => p.id === projectId)?.name ?? project?.name ?? null;
+  // The saved assistant this chat is with, when it's still one you can see.
+  const assistantId = chat ? (chat.assistant_id ?? null) : (assistant?.id ?? null);
+  const withAssistant = shell.assistants.find((a) => a.id === assistantId) ?? assistant;
   const [messages, setMessages] = useState<Live[]>(initial);
   const [modelId, setModelId] = useState<string | null>(
-    initialChat?.model && initialShell.modelIds.includes(initialChat.model) ? initialChat.model : initialShell.defaultModel,
+    initialChat?.model && initialShell.modelIds.includes(initialChat.model)
+      ? initialChat.model
+      : assistant?.model && initialShell.modelIds.includes(assistant.model)
+        ? assistant.model
+        : initialShell.defaultModel,
   );
   const [picking, setPicking] = useState(false);
   const [drawer, setDrawer] = useState(false);
@@ -175,6 +186,7 @@ export function ChatApp({
           clientRequestId: crypto.randomUUID(),
           search: search && canSearch(model),
           ...(!chatId && project ? { projectId: project.id } : {}),
+          ...(!chatId && assistant ? { assistantId: assistant.id } : {}),
           ...body,
         }),
         signal: abort.signal,
@@ -224,6 +236,7 @@ export function ChatApp({
                 pinned: false,
                 updated_at: new Date().toISOString(),
                 project_id: project?.id ?? null,
+                assistant_id: assistant?.id ?? null,
               };
               setChat(created);
               setShell((s) => ({ ...s, chats: [created, ...s.chats] }));
@@ -428,7 +441,21 @@ export function ChatApp({
                 <span aria-hidden className="hidden md:inline">/</span>
               </Link>
             ) : null}
-            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">{chat?.title ?? (project ? project.name : "New chat")}</h1>
+            {chat && withAssistant ? (
+              <Link
+                href={`/assistants/${withAssistant.id}`}
+                prefetch={false}
+                className="flex max-w-full items-center gap-1 text-[13px] text-mute hover:text-fg md:-mr-2 md:max-w-[30%] md:text-[15px]"
+                aria-label={`Assistant: ${withAssistant.name}`}
+              >
+                <SparkIcon className="h-4 w-4 shrink-0" />
+                <span className="truncate">{withAssistant.name}</span>
+                <span aria-hidden className="hidden md:inline">/</span>
+              </Link>
+            ) : null}
+            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">
+              {chat?.title ?? (project ? project.name : assistant ? assistant.name : "New chat")}
+            </h1>
             {model ? (
               <button
                 type="button"
@@ -492,6 +519,17 @@ export function ChatApp({
                 onChatChange={changeChat}
                 onChatDeleted={chatDeleted}
               />
+            ) : messages.length === 0 && assistant && !chat ? (
+              <div className="flex flex-col gap-2 pt-[12vh]" data-testid="assistant-start">
+                <span className="flex items-center gap-1.5 text-[13px] font-semibold uppercase tracking-[0.1em] text-mute">
+                  <SparkIcon className="h-4 w-4" /> Assistant{assistant.mine ? "" : " shared by your family"}
+                </span>
+                <h2 className="break-words text-[34px] font-semibold leading-tight tracking-tight">{assistant.name}</h2>
+                {assistant.description ? <p className="text-[17px] text-mute">{assistant.description}</p> : null}
+                <Link href={`/assistants/${assistant.id}`} className="self-start text-[15px] text-mute underline underline-offset-4">
+                  {assistant.mine ? "Edit" : "What it's been told"}
+                </Link>
+              </div>
             ) : messages.length === 0 ? (
               <div className="flex flex-col gap-2 pt-[12vh]">
                 <h2 className="text-[34px] font-semibold tracking-tight">Hi, {shell.name}.</h2>
@@ -512,6 +550,27 @@ export function ChatApp({
                 ) : (
                   <p className="text-[17px] text-mute">What&apos;s on your mind?</p>
                 )}
+                {!noModels && shell.assistants.length ? (
+                  <ul className="mt-5 flex flex-wrap gap-2" aria-label="Start with an assistant">
+                    {shell.assistants.slice(0, 6).map((a) => (
+                      <li key={a.id}>
+                        <Link
+                          href={`/?assistant=${a.id}`}
+                          prefetch={false}
+                          className="press flex items-center gap-1.5 rounded-full border border-line px-3.5 py-2 text-[15px]"
+                        >
+                          <SparkIcon className="h-4 w-4 text-mute" />
+                          {a.name}
+                        </Link>
+                      </li>
+                    ))}
+                    <li>
+                      <Link href="/assistants" className="press flex items-center rounded-full px-3.5 py-2 text-[15px] text-mute">
+                        All assistants
+                      </Link>
+                    </li>
+                  </ul>
+                ) : null}
               </div>
             ) : null}
             {messages.map((m) =>
@@ -566,7 +625,7 @@ export function ChatApp({
             onVoice={() => setVoiceOpen(true)}
             onDictated={(t) => setDraft((d) => (d.trim() ? `${d.trimEnd()} ${t}` : t))}
             onVoiceError={setBanner}
-            placeholder={project && !chat ? `New chat in ${project.name}` : undefined}
+            placeholder={project && !chat ? `New chat in ${project.name}` : assistant && !chat ? `Message ${assistant.name}` : undefined}
           />
           {hint ? (
             <p role="status" className="mt-2 text-center text-[12px] text-mute">

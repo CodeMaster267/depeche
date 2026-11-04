@@ -7,7 +7,7 @@ import { loadShell } from "@/lib/chat/load";
 export const dynamic = "force-dynamic";
 
 /** Home is a new chat. */
-export default async function Home({ searchParams }: { searchParams: Promise<{ new?: string }> }) {
+export default async function Home({ searchParams }: { searchParams: Promise<{ new?: string; assistant?: string }> }) {
   if (!isConfigured()) {
     // Before Supabase is connected, show the title card so a fresh deployment visibly works.
     return (
@@ -26,6 +26,16 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ n
   const me = await requireMe();
   const shell = await loadShell(me);
   // "New chat" from a chat begun on this screen adds ?new=… so the screen starts over.
-  const { new: fresh } = await searchParams;
-  return <ChatApp key={`new-${String(fresh ?? "").slice(0, 20)}`} shell={shell} chat={null} messages={[]} />;
+  const { new: fresh, assistant: assistantId } = await searchParams;
+  // ?assistant=… starts the chat with one of your saved assistants (or one your family shared).
+  const assistant = shell.assistants.find((a) => a.id === assistantId) ?? null;
+  return (
+    <ChatApp
+      key={`new-${String(fresh ?? "").slice(0, 20)}-${assistant?.id ?? ""}`}
+      shell={shell}
+      chat={null}
+      messages={[]}
+      assistant={assistant}
+    />
+  );
 }

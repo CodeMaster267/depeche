@@ -149,10 +149,8 @@ describe("project files", () => {
 });
 
 describe("clean-up and deleting", () => {
-  it("keeps chats in a project from the monthly clean-up", async () => {
-    await run(P.amir, "update chats set project_id = $1 where id = $2", [J.amir, C.amirOld]);
-    await asServer("select public.expire_old_chats()");
-    expect(await asServer("select title from chats where id = $1", [C.amirOld])).toEqual([{ title: "Old notes" }]);
+  it("puts another chat in the project", async () => {
+    expect(await run(P.amir, "update chats set project_id = $1 where id = $2", [J.amir, C.amirOld])).toBe(1);
   });
 
   it("moves a deleted project's chats back to the main list, and drops its file list", async () => {

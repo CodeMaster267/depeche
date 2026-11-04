@@ -870,7 +870,11 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   const fromProject = q.includes("project")
     ? `Project instructions: ${instructions ?? "none"}. Project files: ${projectFiles.join(", ") || "none"}.\n\n`
     : "";
-  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + fromProject + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
+  // "assistant" does the same for a saved assistant.
+  const asAssistant = q.includes("assistant")
+    ? `Assistant: ${/In this chat you are "([^"]+)"/.exec(system)?.[1] ?? "none"}. Assistant instructions: ${/<assistant_instructions>\n([\s\S]*?)\n<\/assistant_instructions>/.exec(system)?.[1] ?? "none"}. Assistant files: ${[...(/<assistant_files>([\s\S]*?)<\/assistant_files>/.exec(system)?.[1] ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1]).join(", ") || "none"}.\n\n`
+    : "";
+  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + fromProject + asAssistant + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

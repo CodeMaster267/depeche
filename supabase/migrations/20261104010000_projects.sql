@@ -7,8 +7,8 @@
 -- Deleting a project moves its chats back to the main list; they are not deleted.
 --
 -- Project files live in the same private uploads bucket, under the owner's folder. They are kept
--- for as long as the project has them (the 3-day clean-up skips them), and chats in a project are
--- kept from the monthly clean-up, the same as pinned and archived chats.
+-- for as long as the project has them (the 3-day clean-up skips them). Chats in a project follow
+-- the usual monthly clean-up, like archived chats (Hasan's choice for archived chats).
 
 create table public.projects (
   id           uuid primary key default gen_random_uuid(),
@@ -88,25 +88,3 @@ create or replace function public.expired_uploads(p_limit int default 1000) retu
   $$;
 revoke all on function public.expired_uploads(int) from public, anon, authenticated;
 grant execute on function public.expired_uploads(int) to service_role;
-
--- Chats a month unused are deleted, except pinned, archived and (now) those kept in a project.
-create or replace function public.expire_old_chats() returns integer
-  language plpgsql security definer set search_path = ''
-  as $$
-  declare
-    n integer;
-  begin
-    delete from public.chats c
-      using public.profiles p
-      where p.id = c.owner_id
-        and not p.keep_chats
-        and not c.pinned
-        and c.archived_at is null
-        and c.project_id is null
-        and c.updated_at < now() - interval '30 days';
-    get diagnostics n = row_count;
-    return n;
-  end
-  $$;
-revoke all on function public.expire_old_chats() from public, anon, authenticated;
-grant execute on function public.expire_old_chats() to service_role;

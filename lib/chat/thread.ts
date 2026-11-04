@@ -39,6 +39,8 @@ export type ChatRow = {
   archived_at?: string | null;
   /** The project (folder) the chat is kept in, if any. */
   project_id?: string | null;
+  /** The saved assistant the chat was started with, if any. */
+  assistant_id?: string | null;
 };
 
 /**
