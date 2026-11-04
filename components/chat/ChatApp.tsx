@@ -18,6 +18,7 @@ import { Sidebar } from "./Sidebar";
 import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions, Searching, Sources } from "./Sources";
 import type { Source } from "@/lib/chat/thread";
+import { SOURCE_NAMES } from "@/lib/import/types";
 
 type Live = MessageRow & { streaming?: boolean; queries?: string[]; searchingNow?: boolean; searchingWhere?: "web" | "chat" };
 
@@ -356,6 +357,12 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
                   <p className="text-[17px] text-mute">What&apos;s on your mind?</p>
                 )}
               </div>
+            ) : null}
+            {chat?.imported_from ? (
+              <p data-testid="imported-from" className="text-center text-[13px] text-mute">
+                Imported from {SOURCE_NAMES[chat.imported_from]}
+                {chat.created_at ? ` · started ${new Date(chat.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}` : ""}
+              </p>
             ) : null}
             {messages.map((m) =>
               m.role === "user" ? (

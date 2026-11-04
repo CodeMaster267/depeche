@@ -29,7 +29,16 @@ export type MessageRow = {
   memory?: { id: string; content: string };
 };
 
-export type ChatRow = { id: string; title: string; model: string | null; pinned: boolean; updated_at: string };
+export type ChatRow = {
+  id: string;
+  title: string;
+  model: string | null;
+  pinned: boolean;
+  updated_at: string;
+  /** Set on chats brought in from another app's export. */
+  imported_from?: "chatgpt" | "claude" | "gemini" | null;
+  created_at?: string;
+};
 
 /**
  * Messages are never edited or deleted: a regenerated reply is a new message with the same parent.
