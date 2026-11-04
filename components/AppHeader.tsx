@@ -3,6 +3,7 @@ import { Wordmark } from "@/components/Wordmark";
 import { NavLink } from "@/components/Press";
 import { PersonalLook } from "@/components/design/PersonalLook";
 import { Shortcuts } from "@/components/design/Look";
+import { ConciergeButton } from "@/components/help/Concierge";
 
 /** Three links fit beside the wordmark on a phone with slightly narrower pills. */
 const PILL = "max-sm:px-2.5!";
@@ -25,6 +26,7 @@ export function AppHeader({ isAdmin }: { isAdmin: boolean }) {
         {isAdmin ? <NavLink href="/health" className={PILL}>Health</NavLink> : null}
         <NavLink href="/memory" className={PILL}>Memory</NavLink>
         <NavLink href="/account" className={PILL}>Account</NavLink>
+        <ConciergeButton variant="icon" isAdmin={isAdmin} />
       </nav>
     </header>
     </PersonalLook>

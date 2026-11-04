@@ -49,11 +49,9 @@ describe("provider keys", () => {
     ]);
   });
 
-  it("accept Groq, and only known providers", async () => {
-    await asServer(`select public.save_provider_key($1, 'groq', '\\x04'::bytea, 'gq12')`, [P.bea]);
-    expect(await asServer("select family_id, last4 from provider_keys where provider = 'groq'")).toEqual([{ family_id: F.b, last4: "gq12" }]);
+  it("accept only known providers, and no longer Groq", async () => {
+    await expect(asServer(`select public.save_provider_key($1, 'groq', '\\x04'::bytea, 'gq12')`, [P.bea])).rejects.toThrow(/check/);
     await expect(asServer(`select public.save_provider_key($1, 'madeup', '\\x04'::bytea, 'zz12')`, [P.bea])).rejects.toThrow(/check/);
-    await asServer(`select public.remove_provider_key($1, 'groq')`, [P.bea]);
     expect(await asServer("select count(*)::int as n from provider_keys where provider = 'groq'")).toEqual([{ n: 0 }]);
   });
 
