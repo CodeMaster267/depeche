@@ -160,7 +160,7 @@ export function Sidebar({
         ))}
         {showArchived ? (
           archived && !archived.length ? (
-            <p className="px-3 pt-2 text-[15px] text-mute">No archived chats. Archive a chat from its three dots to put it away here; it&apos;s kept until you restore or delete it.</p>
+            <p className="px-3 pt-2 text-[15px] text-mute">No archived chats. Archive a chat from its three dots to put it away here; chats you haven&apos;t used for a month are still deleted, unless you keep all your chats in Account.</p>
           ) : !archived ? (
             <p className="px-3 pt-2 text-[15px] text-mute">Loading…</p>
           ) : null

@@ -35,7 +35,7 @@ export type ChatRow = {
   model: string | null;
   pinned: boolean;
   updated_at: string;
-  /** Set while the chat is archived: out of the list and kept, until restored or written in. */
+  /** Set while the chat is archived: out of the list until restored or written in. */
   archived_at?: string | null;
 };
 
