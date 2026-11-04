@@ -4,7 +4,7 @@ import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { canSearch, findModel } from "@/lib/ai/models";
 import { allow } from "@/lib/rate-limit";
-import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow } from "@/lib/chat/thread";
+import { MAX_MESSAGE_CHARS, activePath, pathTo, titleFrom, type MessageRow } from "@/lib/chat/thread";
 import { CONTEXT_CHARS } from "@/lib/research/prompts";
 import { RUN_COLUMNS, advance } from "@/lib/research/run";
 
@@ -23,7 +23,14 @@ export async function POST(req: NextRequest) {
   const me = await getMe();
   if (!me) return fail(401, "Sign in again to keep chatting.");
   if (me.profile.must_change_password) return fail(403, "Choose a new password first, in Account.");
-  const body = (await req.json().catch(() => ({}))) as { chatId?: string | null; clientRequestId?: string; text?: string; model?: string };
+  const body = (await req.json().catch(() => ({}))) as {
+    chatId?: string | null;
+    clientRequestId?: string;
+    text?: string;
+    model?: string;
+    /** The message this one follows: the end of the conversation as shown. Left out, the newest. */
+    parent?: string | null;
+  };
 
   const model = findModel(body.model);
   if (!model) return fail(400, "Pick a model first.");
@@ -33,6 +40,7 @@ export async function POST(req: NextRequest) {
   if (text.length > MAX_MESSAGE_CHARS) return fail(400, "That message is too long. Try splitting it up.");
   if (!UUID.test(body.clientRequestId ?? "")) return fail(400, "Something went wrong. Try again.");
   if (body.chatId && !UUID.test(body.chatId)) return fail(404, "That chat doesn't exist.");
+  if (body.parent && !UUID.test(String(body.parent))) return fail(404, "That message doesn't exist.");
   if (!(await allow(["messagesPerMinute", me.userId], ["researchPerDay", me.userId]))) {
     return fail(429, "That's a lot of research for one day. Try again tomorrow.");
   }
@@ -71,7 +79,9 @@ export async function POST(req: NextRequest) {
     chatId = chat.id;
   }
 
-  const path = activePath(all);
+  // Follow the version of the conversation on screen, if one was given.
+  if (body.parent && !all.some((m) => m.id === body.parent)) return fail(404, "That message doesn't exist.");
+  const path = body.parent ? pathTo(all, body.parent) : activePath(all);
   const { data: question, error } = await db
     .from("messages")
     .insert({
