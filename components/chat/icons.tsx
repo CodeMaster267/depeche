@@ -116,6 +116,16 @@ export const BrushIcon = (p: P) => (
     <path d="M14.5 4.5l5 5L11 18l-5-5zM6 13l-1.5 1.5C3 16 3.5 19 3.5 20.5 5 20.5 8 21 9.5 19.5L11 18" />
   </svg>
 );
+export const ArchiveIcon = (p: P) => (
+  <svg {...base} width={20} height={20} {...p}>
+    <path d="M4 7h16v12H4zM3 4h18v3H3zM10 11h4" />
+  </svg>
+);
+export const BackIcon = (p: P) => (
+  <svg {...base} width={20} height={20} {...p}>
+    <path d="M15 5l-7 7 7 7" />
+  </svg>
+);
 export const EditIcon = (p: P) => (
   <svg {...base} {...p}>
     <path d="M14.5 5.5l4 4M4 20l1-5L15.5 4.5a1.4 1.4 0 0 1 2 0l2 2a1.4 1.4 0 0 1 0 2L9 19z" />
