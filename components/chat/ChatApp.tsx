@@ -20,6 +20,7 @@ import { Compare } from "./Compare";
 import { comparedWith } from "@/lib/chat/compare";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
+import { Waiting } from "./Waiting";
 import { CanvasIcon, CanvasMessage, CanvasOpener, CanvasPane, useCanvas } from "./Canvas";
 import { ChatMenu } from "./ChatMenu";
 import { DeletionNotice } from "./DeletionNotice";
@@ -1026,9 +1027,13 @@ function Reply({
       ) : null}
       {m.streaming && m.making ? <MakingPicture editing={m.editing} /> : null}
       {m.streaming && !m.searchingNow && !m.thinkingNow && !m.making ? (
-        <span aria-label="Writing" className="block h-6">
-          <span className="stream-cursor" />
-        </span>
+        text ? (
+          <span aria-label="Writing" className="block h-6">
+            <span className="stream-cursor" />
+          </span>
+        ) : (
+          <Waiting model={info?.short ?? m.model ?? "the model"} />
+        )
       ) : null}
       {!m.streaming && m.content.suggestions ? <SearchSuggestions html={m.content.suggestions} /> : null}
       {m.content.notice ? <p className="text-[14px] text-mute">{m.content.notice}</p> : null}
@@ -1204,7 +1209,7 @@ function Composer({
           onClick={() => picker.current?.click()}
           disabled={disabled}
           aria-label="Attach photos or files"
-          className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
+          className="press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
         >
           <PaperclipIcon />
         </button>
@@ -1215,7 +1220,7 @@ function Composer({
           aria-pressed={search}
           aria-label="Search the web"
           title={!searchable ? "This model can't search the web" : search ? "Web search on: the model searches when it needs to" : "Web search off"}
-          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${search ? "text-fg" : "text-faint"}`}
+          className={`press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${search ? "text-fg" : "text-faint"}`}
         >
           {search ? <GlobeIcon /> : <GlobeOffIcon />}
         </button>
@@ -1226,7 +1231,7 @@ function Composer({
           aria-pressed={deep}
           aria-label="Deep research"
           title={!deepable ? "This model can't do deep research" : deep ? "Deep research on for this message" : "Deep research: a long report with sources"}
-          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${deep ? "bg-inv text-on-inv" : "text-faint hover:text-fg"}`}
+          className={`press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${deep ? "bg-inv text-on-inv" : "text-faint hover:text-fg"}`}
         >
           <ResearchIcon />
         </button>
@@ -1251,7 +1256,7 @@ function Composer({
           placeholder={hint}
           aria-label="Message Depeche"
           disabled={disabled}
-          className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
+          className="composer-input max-h-[220px] min-h-[44px] min-w-0 flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
         />
         {voice ? <DictateButton onText={onDictated} onError={onVoiceError} disabled={disabled} /> : null}
         {busy ? (

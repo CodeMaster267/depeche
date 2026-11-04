@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Wordmark } from "@/components/Wordmark";
-import { NavLink } from "@/components/Press";
 import { GlassCode } from "@/components/Glass";
 import { listArchived } from "@/app/c/actions";
 import type { ChatRow } from "@/lib/chat/thread";
 import { searchChats } from "@/app/c/actions";
 import { marked, type ChatHit } from "@/lib/chat/find";
 import { ChatMenu } from "./ChatMenu";
+import { AccountMenu } from "./AccountMenu";
 import { ArchiveIcon, BackIcon, CloseIcon, PlusIcon, SearchIcon } from "./icons";
 import { Shortcuts } from "@/components/design/Look";
 
@@ -88,7 +88,6 @@ export function Sidebar({
     onChatChange(next);
     if (showArchived) setArchived((list) => (list ?? []).flatMap((c) => (c.id !== next.id ? [c] : next.archived_at ? [next] : [])));
   };
-  const share = cap > 0 ? Math.min(1, spent / cap) : 1;
 
   return (
     <nav aria-label="Chats" data-part="sidebar" className="flex h-full flex-col gap-4 px-4" style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}>
@@ -236,36 +235,14 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="flex flex-col gap-3 border-t border-line pb-4 pt-4" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
-        <div className="flex items-center gap-3 px-2">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-inv text-[15px] font-semibold text-on-inv">
-            {name.slice(0, 1).toUpperCase()}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[16px]">{name}</span>
-            <span className="mt-1 flex flex-wrap gap-2 whitespace-nowrap text-[14px]">
-              {isAdmin ? <NavLink href="/family">Family</NavLink> : null}
-              {isAdmin ? <NavLink href="/health">Health</NavLink> : null}
-              <NavLink href="/memory">Memory</NavLink>
-              <NavLink href="/skills">Skills</NavLink>
-              <NavLink href="/account">Account</NavLink>
-              <NavLink href="/design">My look</NavLink>
-              <span data-part="report-link" className="contents">
-                <NavLink href={`/report?from=${encodeURIComponent(activeId ? `/c/${activeId}` : "/")}`}>Report a bug</NavLink>
-              </span>
-            </span>
-          </span>
-        </div>
-        <div className="px-2" data-testid="spending" data-part="spending">
-          <div className="h-1 overflow-hidden rounded-full bg-line">
-            <div className="h-full bg-fg" style={{ width: `${share * 100}%` }} />
-          </div>
-          <div className="mt-1.5 flex justify-between font-mono text-[12px] text-mute">
-            <span>${spent.toFixed(2)} this month</span>
-            <span>limit ${cap.toFixed(0)}</span>
-          </div>
-        </div>
-      </div>
+      <AccountMenu
+        name={name}
+        isAdmin={isAdmin}
+        spent={spent}
+        cap={cap}
+        reportFrom={activeId ? `/c/${activeId}` : "/"}
+        onNavigate={onNavigate}
+      />
     </nav>
   );
 }
