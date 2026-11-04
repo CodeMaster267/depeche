@@ -901,6 +901,10 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   const quoted = q.includes("quote")
     ? [...(last?.text ?? "").matchAll(/<file name="([^"]+)">\n([\s\S]*?)\n<\/file>/g)].map((m) => `${m[1]} says: ${m[2].replace(/\s+/g, " ").slice(0, 120)}\n\n`).join("")
     : "";
+  // "my instructions" makes it repeat the personal instructions it was given, to test they arrive.
+  const told = q.includes("my instructions")
+    ? [...system.matchAll(/<(about_me|how_to_answer)>\n([\s\S]*?)\n<\/\1>/g)].map((m) => `${m[1] === "about_me" ? "About you" : "How to answer"}: ${m[2]}\n\n`).join("") || "No personal instructions.\n\n"
+    : "";
   // "make files" makes it write files to download, to test generated documents.
   const made = q.includes("make files") ? FAKE_FILES : "";
   // "next steps" makes it suggest follow-up questions, to test the follow-up buttons.
@@ -908,7 +912,7 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   // A question about part of an earlier answer says which part it was given, to test quoting.
   const about = /^About this part of your earlier answer:\n> (.*)/.exec(last?.text ?? "");
   const asked = about ? `You asked about "${about[1].slice(0, 60)}".\n\n` : "";
-  const reply = asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
+  const reply = asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

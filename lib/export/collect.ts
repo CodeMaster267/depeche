@@ -47,6 +47,12 @@ export async function collectData(db: SupabaseClient, userId: string, extra: Rec
   const memories = await all<ExportMemory>((a, b) =>
     db.from("memories").select("id, content, status, created_at, updated_at").eq("owner_id", userId).order("created_at").order("id").range(a, b),
   );
+  const { data: instructions, error: instructionsError } = await db
+    .from("personal_instructions")
+    .select("about_me, answer_style, enabled, updated_at")
+    .eq("owner_id", userId)
+    .maybeSingle<NonNullable<ExportData["instructions"]>>();
+  if (instructionsError) throw new Error(instructionsError.message);
   const usage = await all<ExportUsage>((a, b) =>
     db
       .from("usage_events")
@@ -61,7 +67,7 @@ export async function collectData(db: SupabaseClient, userId: string, extra: Rec
     .select("display_name, username, role, monthly_cap_usd, share_titles, keep_chats, last_model, created_at")
     .eq("id", userId)
     .maybeSingle();
-  return { exportedAt: new Date().toISOString(), profile: { ...extra, ...(profile ?? {}) }, chats, messages, memories, usage };
+  return { exportedAt: new Date().toISOString(), profile: { ...extra, ...(profile ?? {}) }, chats, messages, memories, usage, instructions };
 }
 
 /** The files the person's own messages point at, each downloaded once. Missing ones come back empty. */
