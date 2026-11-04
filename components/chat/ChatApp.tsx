@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
-import { canSearch, findModel } from "@/lib/ai/models";
+import { canSearch, findModel, type Model } from "@/lib/ai/models";
 import { latestLeaf, pathTo, titleFrom, versionsOf, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
 import { archiveChat, refreshChat, refreshShell, rememberModel } from "@/app/c/actions";
@@ -14,6 +14,8 @@ import type { FileRef } from "@/lib/chat/files";
 import { ACCEPT, AttachmentTray, useAttachments, type Pending } from "./Attachments";
 import { AskAboutSelection, CostButton, FollowUps, QuoteChip } from "./Extras";
 import { ModelPicker } from "./ModelPicker";
+import { Compare } from "./Compare";
+import { comparedWith } from "@/lib/chat/compare";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
 import { CanvasIcon, CanvasMessage, CanvasOpener, CanvasPane, useCanvas } from "./Canvas";
@@ -28,6 +30,18 @@ import { SOURCE_NAMES } from "@/lib/import/types";
 type Live = MessageRow & LiveActivity;
 
 const SEARCH_PREF = "depeche:web-search";
+
+type CompareTag = { id: string; slot: number };
+type RunOptions = {
+  /** Answer with this model instead of the one in the header (comparing). */
+  model?: Model;
+  /** The chat, when it was created by another reply a moment ago. */
+  chatId?: string;
+  /** Show this reply once it's written (false for the other models in a comparison). */
+  follow?: boolean;
+  /** Called once the server has saved the question. */
+  onStart?: (chatId: string, questionId: string) => void;
+};
 
 const draftId = () => `local-${Math.random().toString(36).slice(2)}`;
 
@@ -91,7 +105,11 @@ export function ChatApp({
   };
   const [voiceOpen, setVoiceOpen] = useState(false);
   const attachments = useAttachments(initialShell.userId);
-  const abortRef = useRef<AbortController | null>(null);
+  // Replies being written right now: one, or two or three when comparing models.
+  const aborts = useRef(new Set<AbortController>());
+  const stopAll = () => aborts.current.forEach((a) => a.abort());
+  // Models chosen to answer the next message side by side (none: just the model in the header).
+  const [compareIds, setCompareIds] = useState<string[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
   const writing = messages.find((m) => m.streaming);
@@ -99,6 +117,7 @@ export function ChatApp({
   const canvas = useCanvas(chat?.id ?? null, writing ? (writing.content.text ?? "") : null, lastReply?.content.text ?? null);
 
   const model = findModel(modelId);
+  const selected = model;
   // DeepSeek and some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
   const searchable = canSearch(model);
   const noModels = shell.modelIds.length === 0;
@@ -113,13 +132,13 @@ export function ChatApp({
 
   // Another device may have added chats or replies: catch up whenever the app comes back.
   const sync = useCallback(async () => {
-    if (abortRef.current) return;
+    if (aborts.current.size) return;
     const next = await refreshShell().catch(() => null);
     if (next) setShell(next);
     canvas.refresh();
     if (chat) {
       const found = await refreshChat(chat.id).catch(() => null);
-      if (found && !abortRef.current) {
+      if (found && !aborts.current.size) {
         setChat(found.chat);
         const all = found.all ?? found.messages;
         setTree(all);
@@ -141,17 +160,21 @@ export function ChatApp({
 
   const pickModel = (id: string) => {
     setModelId(id);
+    setCompareIds([]);
     setPicking(false);
     rememberModel(id).catch(() => {});
   };
 
   async function run(
-    body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean; parent?: string | null; quote?: string },
+    body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean; parent?: string | null; quote?: string; compare?: CompareTag },
     optimistic: Live[],
+    opts: RunOptions = {},
   ) {
+    const model = opts.model ?? selected;
     if (!model) return;
+    const follow = opts.follow ?? true;
     const before = leaf;
-    setBanner(null);
+    if (follow) setBanner(null);
     setBusy(true);
     pinnedToBottom.current = true;
     const replyId = draftId();
@@ -160,19 +183,19 @@ export function ChatApp({
       chat_id: chat?.id ?? "",
       parent_id: optimistic[0]?.id ?? body.regenerate ?? null,
       role: "assistant",
-      content: { text: "" },
+      content: body.compare ? { text: "", compare: body.compare } : { text: "" },
       status: "streaming",
       model: model.id,
       created_at: new Date().toISOString(),
       streaming: true,
     };
     setTree((m) => [...m, ...optimistic, placeholder]);
-    setLeaf(replyId);
+    if (follow) setLeaf(replyId);
     const abort = new AbortController();
-    abortRef.current = abort;
+    aborts.current.add(abort);
     const patchReply = (fn: (m: Live) => Live) => setTree((list) => list.map((m) => (m.id === replyId ? fn(m) : m)));
 
-    let chatId = chat?.id ?? null;
+    let chatId = opts.chatId ?? chat?.id ?? null;
     try {
       // The person's canvas edits are saved first, so the AI works on what they see.
       const open = await canvas.beforeSend();
@@ -184,6 +207,11 @@ export function ChatApp({
       });
       if (!res.ok || !res.body) {
         const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!follow) {
+          // Another model in a comparison: its pane says why (often the monthly limit).
+          patchReply((m) => ({ ...m, streaming: false, status: "failed", content: { ...m.content, error: error ?? "Couldn't answer. Try again." } }));
+          return;
+        }
         // Nothing was sent: take the message back off the screen and return it to the box.
         setTree((list) => list.filter((m) => m.id !== replyId && !optimistic.some((o) => o.id === m.id)));
         setLeaf(before);
@@ -245,6 +273,7 @@ export function ChatApp({
                 list.map((m) => (m.id === local ? real : m.id === replyId ? { ...m, parent_id: real.id, chat_id: real.chat_id } : m)),
               );
             }
+            opts.onStart?.(ev.chatId, ev.userMessage.id);
           } else if (ev.type === "text") {
             pending += ev.text;
             if (!frame) frame = requestAnimationFrame(flush);
@@ -277,7 +306,8 @@ export function ChatApp({
             const saved = ev.message;
             if (saved) {
               setTree((list) => list.map((m) => (m.id === replyId ? saved : m)));
-              setLeaf(saved.id);
+              if (follow) setLeaf(saved.id);
+              else setLeaf((l) => (l === replyId ? saved.id : l));
               setShell((s) => ({ ...s, spent: s.spent + Number(saved.content.cost ?? 0) }));
             } else patchReply((m) => ({ ...m, streaming: false, status: "failed", content: { ...m.content, error: ev.error } }));
           }
@@ -294,8 +324,8 @@ export function ChatApp({
         setTimeout(() => sync(), 2500);
       }
     } finally {
-      abortRef.current = null;
-      setBusy(false);
+      aborts.current.delete(abort);
+      if (!aborts.current.size) setBusy(false);
       setShell((s) => ({
         ...s,
         chats: s.chats
@@ -329,6 +359,24 @@ export function ChatApp({
       model: null,
       created_at: new Date().toISOString(),
     };
+    const others = compareIds.map((id) => findModel(id)).filter((m): m is Model => !!m && shell.modelIds.includes(m.id));
+    if (!voice && others.length >= 2) {
+      // Comparing: the first model answers the message as usual; once it's saved, the others answer
+      // the same message. Each is its own request with its own spending hold.
+      const group = crypto.randomUUID();
+      const [first, ...rest] = others;
+      setCompareIds([]);
+      // The first model's answer is the one carried on from unless another is picked.
+      setModelId(first.id);
+      run({ text, ...(files.length ? { files } : {}), ...(quote ? { quote } : {}), ...after, compare: { id: group, slot: 0 } }, [mine], {
+        model: first,
+        onStart: (chatId, questionId) =>
+          rest.forEach((m, i) =>
+            run({ regenerate: questionId, compare: { id: group, slot: i + 1 } }, [], { model: m, chatId, follow: false }),
+          ),
+      });
+      return;
+    }
     run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}), ...(quote ? { quote } : {}), ...after }, [mine]);
   };
 
@@ -356,6 +404,24 @@ export function ChatApp({
     if (busy) return;
     pinnedToBottom.current = false;
     setLeaf(latestLeaf(tree, id));
+  };
+
+  /** Continue the conversation from one model's answer, and keep using that model. */
+  const choose = (reply: MessageRow) => {
+    showVersion(reply.id);
+    if (reply.model && shell.modelIds.includes(reply.model)) {
+      setModelId(reply.model);
+      rememberModel(reply.model).catch(() => {});
+    }
+  };
+
+  /** Ask one model in a comparison again (after a failure, say), keeping its place. */
+  const retryCompared = (reply: MessageRow) => {
+    if (busy || !reply.parent_id || !reply.content.compare) return;
+    run({ regenerate: reply.parent_id, compare: reply.content.compare }, [], {
+      model: findModel(reply.model) ?? undefined,
+      follow: reply.id === leaf || messages.some((m) => m.id === reply.id),
+    });
   };
 
   const regenerate = (questionId: string) => {
@@ -436,9 +502,9 @@ export function ChatApp({
                 type="button"
                 onClick={() => setPicking(true)}
                 className="press flex items-center gap-1 text-[14px] text-mute md:rounded-full md:border md:border-line md:px-3.5 md:py-1.5 md:text-fg"
-                aria-label={`Model: ${model.name}. Change model`}
+                aria-label={compareIds.length ? `Comparing ${compareIds.length} models. Change models` : `Model: ${model.name}. Change model`}
               >
-                {model.name} <ChevronDownIcon />
+                {compareIds.length ? `Compare ${compareIds.length} models` : model.name} <ChevronDownIcon />
               </button>
             ) : null}
           </div>
@@ -529,6 +595,27 @@ export function ChatApp({
                   onEdit={(text) => edit(m, text)}
                   onPickVersion={showVersion}
                 />
+              ) : comparedWith(tree, m).length > 1 ? (
+                <Compare
+                  key={m.content.compare!.id}
+                  replies={comparedWith(tree, m)}
+                  chosenId={m.id}
+                  canChoose={!busy && m.id === messages.at(-1)?.id}
+                  onChoose={(id) => {
+                    const r = tree.find((x) => x.id === id);
+                    if (r) choose(r);
+                  }}
+                  renderReply={(r) => (
+                    <Reply
+                      message={r}
+                      canRegenerate={!busy && !!r.parent_id && !r.parent_id.startsWith("local-")}
+                      onRegenerate={() => retryCompared(r)}
+                      // Follow-ups carry on from the picked answer, so only it offers them.
+                      followUps={!busy && r.id === m.id && m.id === messages.at(-1)?.id ? r.content.followups : undefined}
+                      onFollowUp={(q) => sendText(q)}
+                    />
+                  )}
+                />
               ) : (
                 <CanvasMessage.Provider key={m.id} value={m.id.startsWith("local-") ? null : m.id}>
                   <Reply
@@ -548,6 +635,16 @@ export function ChatApp({
         </div>
 
         <div className="mx-auto w-full max-w-[760px] px-3 md:px-8" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
+          {compareIds.length ? (
+            <div data-testid="compare-chip" className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-line px-4 py-2 text-[14px]">
+              <span className="min-w-0 truncate">
+                Next message goes to {compareIds.map((id) => findModel(id)?.short ?? id).join(", ")}
+              </span>
+              <button type="button" className="shrink-0 text-mute underline underline-offset-4" onClick={() => setCompareIds([])}>
+                Cancel
+              </button>
+            </div>
+          ) : null}
           {banner ? (
             <p role="alert" className="mb-2 rounded-2xl border border-fg px-4 py-3 text-[15px]">
               {banner}
@@ -566,7 +663,7 @@ export function ChatApp({
             value={draft}
             onChange={setDraft}
             onSend={send}
-            onStop={() => abortRef.current?.abort()}
+            onStop={stopAll}
             busy={busy}
             disabled={!model}
             search={search && searchable}
@@ -602,11 +699,23 @@ export function ChatApp({
           busy={busy}
           banner={banner}
           onSend={(t) => sendText(t, true)}
-          onStop={() => abortRef.current?.abort()}
+          onStop={stopAll}
           onClose={() => setVoiceOpen(false)}
         />
       ) : null}
-      {picking ? <ModelPicker available={shell.modelIds} current={modelId} onPick={pickModel} onClose={() => setPicking(false)} /> : null}
+      {picking ? (
+        <ModelPicker
+          available={shell.modelIds}
+          current={modelId}
+          onPick={pickModel}
+          onClose={() => setPicking(false)}
+          comparing={compareIds}
+          onCompare={(ids) => {
+            setCompareIds(ids);
+            setPicking(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -17,6 +17,7 @@ import { MAX_QUERIES, MAX_REASONING_CHARS, thinkingClock } from "@/lib/chat/acti
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
 import { CANVAS_PROMPT_CHARS, fenceFor, withoutCanvasBlocks } from "@/lib/canvas";
 import { saveReplyCanvases } from "@/lib/chat/canvas";
+import { MAX_COMPARE } from "@/lib/chat/compare";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
 export const maxDuration = 300;
@@ -43,6 +44,8 @@ type Body = {
   canvasId?: string | null;
   /** The part of an earlier answer this message asks about. */
   quote?: unknown;
+  /** One of two or three models answering the same question side by side: the group and its place. */
+  compare?: { id?: unknown; slot?: unknown };
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -87,6 +90,7 @@ export async function POST(req: NextRequest) {
   if (body.canvasId && !UUID.test(body.canvasId)) return fail(404, "That canvas doesn't exist.");
   const parentGiven = "parent" in body && !body.regenerate;
   if (parentGiven && body.parent !== null && !UUID.test(String(body.parent))) return fail(404, "That message doesn't exist.");
+  const compare = compareTag(body.compare);
 
   const db = await supabaseServer();
   const admin = supabaseAdmin();
@@ -449,6 +453,7 @@ export async function POST(req: NextRequest) {
             ...(queries.length ? { queries } : {}),
             ...(lookups.length ? { lookups } : {}),
             ...(read.length ? { read } : {}),
+            ...(compare ? { compare } : {}),
             cost,
           },
           status,
@@ -510,6 +515,19 @@ export async function POST(req: NextRequest) {
       "x-accel-buffering": "no",
     },
   });
+}
+
+/**
+ * Comparing models: the browser sends the question to the first model, then asks the others to
+ * answer the same message (as a regenerate). Each request reserves and settles its own spending,
+ * so every model's cost counts toward the monthly limit. The tag only groups the replies on screen.
+ */
+function compareTag(raw: Body["compare"]): { id: string; slot: number } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { id, slot } = raw;
+  if (typeof id !== "string" || !UUID.test(id) || typeof slot !== "number" || !Number.isInteger(slot)) return null;
+  if (slot < 0 || slot >= MAX_COMPARE) return null;
+  return { id: id.toLowerCase(), slot };
 }
 
 /** About how many input tokens the pages from one web search add, erring high. */
