@@ -6,6 +6,16 @@ import { OWNER, noSidewaysScroll, signInWithPassword, watchErrors } from "./help
  * the stand-in AI (DEPECHE_FAKE_AI) accepts keys starting "test-" and streams a canned reply.
  */
 
+/**
+ * Safari sometimes refuses a navigation that starts while the page is still finishing its own (it
+ * says "WebKit encountered an internal error"), so the navigation is tried again.
+ */
+async function go(page: Page, url: string) {
+  await expect(async () => {
+    await page.goto(url, { timeout: 10_000 });
+  }).toPass({ timeout: 30_000 });
+}
+
 async function addKey(page: Page, id: string, name: string, hint: RegExp, models: string) {
   const row = page.getByTestId(`provider-${id}`);
   await expect(row.getByText(name, { exact: true })).toBeVisible();
@@ -20,18 +30,26 @@ async function addKey(page: Page, id: string, name: string, hint: RegExp, models
 }
 
 async function pick(page: Page, group: string, model: RegExp, label: RegExp) {
-  await page.getByRole("button", { name: /Change model/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Choose a model" });
-  await expect(dialog.getByText(group, { exact: true })).toBeVisible();
-  await dialog.getByRole("button", { name: model }).click();
-  await expect(page.getByRole("button", { name: label })).toBeVisible();
+  // Safari can take a tap before the page is ready for it; open the picker again if nothing happened.
+  await expect(async () => {
+    if (await page.getByRole("button", { name: label }).isVisible()) return;
+    const dialog = page.getByRole("dialog", { name: "Choose a model" });
+    if (!(await dialog.isVisible())) await page.getByRole("button", { name: /Change model/ }).click();
+    await expect(dialog.getByText(group, { exact: true })).toBeVisible({ timeout: 3_000 });
+    await dialog.getByRole("button", { name: model }).click();
+    await expect(page.getByRole("button", { name: label })).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
 }
 
 async function send(page: Page, text: string) {
+  const replies = page.getByTestId("reply");
+  const before = await replies.count();
   await page.getByLabel("Message Depeche").fill(text);
   await page.getByRole("button", { name: "Send" }).click();
-  const reply = page.getByTestId("reply").last();
-  await expect(reply).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
+  // Wait for this message's reply to appear and finish, not an earlier one.
+  await expect(replies).toHaveCount(before + 1, { timeout: 15_000 });
+  const reply = replies.last();
+  await expect(reply).not.toHaveAttribute("aria-busy", "true", { timeout: 20_000 });
   return reply;
 }
 
@@ -41,10 +59,11 @@ test.describe("DeepSeek and Grok", () => {
   test.beforeEach(async ({ page }) => {
     await signInWithPassword(page, OWNER.email, OWNER.password);
     await expect(page.getByRole("heading", { name: "Hi, Hasan." })).toBeVisible();
-    await page.goto("/family");
+    await go(page, "/family");
     await addKey(page, "deepseek", "DeepSeek", /No web search/, "Can use DeepSeek V4 Pro, DeepSeek Flash");
     await addKey(page, "xai", "xAI (Grok)", /Grok can search the web/, "Can use Grok 4.7, Grok 4.3");
-    await page.goto("/");
+    await go(page, "/");
+    await expect(page.getByLabel("Message Depeche")).toBeEditable();
   });
 
   test("DeepSeek answers, and the web search button is off while it's picked", async ({ page }) => {
@@ -66,7 +85,11 @@ test.describe("DeepSeek and Grok", () => {
     await pick(page, "xAI", /Grok 4\.7/, /Model: Grok 4\.7/);
     const globe = page.getByRole("button", { name: "Search the web" });
     await expect(globe).toBeEnabled();
-    if ((await globe.getAttribute("aria-pressed")) !== "true") await globe.click();
+    // The saved on/off choice loads after the page does, so keep tapping until it reads on.
+    await expect(async () => {
+      if ((await globe.getAttribute("aria-pressed")) !== "true") await globe.click();
+      await expect(globe).toHaveAttribute("aria-pressed", "true", { timeout: 2_000 });
+    }).toPass({ timeout: 15_000 });
     const reply = await send(page, `What's the latest? ${Date.now()}`);
     await expect(reply.locator("a.cite").first()).toHaveText("1");
     const sources = reply.getByTestId("sources");
