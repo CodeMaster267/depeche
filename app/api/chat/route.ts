@@ -7,11 +7,20 @@ import { MAX_SEARCHES, canLookUp, estimateCost, findModel, searchCost } from "@/
 import { ProviderError, fakeAi, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
 import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOfferChatSearch } from "@/lib/chat/search";
 import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
+import { personalInstructions, type PersonalInstructions } from "@/lib/chat/instructions";
 import { MAX_FILES_PER_MESSAGE, OFFICE_TYPES, UPLOAD_BUCKET, isFileRef, readAsText, type FileRef } from "@/lib/chat/files";
 import { documentText } from "@/lib/docs/read";
+import { FOLLOWUPS_CLOSE, FOLLOWUPS_OPEN, cleanQuote, followUpInstructions, parseFollowUps, tagFilter, withQuote } from "@/lib/chat/followups";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
+import { notifyIfAway } from "@/lib/push/notify";
+import { MAX_QUERIES, MAX_REASONING_CHARS, thinkingClock } from "@/lib/chat/activity";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
+import { CANVAS_PROMPT_CHARS, fenceFor, withoutCanvasBlocks } from "@/lib/canvas";
+import { saveReplyCanvases } from "@/lib/chat/canvas";
+import { pictureReply } from "./picture";
+import { MAX_COMPARE } from "@/lib/chat/compare";
+import { DESIGN_INSTRUCTIONS } from "@/lib/design/instructions";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
 export const maxDuration = 300;
@@ -25,10 +34,21 @@ type Body = {
   model?: string;
   /** Answer this existing message again instead of sending a new one. */
   regenerate?: string;
+  /**
+   * The message this one follows: the end of the conversation as shown, or, for an edit, the
+   * message before the one being edited (null when editing the first). Left out, the newest.
+   */
+  parent?: string | null;
   /** Let the model search the web when it needs to. */
   search?: boolean;
   /** Sent from voice chat: the reply will be read aloud. */
   voice?: boolean;
+  /** The canvas open beside the chat, if any; otherwise the chat's most recent canvas is used. */
+  canvasId?: string | null;
+  /** The part of an earlier answer this message asks about. */
+  quote?: unknown;
+  /** One of two or three models answering the same question side by side: the group and its place. */
+  compare?: { id?: unknown; slot?: unknown };
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -42,7 +62,7 @@ const FILE_BYTES_BUDGET = 30 * 1024 * 1024;
 /**
  * Sends a message and streams the reply as newline-separated JSON events:
  *   {type:"start", chatId, userMessageId}  {type:"text", text}  {type:"notice", text}
- *   {type:"searching", query?}  {type:"sources", sources}
+ *   {type:"thinking", text}  {type:"searching", query?}  {type:"sources", sources}
  *   {type:"done", message}  or  {type:"error", error, message}
  *
  * The person's own message is written with their session, so row-level security checks it. The
@@ -64,11 +84,16 @@ export async function POST(req: NextRequest) {
   if (files.length > MAX_FILES_PER_MESSAGE) return fail(400, `Attach up to ${MAX_FILES_PER_MESSAGE} files at a time.`);
   if (!files.every((f) => isFileRef(f, me.userId))) return fail(400, "One of those files can't be sent. Attach it again.");
   const fileRefs = files as FileRef[];
+  const quote = body.regenerate ? undefined : cleanQuote(body.quote);
   if (!body.regenerate && !text && !fileRefs.length) return fail(400, "Type a message first.");
   if (text.length > MAX_MESSAGE_CHARS) return fail(400, "That message is too long. Try splitting it up.");
   if (!body.regenerate && !UUID.test(body.clientRequestId ?? "")) return fail(400, "Something went wrong. Try again.");
   if (body.chatId && !UUID.test(body.chatId)) return fail(404, "That chat doesn't exist.");
   if (body.regenerate && !UUID.test(body.regenerate)) return fail(404, "That message doesn't exist.");
+  if (body.canvasId && !UUID.test(body.canvasId)) return fail(404, "That canvas doesn't exist.");
+  const parentGiven = "parent" in body && !body.regenerate;
+  if (parentGiven && body.parent !== null && !UUID.test(String(body.parent))) return fail(404, "That message doesn't exist.");
+  const compare = compareTag(body.compare);
 
   const db = await supabaseServer();
   const admin = supabaseAdmin();
@@ -91,6 +116,7 @@ export async function POST(req: NextRequest) {
   // The chat: an existing one of yours, or (once the spending hold is in place) a new one.
   let chatId = body.chatId ?? null;
   let all: MessageRow[] = [];
+  let canvas: OpenCanvas | null = null;
   if (chatId) {
     const { data: chat } = await db.from("chats").select("id").eq("id", chatId).eq("owner_id", me.userId).maybeSingle();
     if (!chat) return fail(404, "That chat doesn't exist.");
@@ -101,8 +127,20 @@ export async function POST(req: NextRequest) {
       .order("created_at")
       .returns<MessageRow[]>();
     all = existing ?? [];
-  } else if (body.regenerate) {
+    canvas = await currentCanvas(db, me.userId, chatId, body.canvasId ?? null);
+  } else if (body.regenerate || (parentGiven && body.parent)) {
     return fail(404, "That chat doesn't exist.");
+  }
+  // An edit or a reply to an earlier version must follow a message in this same chat.
+  if (parentGiven && body.parent && !all.some((m) => m.id === body.parent)) return fail(404, "That message doesn't exist.");
+
+  // Picture models make or edit a picture instead of writing a reply.
+  if (model.image) {
+    return pictureReply({
+      me, db, admin, model, apiKey, chatId, all, text, files: fileRefs,
+      clientRequestId: body.clientRequestId, regenerate: body.regenerate,
+      parent: parentGiven ? (body.parent ?? null) : undefined,
+    });
   }
 
   // The monthly limit is a hard one: reserve the most this reply could cost before anything is
@@ -117,13 +155,21 @@ export async function POST(req: NextRequest) {
     .order("updated_at", { ascending: false })
     .limit(MEMORY_PROMPT_LIMIT)
     .returns<{ content: string }[]>();
+  // Their personal instructions ("About you", "How should Depeche answer"), also read as them.
+  const { data: instructions } = await db
+    .from("personal_instructions")
+    .select("about_me, answer_style, enabled")
+    .eq("owner_id", me.userId)
+    .maybeSingle<PersonalInstructions>();
   const system = systemPrompt(
     me.profile.display_name,
     Boolean(body.voice),
     (remembered ?? []).map((m) => m.content),
+    instructions,
+    canvas,
   );
   let historyChars = 0;
-  const seen = [system, text];
+  const seen = [system, text, quote ?? ""];
   for (const m of [...all].reverse()) {
     const t = m.content.text ?? "";
     if (historyChars + t.length > HISTORY_CHARS + 50_000) break;
@@ -202,7 +248,7 @@ export async function POST(req: NextRequest) {
     }
     question = q;
   } else {
-    const parent = activePath(all).at(-1);
+    const parent = parentGiven ? (body.parent ? all.find((m) => m.id === body.parent) : undefined) : activePath(all).at(-1);
     const { data: inserted, error } = await db
       .from("messages")
       .insert({
@@ -210,7 +256,11 @@ export async function POST(req: NextRequest) {
         owner_id: me.userId,
         parent_id: parent?.id ?? null,
         role: "user",
-        content: fileRefs.length ? { text, files: fileRefs.map(({ path, name, mime, size }) => ({ path, name, mime, size })) } : { text },
+        content: {
+          text,
+          ...(fileRefs.length ? { files: fileRefs.map(({ path, name, mime, size }) => ({ path, name, mime, size })) } : {}),
+          ...(quote ? { quote } : {}),
+        },
         client_request_id: body.clientRequestId,
       })
       .select("id, chat_id, parent_id, role, content, status, model, created_at")
@@ -236,7 +286,13 @@ export async function POST(req: NextRequest) {
   let fileBudget = FILE_BYTES_BUDGET;
   const storage = supabaseAdmin().storage.from(UPLOAD_BUCKET);
   for (const m of [...path].reverse()) {
-    let t = m.content.text ?? "";
+    // Old canvas texts aren't sent again: the canvas as it is now is in the instructions.
+    let t =
+      m.role === "user"
+        ? withQuote(m.content.text ?? "", cleanQuote(m.content.quote))
+        : m.role === "assistant"
+          ? withoutCanvasBlocks(m.content.text ?? "")
+          : (m.content.text ?? "");
     const attached: TurnFile[] = [];
     if (m.role === "user") {
       for (const f of m.content.files ?? []) {
@@ -263,6 +319,10 @@ export async function POST(req: NextRequest) {
           attached.push({ name: f.name, mime: f.mime, data: Buffer.from(await blob.arrayBuffer()).toString("base64") });
         }
       }
+    }
+    // Pictures a picture model made are named, so a chat model knows they're there.
+    if (m.role === "assistant" && m.content.files?.length) {
+      t += `\n\n${m.content.files.map((f) => `[Made the picture "${f.name.replace(/"/g, "'")}".]`).join(" ")}`;
     }
     t = t.trim();
     if ((!t && !attached.length) || m.role === "system" || (m.role === "assistant" && m.status === "failed")) {
@@ -309,29 +369,47 @@ export async function POST(req: NextRequest) {
 
       let reply = "";
       const memory = memoryFilter();
+      const followups = tagFilter(FOLLOWUPS_OPEN, FOLLOWUPS_CLOSE);
       let used = model;
       let notice: string | undefined;
-      let usage: { input: number; output: number } | undefined;
+      let usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number } | undefined;
       let sources: Source[] = [];
       let searches = 0;
       let queried = 0;
       let suggestions = "";
+      let reasoning = "";
+      const clock = thinkingClock();
+      const queries: string[] = [];
+      const lookups: string[] = [];
+      // The files sent with the question, shown as "Read report.pdf".
+      const read = (question.content.files ?? []).filter((f) => isFileRef(f, me.userId)).map((f) => f.name.slice(0, 200));
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch })) {
-          if (ev.type === "text") {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch, cacheKey: finalChatId })) {
+          if (ev.type !== "thinking") clock.stopped();
+          if (ev.type === "thinking") {
+            clock.thinking();
+            if (reasoning.length < MAX_REASONING_CHARS) {
+              const add = ev.text.slice(0, MAX_REASONING_CHARS - reasoning.length);
+              reasoning += add;
+              send({ type: "thinking", text: add });
+            }
+          } else if (ev.type === "text") {
             // A suggested memory is taken out of the reply and offered separately.
-            const shown = memory.push(ev.text);
+            // So are follow-up questions, which are shown as buttons instead.
+            const shown = followups.push(memory.push(ev.text));
             if (shown) {
               reply += shown;
               send({ type: "text", text: shown });
             }
-          } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
+          } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output, cacheRead: ev.cacheRead, cacheWrite: ev.cacheWrite };
           else if (ev.type === "model") used = findModel(ev.id) ?? model;
           else if (ev.type === "searching") {
             // Looking back through this chat is free; only web searches have a fee.
             if (ev.query && ev.where !== "chat") queried++;
+            const list = ev.where === "chat" ? lookups : queries;
+            if (ev.query && list.length < MAX_QUERIES && !list.includes(ev.query)) list.push(ev.query);
             send(ev);
           }
           else if (ev.type === "sources") {
@@ -353,13 +431,16 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const tail = memory.end();
+      clock.stopped();
+      const tail = followups.push(memory.end()) + followups.end();
       if (tail) {
         reply += tail;
         send({ type: "text", text: tail });
       }
 
-      // Stopped replies have no usage report, so estimate about four characters per token.
+      // Stopped replies have no usage report, so estimate about four characters per token, all of it
+      // charged as uncached input.
+      const estimated = !usage;
       if (!usage) {
         const inputChars = turns.reduce((n, t) => n + t.text.length, system.length);
         usage = { input: status === "failed" ? 0 : Math.ceil(inputChars / 4), output: Math.ceil(reply.length / 4) };
@@ -367,7 +448,9 @@ export async function POST(req: NextRequest) {
       // A reply stopped mid-search gets no report, so count the searches seen instead (erring high).
       searches = Math.max(searches, queried);
       // Each web search has a fee on top of tokens, so it counts toward the monthly limit too.
-      const cost = estimateCost(used, usage.input, usage.output) + searchCost(used.provider, searches);
+      // Input read from the provider's prompt cache costs a fraction; input written to it a little more.
+      const cost =
+        estimateCost(used, usage.input, usage.output, { read: usage.cacheRead, write: usage.cacheWrite }) + searchCost(used.provider, searches);
 
       const { data: saved } = await admin
         .from("messages")
@@ -383,6 +466,18 @@ export async function POST(req: NextRequest) {
             ...(sources.length ? { sources } : {}),
             ...(searches ? { searches } : {}),
             ...(suggestions ? { suggestions } : {}),
+            ...(status === "completed" && parseFollowUps(followups.found).length ? { followups: parseFollowUps(followups.found) } : {}),
+            usage: {
+              input: usage.input,
+              output: usage.output,
+              ...(usage.cacheRead ? { cached: usage.cacheRead } : {}),
+              ...(estimated ? { estimated } : {}),
+            },
+            ...(reasoning.trim() ? { reasoning, thoughtMs: clock.ms } : {}),
+            ...(queries.length ? { queries } : {}),
+            ...(lookups.length ? { lookups } : {}),
+            ...(read.length ? { read } : {}),
+            ...(compare ? { compare } : {}),
             cost,
           },
           status,
@@ -403,9 +498,14 @@ export async function POST(req: NextRequest) {
           p_output: usage.output,
           p_cost: Number(cost.toFixed(6)),
         }),
-        admin.from("chats").update({ updated_at: now, model: model.id }).eq("id", finalChatId),
+        // Writing in an archived chat brings it back to the list.
+        admin.from("chats").update({ updated_at: now, model: model.id, archived_at: null }).eq("id", finalChatId),
         admin.from("profiles").update({ last_model: model.id }).eq("id", me.userId),
       ]);
+
+      // Canvases the reply wrote become the AI's new versions, kept even if the reply was stopped
+      // after the block was finished.
+      if (saved && reply) await saveReplyCanvases(admin, me.userId, finalChatId, saved.id, reply).catch(() => {});
 
       // A suggested memory waits for the person to keep or dismiss it; nothing is used until then.
       const fact = status === "completed" ? memory.suggestions[0] : undefined;
@@ -425,6 +525,10 @@ export async function POST(req: NextRequest) {
       } catch {
         // The browser already went away.
       }
+      // Left the app while this was being written? A notification says it's ready.
+      if (status !== "stopped" && UUID.test(body.clientRequestId ?? "")) {
+        await notifyIfAway(me.userId, body.clientRequestId!, finalChatId, status === "completed").catch(() => {});
+      }
       finished();
     },
     cancel() {
@@ -441,6 +545,19 @@ export async function POST(req: NextRequest) {
   });
 }
 
+/**
+ * Comparing models: the browser sends the question to the first model, then asks the others to
+ * answer the same message (as a regenerate). Each request reserves and settles its own spending,
+ * so every model's cost counts toward the monthly limit. The tag only groups the replies on screen.
+ */
+function compareTag(raw: Body["compare"]): { id: string; slot: number } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { id, slot } = raw;
+  if (typeof id !== "string" || !UUID.test(id) || typeof slot !== "number" || !Number.isInteger(slot)) return null;
+  if (slot < 0 || slot >= MAX_COMPARE) return null;
+  return { id: id.toLowerCase(), slot };
+}
+
 /** About how many input tokens the pages from one web search add, erring high. */
 const SEARCH_INPUT_TOKENS = 12_000;
 
@@ -452,17 +569,74 @@ const FILE_INSTRUCTIONS = [
   "Use a short file name without spaces. If the file contains ``` fences, open and close the file block with ```` instead. Only make a file when one is wanted, and keep remarks outside the block.",
 ].join(" ");
 
-function systemPrompt(name: string, voice: boolean, memories: string[]): string {
+/** How a model draws charts and analyses data (components/markdown/Chart.tsx and RunCode.tsx). */
+const CHART_INSTRUCTIONS = [
+  "When a chart would help, draw one with a ```chart code block holding JSON, for example",
+  '{"type":"bar","title":"Spending by month","x":["Jan","Feb","Mar"],"series":[{"name":"Food","values":[320,290,350]}],"yLabel":"£","format":{"prefix":"£"}}.',
+  'type is bar, line, area, scatter or pie; add "stacked":true or "horizontal":true for bars; scatter series give "points":[[x,y],…]; pie uses one series. Up to 8 series. The app draws it, so never write charts as images, SVG or HTML.',
+].join(" ");
+const CODE_INSTRUCTIONS = [
+  "To analyse an attached spreadsheet or CSV, or to calculate something exactly, write Python in a ```python run code block: it runs in the person's browser (Python 3.13 with pandas, numpy and matplotlib; no internet, no installing packages).",
+  "Attached files are in the current folder under their names (pd.read_csv(\"Sales.csv\"), pd.read_excel(\"Budget.xlsx\", sheet_name=…)). Print the results; call chart(df, x=\"Month\", y=[\"Total\"], type=\"line\") or chart({...same JSON as a chart block...}) for an interactive chart; matplotlib figures show too.",
+  "Results appear under the block when it runs, and the person can send them back to you: don't state numbers the code will work out; say briefly what it does. Use plain ```python (without run) for code that is only to read or copy.",
+].join(" ");
+
+
+type OpenCanvas = { title: string; content: string; byPerson: boolean };
+
+/** The canvas the model should work on: the one open beside the chat, or the chat's newest. */
+async function currentCanvas(db: Awaited<ReturnType<typeof supabaseServer>>, ownerId: string, chatId: string, wanted: string | null): Promise<OpenCanvas | null> {
+  let q = db.from("canvases").select("id, title").eq("chat_id", chatId).eq("owner_id", ownerId);
+  q = wanted ? q.eq("id", wanted) : q.order("updated_at", { ascending: false }).limit(1);
+  const { data: c } = await q.maybeSingle<{ id: string; title: string }>();
+  if (!c) return null;
+  const { data: v } = await db
+    .from("canvas_versions")
+    .select("content, author")
+    .eq("canvas_id", c.id)
+    .eq("owner_id", ownerId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ content: string; author: string }>();
+  return v ? { title: c.title, content: v.content.slice(0, CANVAS_PROMPT_CHARS), byPerson: v.author === "person" } : null;
+}
+
+/** How a model writes and changes a canvas (shown beside the chat by components/chat/Canvas.tsx). */
+const CANVAS_INSTRUCTIONS = (name: string) =>
+  [
+    `You also have a canvas: a pane beside the chat holding a document or code that you and ${name} both edit.`,
+    "Use it when asked to write or work on something meant to be refined: an essay, letter, speech, story, report, plan, CV, or a program or script longer than a few lines; or whenever the canvas is mentioned. Short answers stay in the chat.",
+    "To write a canvas, put the whole text in one fenced code block labelled canvas: and a short title without spaces: ```canvas:Wedding-speech for a document (written in Markdown), or a file name such as ```canvas:budget.py for code (the ending gives the language).",
+    "To change a canvas, write the whole updated text again in a block with exactly the same title; it replaces the old text, so never leave parts out or write placeholders like \"rest unchanged\". If the canvas contains ``` fences, open and close the block with ```` instead.",
+    "Outside the block, say in a sentence or two what you wrote or changed; don't repeat the canvas in the chat.",
+  ].join(" ");
+
+function canvasPrompt(name: string, c: OpenCanvas): string {
+  const fence = fenceFor(c.content);
+  return [
+    `This chat has the canvas "${c.title}".${c.byPerson ? ` ${name} has edited it since your last version.` : ""} Its current text is below; work from this text, not from earlier versions in the chat. Unless ${name} asks for a new canvas, changes go in a block titled exactly canvas:${c.title}.`,
+    // The closing fence ends its line, so hints added after the instructions stay outside it.
+    `${fence}canvas:${c.title}\n${c.content}\n${fence}\n`,
+  ].join("\n");
+}
+
+function systemPrompt(name: string, voice: boolean, memories: string[], instructions: PersonalInstructions | null, canvas: OpenCanvas | null = null): string {
   return [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
     memoryInstructions(name, memories),
+    personalInstructions(name, instructions),
     voice ? "" : FILE_INSTRUCTIONS,
+    voice ? "" : CHART_INSTRUCTIONS,
+    voice ? "" : CODE_INSTRUCTIONS,
+    voice ? "" : DESIGN_INSTRUCTIONS,
+    voice ? "" : CANVAS_INSTRUCTIONS(name),
+    voice ? "" : followUpInstructions(name),
     voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."
       : "",
   ]
     .filter(Boolean)
-    .join(" ");
+    .join(" ") + (canvas && !voice ? `\n\n${canvasPrompt(name, canvas)}` : "");
 }

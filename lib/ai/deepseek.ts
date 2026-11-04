@@ -7,8 +7,8 @@ import type { ReplyRequest, StreamEvent, Turn } from "@/lib/ai/providers";
 
 /**
  * DeepSeek, through its OpenAI-compatible Chat Completions API. Its models think before answering
- * (on by default); the thinking streams separately as `reasoning_content` and is kept out of the
- * reply. DeepSeek's API has no web search. Only Flash sees pictures, so it answers a message that
+ * (on by default); the thinking streams separately as `reasoning_content`, kept out of the
+ * reply and shown collapsed above it. DeepSeek's API has no web search. Only Flash sees pictures, so it answers a message that
  * has some; PDFs are turned into text here, as no DeepSeek model reads them.
  */
 
@@ -47,35 +47,44 @@ export async function* deepseekReply(req: ReplyRequest): AsyncGenerator<StreamEv
     { signal },
   );
 
-  let input = 0;
-  let output = 0;
+  let usage: ReturnType<typeof completionUsage> = { input: 0, output: 0 };
   let wroteText = false;
   let finish = "";
   for await (const chunk of stream) {
     const choice = chunk.choices?.[0];
+    // The thinking is shown collapsed above the reply, never inside it.
+    const thought = (choice?.delta as { reasoning_content?: string | null } | undefined)?.reasoning_content;
+    if (thought && req.think !== false) yield { type: "thinking", text: thought };
     const text = choice?.delta?.content;
     if (text) {
       wroteText = true;
       yield { type: "text", text };
     }
     if (choice?.finish_reason) finish = choice.finish_reason;
-    if (chunk.usage) ({ input, output } = completionUsage(chunk.usage));
+    if (chunk.usage) usage = completionUsage(chunk.usage);
   }
   if (!wroteText) yield { type: "notice", text: "The model sent back an empty reply. Try again." };
   if (finish === "length") yield { type: "notice", text: "The reply hit its length limit." };
   if (finish === "content_filter") yield { type: "notice", text: "DeepSeek stopped this reply with its content filter." };
   if (finish === "insufficient_system_resource") yield { type: "notice", text: "DeepSeek ran short of capacity and cut the reply off. Try again." };
-  yield { type: "usage", input, output };
+  yield { type: "usage", ...usage };
 }
 
 /**
  * Tokens used. Thinking is billed as output; it is part of completion_tokens on DeepSeek, but the
- * total is used as well so it is counted whichever way it's reported.
+ * total is used as well so it is counted whichever way it's reported. DeepSeek caches repeated
+ * prompts by itself and says how much of the input was a cache hit, which is billed far lower.
  */
-export function completionUsage(u: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }): { input: number; output: number } {
+export function completionUsage(u: {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  prompt_cache_hit_tokens?: number;
+}): { input: number; output: number; cacheRead?: number } {
   const input = u.prompt_tokens ?? 0;
   const output = Math.max(u.completion_tokens ?? 0, (u.total_tokens ?? 0) - input);
-  return { input, output };
+  const cacheRead = Math.min(Math.max(0, u.prompt_cache_hit_tokens ?? 0), input);
+  return cacheRead ? { input, output, cacheRead } : { input, output };
 }
 
 /** The conversation in DeepSeek's format. Pictures in the newest message go to Flash; the rest are named. */
