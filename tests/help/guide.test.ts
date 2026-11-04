@@ -79,7 +79,7 @@ describe("Concierge", () => {
     name: "Bea", role: "member", isOwner: false, providers: [], models: [], spent: 1.5, cap: 10, ...over,
   });
 
-  it("asks Claude Haiku first, then cheap models the family has, never Groq", () => {
+  it("asks Claude Haiku first, then cheap models the family has", () => {
     expect(CONCIERGE_MODELS[0]).toBe("claude-haiku-5-5");
     for (const id of CONCIERGE_MODELS) expect(MODELS.some((m) => m.id === id)).toBe(true);
     expect(conciergeModels([{ provider: "anthropic" }, { provider: "openai" }]).map((m) => m.id)).toEqual(["claude-haiku-5-5", "gpt-6-luna"]);

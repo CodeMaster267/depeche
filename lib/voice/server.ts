@@ -33,7 +33,7 @@ export async function prepare(kind: "listen" | "speak"): Promise<Ready | NextRes
     return fail(
       400,
       kind === "listen"
-        ? "Voice needs a Google or OpenAI key. Ask your family admin to add one in Family settings."
+        ? "Voice needs a Groq, Google or OpenAI key. Ask your family admin to add one in Family settings."
         : "Reading aloud needs a Google or OpenAI key.",
     );
   }

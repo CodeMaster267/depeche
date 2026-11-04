@@ -4,13 +4,13 @@ vi.mock("server-only", () => ({}));
 const { voiceProviders, toPcm } = await import("@/lib/voice/speech");
 
 describe("voiceProviders", () => {
-  it("listens with OpenAI first, then Google", () => {
-    expect(voiceProviders(["google", "openai", "anthropic"]).listen).toEqual(["openai", "google"]);
+  it("listens with Groq's free Whisper first, then OpenAI, then Google", () => {
+    expect(voiceProviders(["google", "groq", "openai", "anthropic"]).listen).toEqual(["groq", "openai", "google"]);
     expect(voiceProviders(["google"]).listen).toEqual(["google"]);
   });
-  it("speaks with Gemini, then OpenAI; Claude has no voice here", () => {
-    expect(voiceProviders(["openai", "google"]).speak).toEqual(["google", "openai"]);
-    expect(voiceProviders(["anthropic", "groq"]).speak).toEqual([]);
+  it("speaks with Gemini, then OpenAI; Groq and Claude have no voice here", () => {
+    expect(voiceProviders(["groq", "openai", "google"]).speak).toEqual(["google", "openai"]);
+    expect(voiceProviders(["groq", "anthropic"]).speak).toEqual([]);
   });
 });
 

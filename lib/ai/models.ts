@@ -6,7 +6,7 @@
  *
  * A model only appears for a family once its admin has added that provider's key.
  */
-export type Provider = "anthropic" | "openai" | "google" | "deepseek" | "xai";
+export type Provider = "anthropic" | "openai" | "google" | "groq" | "deepseek" | "xai";
 
 export type Model = {
   id: string;
@@ -58,6 +58,12 @@ export const PROVIDERS: { id: Provider; name: string; keyUrl: string; keyHint: s
   { id: "openai", name: "OpenAI (GPT)", keyUrl: "https://platform.openai.com/api-keys", keyHint: "Starts with sk-" },
   { id: "google", name: "Google (Gemini)", keyUrl: "https://aistudio.google.com/apikey", keyHint: "Starts with AIza. Free keys work for testing, but Google may use free-tier chats to improve its products." },
   {
+    id: "groq",
+    name: "Groq (open models)",
+    keyUrl: "https://console.groq.com/keys",
+    keyHint: "Starts with gsk_. The free tier works but is rate-limited (about 30 messages a minute and 1,000 a day per model, and short chats only). Groq handles data under its own terms.",
+  },
+  {
     id: "deepseek",
     name: "DeepSeek",
     keyUrl: "https://platform.deepseek.com/api_keys",
@@ -76,7 +82,8 @@ export const PROVIDERS: { id: Provider; name: string; keyUrl: string; keyHint: s
  * charges 1.25x input to write the cache for 5 minutes and reads at 0.1x (0.05x on Opus 5.5, 0.025x
  * on Fable 5.1). OpenAI's GPT-6 models cache by themselves: writes 1.25x for 30 minutes, reads 0.1x
  * (0.05x on Sol and Terra). Gemini, DeepSeek and Grok cache by themselves with no write fee; their
- * reads are the listed cached-input prices divided by the input price.
+ * reads are the listed cached-input prices divided by the input price. Groq's are left at full
+ * price (it's for testing only), which errs high.
  */
 export const MODELS: Model[] = [
   // Haiku 5.5's prices rise to $0.50 / $2.50 for requests with over 100,000 input tokens.
@@ -91,6 +98,11 @@ export const MODELS: Model[] = [
   { id: "gemini-4-argon", provider: "google", name: "Gemini 4 Argon", short: "Gemini 4 Argon", tags: ["Most capable", "Long context"], price: { input: 4, output: 20, cache: { read: 0.05, write: 1 } } },
   { id: "gemini-3.8-flash", provider: "google", name: "Gemini 3.8 Flash", short: "Gemini 3.8 Flash", tags: ["Fast"], price: { input: 1.5, output: 7.5, cache: { read: 0.1, write: 1 } } },
   { id: "gemini-3.5-flash-lite", provider: "google", name: "Gemini 3.5 Flash-Lite", short: "Flash-Lite", tags: ["Fastest"], price: { input: 0.3, output: 2.5, cache: { read: 0.1, write: 1 } } },
+  // Groq's free tier costs nothing but is rate-limited. Depeche can't tell a free key from a paid
+  // one, so its paid prices are used and limits err high, as with free Gemini keys.
+  { id: "openai/gpt-oss-120b", provider: "groq", name: "GPT-OSS 120B (Groq)", short: "GPT-OSS 120B", tags: ["Smart", "Free tier"], price: { input: 0.15, output: 0.6 } },
+  { id: "openai/gpt-oss-20b", provider: "groq", name: "GPT-OSS 20B (Groq)", short: "GPT-OSS 20B", tags: ["Fastest", "Free tier"], price: { input: 0.075, output: 0.3 } },
+  { id: "qwen/qwen3.8-27b", provider: "groq", name: "Qwen 3.8 27B (Groq)", short: "Qwen 3.8 27B", tags: ["Preview", "Free tier"], price: { input: 0.8, output: 4 } },
   // DeepSeek charges double at busy times (weekday mornings UTC); the busy-time price is used so
   // limits err high. Flash sees pictures; Pro doesn't, so Flash answers messages with pictures.
   { id: "deepseek-v4-pro", provider: "deepseek", name: "DeepSeek V4 Pro", short: "DeepSeek V4 Pro", tags: ["Smart", "Long context"], price: { input: 1.32, output: 3.96, cache: { read: 1 / 30, write: 1 } } },
@@ -116,7 +128,7 @@ export const MODELS: Model[] = [
 export const isImageModel = (m: Pick<Model, "image"> | undefined | null): boolean => !!m?.image;
 
 /** What a new person starts with, if their family has the provider. */
-export const PREFERRED_DEFAULTS = ["claude-sonnet-5-5", "gpt-6.1-sol", "gemini-3.8-flash", "grok-4.7", "deepseek-v4-pro"];
+export const PREFERRED_DEFAULTS = ["claude-sonnet-5-5", "gpt-6.1-sol", "gemini-3.8-flash", "openai/gpt-oss-120b", "grok-4.7", "deepseek-v4-pro"];
 
 export function findModel(id: string | null | undefined): Model | undefined {
   return MODELS.find((m) => m.id === id);
@@ -178,25 +190,29 @@ export function chooseDefault(available: Model[], last?: string | null): Model |
  * ignored so estimates err high. The pages a search reads are billed as ordinary input tokens,
  * which the providers already include in their usage reports.
  */
-export const SEARCH_PRICE: Record<Provider, number> = { anthropic: 0.01, openai: 0.01, google: 0.014, deepseek: 0, xai: 0.005 };
+export const SEARCH_PRICE: Record<Provider, number> = { anthropic: 0.01, openai: 0.01, google: 0.014, groq: 0.005, deepseek: 0, xai: 0.005 };
 
 /**
- * Whether Depeche lets this model search the web. DeepSeek's API has no web search. xAI's Grok searches with its web_search tool at $5 per 1,000 searches.
+ * Whether Depeche lets this model search the web. On Groq only the GPT-OSS models can, with Groq's
+ * browser search ($5 per 1,000 searches on a paid plan; a free key isn't billed, but the fee is still
+ * counted so limits err high). Groq retired its Compound search models in October 2026. DeepSeek's
+ * API has no web search. xAI's Grok searches with its web_search tool at $5 per 1,000 searches.
  */
 export function canSearch(model: Pick<Model, "id" | "provider" | "image"> | undefined): boolean {
   if (!model) return true;
-  return model.provider !== "deepseek" && !isImageModel(model);
+  if (model.provider === "deepseek" || isImageModel(model)) return false;
+  return model.provider !== "groq" || model.id.startsWith("openai/gpt-oss");
 }
 
 /**
- * Whether Depeche gives this provider's models the "search this chat" tool. DeepSeek and xAI don't
- * have it wired up yet.
+ * Whether Depeche gives this provider's models the "search this chat" tool. Groq's free tier is too
+ * small for the extra requests, and DeepSeek and xAI don't have it wired up yet.
  */
 export function canLookUp(provider: Provider): boolean {
-  return provider !== "deepseek" && provider !== "xai";
+  return provider !== "groq" && provider !== "deepseek" && provider !== "xai";
 }
 
-export const PROVIDER_NAME: Record<Provider, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google", deepseek: "DeepSeek", xai: "xAI" };
+export const PROVIDER_NAME: Record<Provider, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google", groq: "Groq", deepseek: "DeepSeek", xai: "xAI" };
 
 /** The most searches one reply may run, which bounds what a single reply's searching can cost. */
 export const MAX_SEARCHES = 5;

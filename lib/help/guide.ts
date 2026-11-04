@@ -315,7 +315,7 @@ export function modelsTopic(): Topic {
     title: "Models and AI keys",
     text: `
 Depeche works with these AI companies (${PROVIDERS.map((p) => PROVIDER_NAME[p.id]).join(", ")}). A model shows up only once
-the family admin has added that company's key in [Family → AI providers](/family#ai-providers). Groq is no longer offered.
+the family admin has added that company's key in [Family → AI providers](/family#ai-providers).
 Prices are what the company charges per million tokens (about 750,000 words); a typical short question and answer is a
 fraction of a cent on cheap models.
 ${lines.join("\n")}`,
