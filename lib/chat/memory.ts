@@ -73,14 +73,21 @@ function partialSuffix(text: string, tag: string): number {
   return 0;
 }
 
+/** A remembered fact, and who it's about ("me", "dad", "brother Ali"), when known. */
+export type RememberedFact = { content: string; about?: string | null };
+
 /** What the model is told about memory: the person's saved facts, and when to suggest one. */
-export function memoryInstructions(name: string, memories: string[]): string {
-  const known = memories.length
-    ? `Things ${name} asked you to remember about them (use them when relevant, without mentioning this list): ${memories.map((m) => `- ${m}`).join(" ")}`
+export function memoryInstructions(name: string, memories: (string | RememberedFact)[]): string {
+  const facts = memories.map((m) => (typeof m === "string" ? { content: m } : m));
+  const label = (about: string | null | undefined) => (!about ? "" : about === "me" ? `[${name}] ` : `[${name}'s ${about}] `);
+  const known = facts.length
+    ? `Things ${name} asked you to remember (use them when relevant, without mentioning this list). The label in brackets says who each one is about; never apply a fact about one person to another: ${facts.map((m) => `- ${label(m.about)}${m.content}`).join(" ")}`
     : "";
   const suggest = [
-    `Very rarely, when ${name} tells you a clear, lasting fact about themselves or their life that would help in future chats (like family members' names, where they live, their job, a dietary need, a long-term goal, or how they like answers written), you may suggest remembering it by ending your reply with one line: ${MEMORY_TAG_OPEN}the fact, in the third person${MEMORY_TAG_CLOSE}.`,
-    `Do the same if they ask you to remember something. Never suggest one-off details, things about the current task, guesses, anything already remembered, or sensitive details (health, money, passwords) unless they ask. Most replies should not have one, and never more than one.`,
+    `Very rarely, when ${name} tells you a clear, lasting fact about themselves or their life that would help in future chats (like family members' names, where they live, their job, a dietary need, a long-term goal, or how they like answers written), you may suggest remembering it by ending your reply with one line: ${MEMORY_TAG_OPEN}the fact${MEMORY_TAG_CLOSE}.`,
+    `Write the fact as one sentence that names exactly who it is about, using ${name}'s name (like "${name}'s brother Ali is 19" or "${name} is vegetarian", never "He is 19"), and only about the person ${name} actually said.`,
+    `Do the same if they ask you to remember something, or if they correct something remembered (then suggest the corrected fact). If what they say seems to contradict something remembered, ask them which is right instead of assuming.`,
+    `Never suggest one-off details, things about the current task, guesses, anything already remembered, or sensitive details (health, money, passwords) unless they ask. Most replies should not have one, and never more than one.`,
   ].join(" ");
   return [known, suggest].filter(Boolean).join(" ");
 }

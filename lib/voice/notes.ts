@@ -7,7 +7,7 @@
  * family's speech provider, deletes it, and the transcript is attached as a text file.
  */
 export const VOICE_NOTE_BUCKET = "voice-notes";
-/** OpenAI's and Groq's limit for one recording is 25 MB. */
+/** OpenAI's limit for one recording is 25 MB. */
 export const MAX_VOICE_NOTE_BYTES = 25 * 1024 * 1024;
 /** Half an hour: long enough for a lecture or a meeting, short enough to write out in one go. */
 export const MAX_VOICE_NOTE_SECONDS = 30 * 60;
