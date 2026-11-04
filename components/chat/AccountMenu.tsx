@@ -3,7 +3,7 @@
 import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { BrushIcon, BugIcon, ChevronUpDownIcon, MemoryIcon, PeopleIcon, SkillsIcon, PersonIcon, PulseIcon } from "./icons";
+import { BrushIcon, BugIcon, ChevronUpDownIcon, MemoryIcon, PeopleIcon, SkillsIcon, PersonIcon, PulseIcon, SparkIcon } from "./icons";
 
 /** A thin bar under the row while its page loads, like the header links. */
 function Pending() {
@@ -92,6 +92,9 @@ export function AccountMenu({
           <nav aria-label="Your pages" className="flex flex-col">
             <Item href="/memory" icon={<MemoryIcon />} onGo={go}>
               Memory
+            </Item>
+            <Item href="/assistants" icon={<SparkIcon />} onGo={go}>
+              Assistants
             </Item>
             <Item href="/skills" icon={<SkillsIcon />} onGo={go}>
               Skills

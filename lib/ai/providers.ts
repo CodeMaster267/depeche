@@ -1047,6 +1047,19 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch, ha
     (q.includes("make files") ? FAKE_FILES : "") +
     (q.includes("draw charts") ? FAKE_CHARTS : "") +
     (q.includes("analyse") ? FAKE_ANALYSIS.replace("{file}", seen.find((n) => /\.(csv|txt)$/i.test(n)) ?? "data.csv") : "");
+  // "project" makes it repeat what the chat's project gave it, to test projects reach the model.
+  const instructions = /<project_instructions>\n([\s\S]*?)\n<\/project_instructions>/.exec(system)?.[1];
+  const projectFiles = [
+    ...[...(/<project_files>([\s\S]*?)<\/project_files>/.exec(system)?.[1] ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1]),
+    ...(turns[0]?.files ?? []).map((f) => f.name),
+  ];
+  const fromProject = q.includes("project")
+    ? `Project instructions: ${instructions ?? "none"}. Project files: ${projectFiles.join(", ") || "none"}.\n\n`
+    : "";
+  // "assistant" does the same for a saved assistant.
+  const asAssistant = q.includes("assistant")
+    ? `Assistant: ${/In this chat you are "([^"]+)"/.exec(system)?.[1] ?? "none"}. Assistant instructions: ${/<assistant_instructions>\n([\s\S]*?)\n<\/assistant_instructions>/.exec(system)?.[1] ?? "none"}. Assistant files: ${[...(/<assistant_files>([\s\S]*?)<\/assistant_files>/.exec(system)?.[1] ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1]).join(", ") || "none"}.\n\n`
+    : "";
   // "tip calculator" builds an interactive tool, and "escape test" one that tries to get out of
   // its sealed frame, to test interactive tools.
   // "game gadget" builds one that asks an AI, lists the AIs and remembers, to test saved gadgets.
@@ -1094,7 +1107,7 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch, ha
   // "my first message" makes it repeat the conversation's first message, to test what history it got.
   const first = q.includes("my first message") ? `Your first message was: "${turns[0]?.text.split("\n")[0].slice(0, 80)}" (${turns.length} turns).\n\n` : "";
   // Says when it was asked to think harder, to test the switch reaches the model.
-  const reply = (harder ? "I thought harder about this.\n\n" : "") + first + asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + skilled + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
+  const reply = (harder ? "I thought harder about this.\n\n" : "") + first + asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + skilled + fromProject + asAssistant + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

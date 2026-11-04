@@ -64,6 +64,10 @@ export type ChatRow = {
   compaction?: "auto" | "off";
   /** Set while the chat is archived: out of the list until restored or written in. */
   archived_at?: string | null;
+  /** The project (folder) the chat is kept in, if any. */
+  project_id?: string | null;
+  /** The saved assistant the chat was started with, if any. */
+  assistant_id?: string | null;
   /** Set on chats brought in from another app's export. */
   imported_from?: "chatgpt" | "claude" | "gemini" | null;
   created_at?: string;

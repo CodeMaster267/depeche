@@ -10,6 +10,14 @@ import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions, type RememberedF
 import { personalInstructions, type PersonalInstructions } from "@/lib/chat/instructions";
 import { MAX_FILES_PER_MESSAGE, OFFICE_TYPES, UPLOAD_BUCKET, isFileRef, readAsText, type FileRef } from "@/lib/chat/files";
 import { documentText } from "@/lib/docs/read";
+import {
+  assistantContext,
+  assistantInstructions,
+  projectContext,
+  projectInstructions,
+  type AssistantContext,
+  type ProjectContext,
+} from "@/lib/chat/project-context";
 import { FOLLOWUPS_CLOSE, FOLLOWUPS_OPEN, cleanQuote, followUpInstructions, parseFollowUps, tagFilter, withQuote } from "@/lib/chat/followups";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
@@ -48,6 +56,10 @@ type Body = {
   search?: boolean;
   /** Sent from voice chat: the reply will be read aloud. */
   voice?: boolean;
+  /** Start the new chat inside this project of yours. */
+  projectId?: string | null;
+  /** Start the new chat with this saved assistant (yours, or one shared with your family). */
+  assistantId?: string | null;
   /**
    * A temporary chat: nothing is saved (no chat, no messages, no memories), so the browser sends
    * the conversation so far with each message. Only the cost is recorded, for the spending limit.
@@ -106,6 +118,8 @@ export async function POST(req: NextRequest) {
   if (!body.regenerate && !UUID.test(body.clientRequestId ?? "")) return fail(400, "Something went wrong. Try again.");
   if (body.chatId && !UUID.test(body.chatId)) return fail(404, "That chat doesn't exist.");
   if (body.regenerate && !UUID.test(body.regenerate)) return fail(404, "That message doesn't exist.");
+  if (body.projectId && !UUID.test(body.projectId)) return fail(404, "That project doesn't exist.");
+  if (body.assistantId && !UUID.test(body.assistantId)) return fail(404, "That assistant isn't available.");
   if (body.canvasId && !UUID.test(body.canvasId)) return fail(404, "That canvas doesn't exist.");
   const parentGiven = "parent" in body && !body.regenerate;
   if (parentGiven && body.parent !== null && !UUID.test(String(body.parent))) return fail(404, "That message doesn't exist.");
@@ -158,6 +172,10 @@ export async function POST(req: NextRequest) {
   // The chat: an existing one of yours, or (once the spending hold is in place) a new one.
   let chatId = body.chatId ?? null;
   let all: MessageRow[] = history;
+  // A chat in a project brings the project's instructions and files.
+  let projectId: string | null = chatId ? null : (body.projectId ?? null);
+  // So does a chat started with a saved assistant.
+  let assistantId: string | null = chatId ? null : (body.assistantId ?? null);
   let summaries: SummaryRow[] = [];
   // Temporary chats are never saved, so they are never summarised either.
   let compaction = !temporary;
@@ -165,11 +183,13 @@ export async function POST(req: NextRequest) {
   if (chatId) {
     const { data: chat } = await db
       .from("chats")
-      .select("id, compaction")
+      .select("id, compaction, project_id, assistant_id")
       .eq("id", chatId)
       .eq("owner_id", me.userId)
-      .maybeSingle<{ id: string; compaction: string }>();
+      .maybeSingle<{ id: string; compaction: string; project_id: string | null; assistant_id: string | null }>();
     if (!chat) return fail(404, "That chat doesn't exist.");
+    projectId = chat.project_id;
+    assistantId = chat.assistant_id;
     if (chat.compaction === "off") compaction = false;
     summaries = await loadSummaries(db, chatId);
     const { data: existing } = await db
@@ -219,6 +239,17 @@ export async function POST(req: NextRequest) {
     .select("about_me, answer_style, enabled")
     .eq("owner_id", me.userId)
     .maybeSingle<PersonalInstructions>();
+  let project: ProjectContext | null = null;
+  if (projectId) {
+    project = await projectContext(db, me.userId, projectId);
+    if (!project && !chatId) return fail(404, "That project doesn't exist.");
+  }
+  // An assistant no longer shared simply stops applying to chats already made with it.
+  let assistant: AssistantContext | null = null;
+  if (assistantId) {
+    assistant = await assistantContext(db, assistantId);
+    if (!assistant && !chatId) return fail(404, "That assistant isn't available.");
+  }
   // Skills from the person's own list that fit this message (or were used earlier in this chat).
   const asked = text || all.find((m) => m.id === body.regenerate)?.content.text || "";
   const skills = chooseSkills(await mySkills(db, me.userId), `${asked}\n${quote ?? ""}`, skillsUsedEarlier(activePath(all)));
@@ -227,6 +258,8 @@ export async function POST(req: NextRequest) {
     Boolean(body.voice),
     remembered ?? [],
     instructions,
+    project,
+    assistant,
     canvas,
     temporary,
   ) + (skills.length ? `\n\n${skillsPrompt(me.profile.display_name, skills)}` : "");
@@ -247,7 +280,15 @@ export async function POST(req: NextRequest) {
   // Attached files count too: text files as text, images and PDFs by size, erring high.
   let fileTokens = 0;
   let binaryBytes = 0;
-  for (const f of [...fileRefs, ...all.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : []))]) {
+  for (const f of [...fileRefs, ...all.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : [])), ...(project?.binaries ?? []), ...(assistant?.binaries ?? [])]) {
+    // A saved assistant's files are in its maker's folder.
+    if (assistant?.binaries.includes(f as FileRef)) {
+      if (binaryBytes + f.size <= FILE_BYTES_BUDGET) {
+        binaryBytes += f.size;
+        fileTokens += f.mime === "application/pdf" ? Math.ceil(f.size / 40) + 3_000 : 5_000;
+      }
+      continue;
+    }
     if (!isFileRef(f, me.userId)) continue;
     if (f.mime === "text/plain") fileTokens += Math.ceil(Math.min(f.size, 200_000) / 2);
     // Word, Excel and PowerPoint files are zipped, so their text can be several times their size.
@@ -301,7 +342,13 @@ export async function POST(req: NextRequest) {
   if (!chatId && !temporary) {
     const { data: chat, error } = await db
       .from("chats")
-      .insert({ owner_id: me.userId, title: titleFrom(text || fileRefs[0]?.name || ""), model: model.id })
+      .insert({
+        owner_id: me.userId,
+        title: titleFrom(text || fileRefs[0]?.name || ""),
+        model: model.id,
+        ...(projectId && project ? { project_id: projectId } : {}),
+        ...(assistantId && assistant ? { assistant_id: assistantId } : {}),
+      })
       .select("id")
       .single<{ id: string }>();
     if (error || !chat) {
@@ -386,7 +433,8 @@ export async function POST(req: NextRequest) {
   // Messages the model gets word for word (or that have nothing to send); the rest can be looked up.
   const sent = new Set<string>([question.id]);
   let trimmed = false;
-  let budget = model.context ? Math.min(HISTORY_CHARS, model.context * 3) : HISTORY_CHARS;
+  // Project and assistant files are sent every time, so they come out of the history's share.
+  let budget = (model.context ? Math.min(HISTORY_CHARS, model.context * 3) : HISTORY_CHARS) - (project?.text.length ?? 0) - (assistant?.text.length ?? 0);
   let fileBudget = FILE_BYTES_BUDGET;
   const storage = supabaseAdmin().storage.from(UPLOAD_BUCKET);
   for (const m of path.slice(applied ? applied.index + 1 : 0).reverse()) {
@@ -446,6 +494,19 @@ export async function POST(req: NextRequest) {
   }
   while (turns[0]?.role === "assistant") turns.shift();
   if (applied && turns[0]) turns[0] = { ...turns[0], text: `${summaryForModel(applied.summary)}\n\n${turns[0].text}` };
+  // The project's photos and PDFs go with the first message the model sees, within the same budget.
+  const contextFiles = [...(assistant?.binaries ?? []), ...(project?.binaries ?? [])];
+  if (contextFiles.length && turns[0]) {
+    const extra: TurnFile[] = [];
+    for (const f of contextFiles) {
+      if (fileBudget - f.size <= 0) continue;
+      const { data: blob } = await storage.download(f.path);
+      if (!blob) continue;
+      fileBudget -= f.size;
+      extra.push({ name: f.name, mime: f.mime, data: Buffer.from(await blob.arrayBuffer()).toString("base64") });
+    }
+    if (extra.length) turns[0] = { ...turns[0], files: [...extra, ...(turns[0].files ?? [])] };
+  }
   // The question itself is in front of the model, so a lookup searches everything before it,
   // summarised messages included.
   const earlier = path.filter((m) => m.id !== question.id);
@@ -748,8 +809,17 @@ function canvasPrompt(name: string, c: OpenCanvas): string {
   ].join("\n");
 }
 
-function systemPrompt(name: string, voice: boolean, memories: RememberedFact[], instructions: PersonalInstructions | null, canvas: OpenCanvas | null = null, temporary = false): string {
-  return [
+function systemPrompt(
+  name: string,
+  voice: boolean,
+  memories: RememberedFact[],
+  instructions: PersonalInstructions | null,
+  project: ProjectContext | null,
+  assistant: AssistantContext | null,
+  canvas: OpenCanvas | null = null,
+  temporary = false,
+): string {
+  const base = [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
@@ -770,4 +840,5 @@ function systemPrompt(name: string, voice: boolean, memories: RememberedFact[], 
   ]
     .filter(Boolean)
     .join(" ") + (canvas && !voice ? `\n\n${canvasPrompt(name, canvas)}` : "");
+  return [base, assistant ? assistantInstructions(assistant) : "", project ? projectInstructions(project) : ""].filter(Boolean).join("\n\n");
 }

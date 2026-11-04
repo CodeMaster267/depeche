@@ -153,6 +153,21 @@ export const BackIcon = (p: P) => (
     <path d="M15 5l-7 7 7 7" />
   </svg>
 );
+export const FolderIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M3.5 7.5a2 2 0 0 1 2-2h3.6l2 2.2h7.4a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
+  </svg>
+);
+export const FolderPlusIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M3.5 7.5a2 2 0 0 1 2-2h3.6l2 2.2h7.4a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2zM12 11v5M9.5 13.5h5" />
+  </svg>
+);
+export const SparkIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />
+  </svg>
+);
 export const EditIcon = (p: P) => (
   <svg {...base} {...p}>
     <path d="M14.5 5.5l4 4M4 20l1-5L15.5 4.5a1.4 1.4 0 0 1 2 0l2 2a1.4 1.4 0 0 1 0 2L9 19z" />

@@ -48,7 +48,7 @@ export async function listArchived(): Promise<ChatRow[]> {
   const me = await requireMe();
   const { data } = await (await supabaseServer())
     .from("chats")
-    .select("id, title, model, pinned, updated_at, archived_at")
+    .select("id, title, model, pinned, updated_at, archived_at, project_id, assistant_id")
     .eq("owner_id", me.userId)
     .not("archived_at", "is", null)
     .order("archived_at", { ascending: false })

@@ -4,8 +4,11 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { createPortal } from "react-dom";
 import { GlassCode } from "@/components/Glass";
 import { archiveChat, deleteChat, pinChat, renameChat, setCompaction } from "@/app/c/actions";
+import { moveChat } from "@/app/p/actions";
+import { cleanProjectName } from "@/lib/chat/projects";
+import { useProjects } from "./projects-context";
 import type { ChatRow } from "@/lib/chat/thread";
-import { MoreIcon } from "./icons";
+import { CheckIcon, FolderIcon, FolderPlusIcon, MoreIcon } from "./icons";
 import { ShareBody } from "./ShareSheet";
 
 const ITEM = "flex w-full items-center px-4 py-3 text-left text-[16px] hover:bg-soft focus-visible:bg-soft outline-none";
@@ -34,7 +37,8 @@ export function ChatMenu({
   label?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [sheet, setSheet] = useState<"rename" | "share" | "delete" | null>(null);
+  const [sheet, setSheet] = useState<"rename" | "share" | "delete" | "move" | null>(null);
+  const projects = useProjects();
   const [at, setAt] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -136,6 +140,11 @@ export function ChatMenu({
                 >
                   {archived ? "Restore" : "Archive"}
                 </button>
+                {projects ? (
+                  <button type="button" role="menuitem" className={ITEM} onClick={pick(() => setSheet("move"))}>
+                    {chat.project_id ? "Move to another project" : "Move to project"}
+                  </button>
+                ) : null}
                 {chat.compaction ? (
                   // Only for the open chat (the list doesn't load this setting).
                   <button
@@ -184,6 +193,18 @@ export function ChatMenu({
             if (title === chat.title) return;
             onChange({ ...chat, title });
             renameChat(chat.id, title).catch(() => {});
+          }}
+        />
+      ) : null}
+      {sheet === "move" && projects ? (
+        <MoveSheet
+          current={chat.project_id ?? null}
+          onClose={() => setSheet(null)}
+          onMove={(projectId) => {
+            setSheet(null);
+            if (projectId === (chat.project_id ?? null)) return;
+            onChange({ ...chat, project_id: projectId });
+            moveChat(chat.id, projectId).catch(() => {});
           }}
         />
       ) : null}
@@ -275,6 +296,76 @@ function RenameSheet({ title, onSave, onClose }: { title: string; onSave: (title
           </button>
         </div>
       </form>
+    </Sheet>
+  );
+}
+
+/** Pick the project to keep a chat in, make a new one for it, or take it out of its project. */
+function MoveSheet({ current, onMove, onClose }: { current: string | null; onMove: (projectId: string | null) => void; onClose: () => void }) {
+  const { projects, create } = useProjects()!;
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const row = "press flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left text-[16px] hover:bg-soft";
+  return (
+    <Sheet label="Move to project" onClose={onClose}>
+      <ul className="-mx-3 max-h-[46vh] overflow-y-auto overscroll-contain">
+        {projects.map((p) => (
+          <li key={p.id}>
+            <button type="button" className={row} onClick={() => onMove(p.id)} aria-current={p.id === current ? "true" : undefined}>
+              <FolderIcon className="shrink-0 text-mute" />
+              <span className="min-w-0 flex-1 truncate">{p.name}</span>
+              {p.id === current ? <CheckIcon className="shrink-0" /> : null}
+            </button>
+          </li>
+        ))}
+        {current ? (
+          <li>
+            <button type="button" className={`${row} text-mute`} onClick={() => onMove(null)}>
+              <span className="w-[22px] shrink-0" />
+              <span className="flex-1">Take out of project</span>
+            </button>
+          </li>
+        ) : null}
+      </ul>
+      {naming ? (
+        <form
+          className="mt-3"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            const clean = cleanProjectName(name);
+            if (!clean || busy) return;
+            setBusy(true);
+            const made = await create(clean).catch(() => null);
+            setBusy(false);
+            if (made) onMove(made.id);
+          }}
+        >
+          <input
+            autoFocus
+            value={name}
+            maxLength={100}
+            onChange={(e) => setName(e.target.value)}
+            aria-label="Project name"
+            placeholder="Project name"
+            enterKeyHint="done"
+            className="h-12 w-full rounded-2xl bg-soft px-4 text-[17px] outline-none placeholder:text-faint focus-visible:ring-1 focus-visible:ring-fg"
+          />
+          <button
+            type="submit"
+            disabled={!cleanProjectName(name) || busy}
+            className="press glass glass-pill mt-3 flex h-12 w-full items-center justify-center text-[16px] font-medium disabled:opacity-50"
+          >
+            <GlassCode seed="create and move" />
+            <span>{busy ? "Creating…" : "Create and move"}</span>
+          </button>
+        </form>
+      ) : (
+        <button type="button" className={`${row} -mx-3 mt-1 w-[calc(100%+1.5rem)]`} onClick={() => setNaming(true)}>
+          <FolderPlusIcon className="shrink-0" />
+          <span className="flex-1">New project</span>
+        </button>
+      )}
     </Sheet>
   );
 }

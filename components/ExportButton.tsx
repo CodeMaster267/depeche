@@ -23,7 +23,8 @@ export function ExportButton({ userId, email }: { userId: string; email: string 
       ]);
       const db = supabaseBrowser();
       const data = await collect.collectData(db, userId, { email }, setStep);
-      const files = await collect.collectFiles(db, userId, data.messages, setStep);
+      const keptFiles = [...(data.projects ?? []), ...(data.assistants ?? [])].flatMap((x) => x.files);
+      const files = await collect.collectFiles(db, userId, data.messages, setStep, keptFiles);
       setStep("Making the zip");
       const name = archive.exportFileName(data.exportedAt);
       const zip = archive.zipEntries(archive.exportEntries(data, files), name);

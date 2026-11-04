@@ -13,6 +13,11 @@ import type { Shell } from "@/lib/chat/load";
 import { archiveChat, discardSummary, refreshChat, refreshShell, rememberModel, setCompaction } from "@/app/c/actions";
 import { activeSummary, type SummaryRow } from "@/lib/chat/summary";
 import { SummaryLine, SummarySheet } from "./SummarySheet";
+import { createProject } from "@/app/p/actions";
+import type { ProjectDetail } from "@/lib/chat/projects";
+import type { AssistantRow } from "@/lib/chat/assistants";
+import { ProjectsContext, type ProjectsValue } from "./projects-context";
+import { ProjectPanel } from "./Projects";
 import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
@@ -34,7 +39,7 @@ import { CanvasIcon, CanvasMessage, CanvasOpener, CanvasPane, useCanvas } from "
 import { ChatMenu } from "./ChatMenu";
 import { DeletionNotice } from "./DeletionNotice";
 import { UserMessage, VersionSwitch } from "./Versions";
-import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, PhotoIcon, RetryIcon, ScanIcon, StopIcon, WaveIcon } from "./icons";
+import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, FolderIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, PhotoIcon, RetryIcon, ScanIcon, SparkIcon, StopIcon, WaveIcon } from "./icons";
 import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
 import { ResearchCard, ResearchIcon, runFor, useResearch } from "./Research";
@@ -79,6 +84,8 @@ export function ChatApp({
   shell: initialShell,
   chat: initialChat,
   messages: initial,
+  project: initialProject = null,
+  assistant = null,
   all: initialAll,
   summaries: initialSummaries = [],
   focus,
@@ -87,6 +94,10 @@ export function ChatApp({
   shell: Shell;
   chat: ChatRow | null;
   messages: MessageRow[];
+  /** On a project's own screen: new chats start inside it. */
+  project?: ProjectDetail | null;
+  /** Starting a chat with a saved assistant. */
+  assistant?: AssistantRow | null;
   /** Every version of every message; the screen shows one path through them. */
   all?: MessageRow[];
   summaries?: SummaryRow[];
@@ -113,6 +124,21 @@ export function ChatApp({
   }, []);
   const [shell, setShell] = useState(initialShell);
   const [chat, setChat] = useState<ChatRow | null>(initialChat);
+  const [project, setProject] = useState<ProjectDetail | null>(initialProject);
+  const projectsValue: ProjectsValue = {
+    projects: shell.projects,
+    create: async (name) => {
+      const made = await createProject(name);
+      if (made) setShell((s) => ({ ...s, projects: [made, ...s.projects.filter((p) => p.id !== made.id)] }));
+      return made;
+    },
+  };
+  // The project this screen is in: the one open, or the open chat's.
+  const projectId = chat ? (chat.project_id ?? null) : (project?.id ?? null);
+  const projectName = shell.projects.find((p) => p.id === projectId)?.name ?? project?.name ?? null;
+  // The saved assistant this chat is with, when it's still one you can see.
+  const assistantId = chat ? (chat.assistant_id ?? null) : (assistant?.id ?? null);
+  const withAssistant = shell.assistants.find((a) => a.id === assistantId) ?? assistant;
   // Summaries of earlier messages (auto-compaction), and whether the open one is showing.
   const [summaries, setSummaries] = useState<SummaryRow[]>(initialSummaries);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -127,7 +153,11 @@ export function ChatApp({
   );
   const messages = useMemo(() => pathTo(tree, leaf), [tree, leaf]);
   const [modelId, setModelId] = useState<string | null>(
-    initialChat?.model && initialShell.modelIds.includes(initialChat.model) ? initialChat.model : initialShell.defaultModel,
+    initialChat?.model && initialShell.modelIds.includes(initialChat.model)
+      ? initialChat.model
+      : assistant?.model && initialShell.modelIds.includes(assistant.model)
+        ? assistant.model
+        : initialShell.defaultModel,
   );
   const [picking, setPicking] = useState(false);
   const [fresh, setFresh] = useState<Set<string>>(() => new Set());
@@ -437,6 +467,8 @@ export function ChatApp({
           model: model.id,
           clientRequestId,
           search: search && canSearch(model),
+          ...(!chatId && project ? { projectId: project.id } : {}),
+          ...(!chatId && assistant ? { assistantId: assistant.id } : {}),
           ...(think && canThinkHarder(model) ? { harder: true } : {}),
           ...open,
           ...body,
@@ -502,6 +534,8 @@ export function ChatApp({
                 model: model.id,
                 pinned: false,
                 updated_at: new Date().toISOString(),
+                project_id: project?.id ?? null,
+                assistant_id: assistant?.id ?? null,
               };
               setChat(created);
               setShell((s) => ({ ...s, chats: [created, ...s.chats] }));
@@ -793,11 +827,38 @@ export function ChatApp({
   // it gets a fresh key (?new=…) to start over; a reply still being written finishes on the server.
   const startNew = () => {
     setDrawer(false);
-    router.push(initialChat ? "/" : `/?new=${Date.now().toString(36)}`);
+    router.push(initialChat || initialProject ? "/" : `/?new=${Date.now().toString(36)}`);
+  };
+  // The header's new chat button stays in the project the screen is in.
+  const startNewHere = () => {
+    if (!projectId) return startNew();
+    setDrawer(false);
+    router.push(initialChat || initialProject?.id !== projectId ? `/p/${projectId}` : `/p/${projectId}?new=${Date.now().toString(36)}`);
   };
   useEffect(() => {
-    if (!initialChat && window.location.search.includes("new=")) window.history.replaceState(null, "", "/");
+    if (!initialChat && window.location.search.includes("new=")) window.history.replaceState(null, "", window.location.pathname);
   }, [initialChat]);
+  // Opening a project. A chat begun on that project's screen is still that page as far as the
+  // router knows, so it gets a fresh key (?new=…) to show the project again.
+  const openProject = (id: string) => {
+    setDrawer(false);
+    router.push(initialProject?.id === id && !initialChat ? `/p/${id}?new=${Date.now().toString(36)}` : `/p/${id}`);
+  };
+  // A project's screen can come from the browser's page cache, so check its chats are current.
+  useEffect(() => {
+    if (initialProject) refreshShell().then(setShell, () => {});
+  }, [initialProject]);
+  // A project renamed or deleted on its screen.
+  const changeProject = (next: ProjectDetail | null) => {
+    const id = project?.id;
+    setProject(next);
+    setShell((s) => ({
+      ...s,
+      projects: next ? s.projects.map((p) => (p.id === next.id ? { ...p, name: next.name } : p)) : s.projects.filter((p) => p.id !== id),
+      chats: next ? s.chats : s.chats.map((c) => (c.project_id === id ? { ...c, project_id: null } : c)),
+    }));
+  };
+
   const look = useLookTexts();
 
   // Buttons a person's design adds (components/design/Look.tsx) ask for these.
@@ -833,6 +894,7 @@ export function ChatApp({
   };
 
   return (
+    <ProjectsContext.Provider value={projectsValue}>
     <div data-part="app" className="flex h-dvh overflow-hidden">
       {/* Chats: always visible on wide screens, a drawer on phones. */}
       <aside data-part="sidebar-desktop" className={`hidden w-[300px] shrink-0 border-r border-line ${canvas.isOpen ? "2xl:block" : "md:block"}`}>
@@ -840,6 +902,8 @@ export function ChatApp({
           {...shell}
           chats={shell.chats}
           activeId={chat?.id ?? null}
+              activeProjectId={projectId}
+              onOpenProject={openProject}
           onNavigate={() => {}}
           onNewChat={startNew}
           onChatChange={changeChat}
@@ -853,6 +917,8 @@ export function ChatApp({
             <Sidebar
               {...shell}
               activeId={chat?.id ?? null}
+              activeProjectId={projectId}
+              onOpenProject={openProject}
               onNavigate={() => setDrawer(false)}
               onNewChat={startNew}
               onClose={() => setDrawer(false)}
@@ -873,7 +939,37 @@ export function ChatApp({
             <MenuIcon />
           </button>
           <div className="flex min-w-0 flex-1 flex-col items-center md:flex-row md:items-center md:gap-4">
-            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">{chat?.title ?? (temporary ? "Temporary chat" : "New chat")}</h1>
+            {chat && projectId && projectName ? (
+              <Link
+                href={`/p/${projectId}`}
+                prefetch={false}
+                onClick={(e) => {
+                  e.preventDefault();
+                  openProject(projectId);
+                }}
+                className="flex max-w-full items-center gap-1 text-[13px] text-mute hover:text-fg md:-mr-2 md:max-w-[30%] md:text-[15px]"
+                aria-label={`Project: ${projectName}`}
+              >
+                <FolderIcon className="h-4 w-4 shrink-0" />
+                <span className="truncate">{projectName}</span>
+                <span aria-hidden className="hidden md:inline">/</span>
+              </Link>
+            ) : null}
+            {chat && withAssistant ? (
+              <Link
+                href={`/assistants/${withAssistant.id}`}
+                prefetch={false}
+                className="flex max-w-full items-center gap-1 text-[13px] text-mute hover:text-fg md:-mr-2 md:max-w-[30%] md:text-[15px]"
+                aria-label={`Assistant: ${withAssistant.name}`}
+              >
+                <SparkIcon className="h-4 w-4 shrink-0" />
+                <span className="truncate">{withAssistant.name}</span>
+                <span aria-hidden className="hidden md:inline">/</span>
+              </Link>
+            ) : null}
+            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">
+              {chat?.title ?? (project ? project.name : assistant ? assistant.name : temporary ? "Temporary chat" : "New chat")}
+            </h1>
             {model ? (
               <button
                 type="button"
@@ -894,10 +990,10 @@ export function ChatApp({
           {chat ? <ChatMenu chat={chat} userId={shell.userId} onChange={changeChat} onDeleted={() => chatDeleted(chat.id)} /> : null}
           {chat || messages.length ? (
             <Link
-              href="/"
+              href={projectId ? `/p/${projectId}` : "/"}
               onClick={(e) => {
                 e.preventDefault();
-                startNew();
+                startNewHere();
               }}
               className="press glass flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
               aria-label="New chat"
@@ -955,7 +1051,27 @@ export function ChatApp({
         >
           <CanvasOpener.Provider value={canvas.open}>
           <div data-part="thread" className="relative mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
-            {messages.length === 0 ? (
+            {messages.length === 0 && project && !chat ? (
+              <ProjectPanel
+                userId={shell.userId}
+                project={project}
+                chats={shell.chats.filter((c) => c.project_id === project.id)}
+                onChange={changeProject}
+                onChatChange={changeChat}
+                onChatDeleted={chatDeleted}
+              />
+            ) : messages.length === 0 && assistant && !chat ? (
+              <div className="flex flex-col gap-2 pt-[12vh]" data-testid="assistant-start">
+                <span className="flex items-center gap-1.5 text-[13px] font-semibold uppercase tracking-[0.1em] text-mute">
+                  <SparkIcon className="h-4 w-4" /> Assistant{assistant.mine ? "" : " shared by your family"}
+                </span>
+                <h2 className="break-words text-[34px] font-semibold leading-tight tracking-tight">{assistant.name}</h2>
+                {assistant.description ? <p className="text-[17px] text-mute">{assistant.description}</p> : null}
+                <Link href={`/assistants/${assistant.id}`} className="self-start text-[15px] text-mute underline underline-offset-4">
+                  {assistant.mine ? "Edit" : "What it's been told"}
+                </Link>
+              </div>
+            ) : messages.length === 0 ? (
               <div data-ripple-clear className="flex flex-col gap-2 pt-[12vh]">
                 <h2 data-part="greeting" className="text-[34px] font-semibold tracking-tight">{temporary ? "Temporary chat" : look.greeting(shell.name)}</h2>
                 {temporary && !noModels ? (
@@ -980,6 +1096,27 @@ export function ChatApp({
                 ) : (
                   <p data-part="greeting-line" className="text-[17px] text-mute">{look.subtitle ?? "What's on your mind?"}</p>
                 )}
+                {!noModels && shell.assistants.length ? (
+                  <ul className="mt-5 flex flex-wrap gap-2" aria-label="Start with an assistant">
+                    {shell.assistants.slice(0, 6).map((a) => (
+                      <li key={a.id}>
+                        <Link
+                          href={`/?assistant=${a.id}`}
+                          prefetch={false}
+                          className="press flex items-center gap-1.5 rounded-full border border-line px-3.5 py-2 text-[15px]"
+                        >
+                          <SparkIcon className="h-4 w-4 text-mute" />
+                          {a.name}
+                        </Link>
+                      </li>
+                    ))}
+                    <li>
+                      <Link href="/assistants" className="press flex items-center rounded-full px-3.5 py-2 text-[15px] text-mute">
+                        All assistants
+                      </Link>
+                    </li>
+                  </ul>
+                ) : null}
               </div>
             ) : null}
             {chat?.imported_from ? (
@@ -1127,7 +1264,7 @@ export function ChatApp({
             queueing={busy && !research.running && !imaging && !(deep && searchable)}
             editing={editing}
             onClearEditing={() => setEditLast(false)}
-            placeholder={imaging ? (editing || attachments.items.some((x) => x.mime.startsWith("image/")) ? "Describe what to change" : "Describe a picture to make") : deep && searchable ? "What to research?" : "Message Depeche"}
+            placeholder={imaging ? (editing || attachments.items.some((x) => x.mime.startsWith("image/")) ? "Describe what to change" : "Describe a picture to make") : deep && searchable ? "What to research?" : project && !chat ? `New chat in ${project.name}` : assistant && !chat ? `Message ${assistant.name}` : "Message Depeche"}
             quote={quote}
             onClearQuote={() => setQuote(null)}
             attachments={attachments.items}
@@ -1226,6 +1363,7 @@ export function ChatApp({
         />
       ) : null}
     </div>
+    </ProjectsContext.Provider>
   );
 }
 

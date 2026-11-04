@@ -28,6 +28,39 @@ export type Topic = {
 
 export const TOPICS: Topic[] = [
   {
+    id: "projects",
+    title: "Projects (folders of chats)",
+    routes: ["/p/[id]"],
+    text: `
+Projects are your own folders of chats, each with its own instructions and files. Only you can see your projects; not
+your family admin, not Hasan.
+- Make one: in the side menu, under Projects, tap "New project" and give it a name. Its page opens.
+- On a project's page: under Instructions, tap Add (or Edit) to tell the AI how to answer in every chat in this project, and "Add files"
+  to give it reference material (photos, PDFs, Word, Excel, PowerPoint and text files) it reads in every chat there.
+  Files kept in a project are not cleaned up after 3 days. Rename project and Delete project are on the same page.
+- Start a chat in the project: type in the box on the project's page ("New chat in …"). Its chats are listed there.
+- Move a chat in or out: tap the three dots next to a chat (in the side menu, or at the top of an open chat) and pick
+  "Move to project". Pick a project, "Take out of project", or "New project" to make one and move it there.
+- Chats in a project are not shown in the main chat list (search still finds them). Deleting a project keeps its chats:
+  they go back to the main list. Project chats still auto-delete after a month unused, like any chat.`,
+  },
+  {
+    id: "assistants",
+    title: "Saved assistants",
+    routes: ["/assistants", "/assistants/[id]"],
+    text: `
+A saved assistant is a helper you set up once, like "Homework helper": a name, a line saying what it's for, instructions,
+an optional model it starts with, and files it reads in every chat.
+- Find them: tap your name at the bottom of the side menu, then Assistants ([Assistants](/assistants)). The page lists
+  yours and any your family shared. "New assistant" makes one; files can be added once it's created.
+- Chat with one: tap "Chat" next to it, or "Chat with …" on its page. The home screen also shows your assistants under
+  "Start with an assistant".
+- Share with my family: tick it on the assistant's page and everyone in your family can see its name, instructions and
+  file names, and chat with it. Only you can change it, and their chats with it stay private to them. Someone else's
+  shared assistant opens read-only, under "Shared by your family", so you can see what it has been told.
+- Deleting an assistant keeps the chats already made with it.`,
+  },
+  {
     id: "about",
     title: "What Depeche is",
     routes: ["/"],
@@ -40,7 +73,7 @@ another family. Each message goes only to the AI company whose model you picked.
 
 The home screen is a new chat. On a phone, tap the menu button (three lines, top left) to open the side menu with your
 chats; on a computer the side menu is always on the left. At the bottom of the side menu, tap your name to open the
-account menu: Memory, Skills, My look, Gadgets, Account, Family and Health (admins only), Report a bug, and a bar showing what you
+account menu: Memory, Assistants, Skills, My look, Gadgets, Account, Family and Health (admins only), Report a bug, and a bar showing what you
 have spent this month against your limit. On settings pages the top bar links the same pages (on a phone, tap the pill
 naming the page you're on to switch). "Ask Concierge", under your chats, opens this helper.`,
   },
