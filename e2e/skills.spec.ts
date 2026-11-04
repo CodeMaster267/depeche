@@ -71,7 +71,7 @@ test("skills are made by a model, used in chats, checked on every change, and sh
   await editor.getByRole("tab", { name: "Edit it yourself" }).click();
   await editor.getByLabel("Description").fill(`Use when someone asks about gardening ${tag}, pots and window boxes.`);
   await editor.getByRole("button", { name: "Save changes" }).click();
-  await expect(editor.getByText("Saved.")).toBeVisible({ timeout: 20_000 });
+  await expect(editor.getByText("Saved. Everyone who added this skill now gets the new version.")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("skill-description")).toContainText("pots and window boxes");
   await noSideways(page);
   await page.context().clearCookies();
