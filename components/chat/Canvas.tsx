@@ -88,7 +88,7 @@ type View = { id: string; versionId: string | null } | null;
  * The chat's canvases, which one is open, and the person's unsaved edit. `streamingText` is the
  * reply being written, so a canvas it writes shows in the pane as it arrives.
  */
-export function useCanvas(chatId: string | null, streamingText: string | null, finishedText: string | null) {
+export function useCanvas(chatId: string | null, streamingText: string | null, finishedText: string | null, hasCanvas = true) {
   const [canvases, setCanvases] = useState<Canvas[]>([]);
   const [view, setView] = useState<View>(null);
   const [draft, setDraft] = useState<string | null>(null);
@@ -103,11 +103,15 @@ export function useCanvas(chatId: string | null, streamingText: string | null, f
     if (next) setCanvases(next);
     return next ?? [];
   }, [chatId]);
+  // Next.js runs server actions one at a time, so a chat that has never had a canvas doesn't ask
+  // for its canvases: that would make taps such as Remember wait behind the lookup.
+  const hasCanvasRef = useRef(hasCanvas);
+  hasCanvasRef.current = hasCanvas;
   useEffect(() => {
     setCanvases([]);
     setView(null);
     setDraft(null);
-    refresh();
+    if (hasCanvasRef.current) refresh();
   }, [refresh]);
 
   const live: CanvasBlock | null = useMemo(() => {
@@ -192,7 +196,8 @@ export function useCanvas(chatId: string | null, streamingText: string | null, f
 
   return {
     canvases,
-    refresh,
+    /** Looks again (another device may have changed a canvas), only in chats that have one. */
+    refresh: () => (hasCanvasRef.current ? refresh() : Promise.resolve([] as Canvas[])),
     current,
     view,
     live: live && !liveDismissed ? live : null,

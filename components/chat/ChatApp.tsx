@@ -117,7 +117,8 @@ export function ChatApp({
   const pinnedToBottom = useRef(true);
   const writing = messages.find((m) => m.streaming);
   const lastReply = messages.at(-1)?.role === "assistant" ? messages.at(-1) : undefined;
-  const canvas = useCanvas(chat?.id ?? null, writing ? (writing.content.text ?? "") : null, lastReply?.content.text ?? null);
+  const hasCanvas = messages.some((m) => m.role === "assistant" && (m.content.text ?? "").includes("canvas:"));
+  const canvas = useCanvas(chat?.id ?? null, writing ? (writing.content.text ?? "") : null, lastReply?.content.text ?? null, hasCanvas);
 
   const model = findModel(modelId);
   const selected = model;
