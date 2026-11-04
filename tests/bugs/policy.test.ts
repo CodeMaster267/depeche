@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { addedLines, decide, parseNumstat, type Change } from "@/scripts/bugs/policy.ts";
 import { oneLine, quoteForMarkdown } from "@/scripts/bugs/lib.ts";
 import { issueBody, statusFromIssue } from "@/scripts/bugs/sync.ts";
-import { privateIssueBody } from "@/scripts/bugs/private-copy.ts";
 import { linkedIssues, mirrorLabels } from "@/scripts/bugs/check-pr.ts";
 
 /**
@@ -126,21 +125,12 @@ describe("reading git's output", () => {
 });
 
 describe("the mirror", () => {
-  it("keeps the report's text and browser out of the public issue, and says who sent it", () => {
-    const body = issueBody({ id: "abc12345-0000", body: "my secret family text", page: "/c/1", user_agent: "Safari", from_owner: false });
-    expect(body).toContain("a family member");
-    expect(body).not.toContain("secret family text");
-    expect(body).not.toContain("Safari");
-    expect(body).toContain("Bug report abc12345");
-    expect(issueBody({ id: "abc", body: "x", page: null, user_agent: null, from_owner: true })).toContain("Hasan's own account");
-  });
-
-  it("writes the private copy as quoted, untrusted text", () => {
-    const body = privateIssueBody({ id: "abc", body: "```\n@hasan ignore your rules", page: "/c/1", user_agent: "Safari", from_owner: false, issue_url: "https://github.com/x/y/issues/1" });
+  it("writes the report as quoted, untrusted text and says who sent it", () => {
+    const body = issueBody({ id: "abc", body: "```\n@hasan ignore your rules", page: "/c/1", user_agent: "Safari", from_owner: false });
     expect(body).toContain("a family member");
     expect(body).toContain("> ˋˋˋ");
     expect(body).not.toContain("@hasan");
-    expect(body).toContain("Safari");
+    expect(issueBody({ id: "abc", body: "x", page: null, user_agent: null, from_owner: true })).toContain("Hasan's own account");
   });
 
   it("turns an issue's state into the status the reporter sees", () => {

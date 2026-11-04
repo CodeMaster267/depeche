@@ -14,6 +14,7 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: write
 
 jobs:
   keep-alive:
@@ -42,17 +43,19 @@ jobs:
           fi
           scripts/backup/alert.sh close keep-alive-failed "Fixed: the database answers again."
       - name: Check last night's backup actually ran
-        # Backups run in the private repo (CodeMaster267/depeche-private), so this reads the
-        # last verified backup from the live database instead of this repo's runs.
         run: |
-          last=""
-          if [ -n "$DB_URL" ]; then
-            last=$(psql "$DB_URL" -Atc "select to_char(max(finished_at) at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') from public.backup_runs where restore_verified")
-          fi
+          last=$(gh run list --workflow backup.yml --status success --limit 1 --json createdAt --jq '.[0].createdAt // empty')
           if [ -n "$last" ] && [ $(( $(date -u +%s) - $(date -u -d "$last" +%s) )) -lt $(( 36 * 3600 )) ]; then
             echo "Last good backup: $last"
-            scripts/backup/alert.sh close backup-missing "Fixed: a good backup ran at $last."
             exit 0
           fi
+          gh workflow run backup.yml
           scripts/backup/alert.sh open backup-missing "No backup in the last 36 hours" \
-            "The last verified backup was ${last:-never}. Open the private repo's Actions tab (CodeMaster267/depeche-private → Actions → Nightly backup) and press Run workflow."
+            "The last good backup was ${last:-never}. GitHub may have skipped the nightly run, so a backup has just been started. If it fails, a separate issue will say why."
+      - name: Close the missing-backup alert once backups are current
+        if: success()
+        run: |
+          last=$(gh run list --workflow backup.yml --status success --limit 1 --json createdAt --jq '.[0].createdAt // empty')
+          if [ -n "$last" ] && [ $(( $(date -u +%s) - $(date -u -d "$last" +%s) )) -lt $(( 36 * 3600 )) ]; then
+            scripts/backup/alert.sh close backup-missing "Fixed: a good backup ran at $last."
+          fi

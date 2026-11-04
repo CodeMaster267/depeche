@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# Makes one backup of the live Depeche database, plus any Supabase Storage files.
+# Makes one encrypted backup of the live Depeche database, plus any Supabase Storage files.
 #
-#   DB_URL=...  [BACKUP_PASSPHRASE=...]  scripts/backup/backup.sh  OUT_DIR
+#   DB_URL=...  BACKUP_PASSPHRASE=...  scripts/backup/backup.sh  OUT_DIR
 #
-# Writes OUT_DIR/depeche-backup-<date>.tar.gz and prints its path as the last line. Hasan chose
-# (2026-11-04) to keep backups unencrypted: they live only in the private repo
-# CodeMaster267/depeche-private. If BACKUP_PASSPHRASE is set, the file is encrypted instead
-# (AES-256, depeche-backup-<date>.tar.gz.gpg).
-# Inside the file:
+# Writes OUT_DIR/depeche-backup-<date>.tar.gz.gpg (AES-256, passphrase only) and nothing readable.
+# Inside the encrypted file:
 #   roles.sql, schema.sql, data.sql   Supabase's own dump format (auth, storage and public data)
 #   migrations.json                   which migrations the database had, so `db push` works after a restore
 #   storage-objects.json, files/      every Storage file and its metadata (once there are any)
@@ -18,9 +15,9 @@
 set -euo pipefail
 
 : "${DB_URL:?DB_URL is not set}"
-BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"
+: "${BACKUP_PASSPHRASE:?BACKUP_PASSPHRASE is not set}"
 OUT_DIR="${1:?usage: backup.sh OUT_DIR}"
-if [ -n "$BACKUP_PASSPHRASE" ] && [ "${#BACKUP_PASSPHRASE}" -lt 20 ]; then
+if [ "${#BACKUP_PASSPHRASE}" -lt 20 ]; then
   echo "BACKUP_PASSPHRASE is shorter than 20 characters. Use a long generated password." >&2
   exit 1
 fi
@@ -71,18 +68,11 @@ fi
 
 node "$HERE/manifest.mjs" write "$D"
 
-if [ -n "$BACKUP_PASSPHRASE" ]; then
-  echo "Encrypting"
-  OUT="$OUT_DIR/$NAME.tar.gz.gpg"
-  tar -C "$WORK" -czf - "$NAME" \
-    | gpg --batch --yes --quiet --pinentry-mode loopback --symmetric --cipher-algo AES256 \
-          --s2k-digest-algo SHA512 --s2k-count 65011712 --compress-algo none \
-          --passphrase-file <(printf '%s' "$BACKUP_PASSPHRASE") \
-          -o "$OUT"
-else
-  OUT="$OUT_DIR/$NAME.tar.gz"
-  tar -C "$WORK" -czf "$OUT" "$NAME"
-fi
+echo "Encrypting"
+tar -C "$WORK" -czf - "$NAME" \
+  | gpg --batch --yes --quiet --pinentry-mode loopback --symmetric --cipher-algo AES256 \
+        --s2k-digest-algo SHA512 --s2k-count 65011712 --compress-algo none \
+        --passphrase-file <(printf '%s' "$BACKUP_PASSPHRASE") \
+        -o "$OUT_DIR/$NAME.tar.gz.gpg"
 
-echo "Wrote $OUT ($(wc -c < "$OUT") bytes)"
-echo "$OUT"
+echo "Wrote $OUT_DIR/$NAME.tar.gz.gpg ($(wc -c < "$OUT_DIR/$NAME.tar.gz.gpg") bytes)"

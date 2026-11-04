@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Restores a Depeche backup (.tar.gz, or an older encrypted .tar.gz.gpg) into an EMPTY Supabase database, then checks every table's
+# Restores an encrypted Depeche backup into an EMPTY Supabase database, then checks every table's
 # row count and every Storage file against the backup's manifest.
 #
-#   scripts/backup/restore.sh  depeche-backup-<date>.tar.gz  TARGET_DB_URL
 #   BACKUP_PASSPHRASE=...  scripts/backup/restore.sh  depeche-backup-<date>.tar.gz.gpg  TARGET_DB_URL
-#   (encrypted backups from before 2026-11-04 need the "Depeche backups" password)
 #
 # The nightly backup job runs exactly this against a throwaway local database, so the path used in
 # an emergency is the one tested every night. To also put Storage files back into a real project,
@@ -14,21 +12,16 @@
 # Set RESTORE_REPORT=path to save the check's JSON report.
 set -euo pipefail
 
+: "${BACKUP_PASSPHRASE:?BACKUP_PASSPHRASE is not set}"
 FILE="${1:?usage: restore.sh BACKUP_FILE TARGET_DB_URL}"
 TARGET="${2:?usage: restore.sh BACKUP_FILE TARGET_DB_URL}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-if [[ "$FILE" == *.gpg ]]; then
-  : "${BACKUP_PASSPHRASE:?this backup is encrypted: set BACKUP_PASSPHRASE}"
-  echo "Decrypting $(basename "$FILE")"
-  gpg --batch --quiet --pinentry-mode loopback --decrypt \
-      --passphrase-file <(printf '%s' "$BACKUP_PASSPHRASE") "$FILE" | tar -C "$WORK" -xzf -
-else
-  echo "Unpacking $(basename "$FILE")"
-  tar -C "$WORK" -xzf "$FILE"
-fi
+echo "Decrypting $(basename "$FILE")"
+gpg --batch --quiet --pinentry-mode loopback --decrypt \
+    --passphrase-file <(printf '%s' "$BACKUP_PASSPHRASE") "$FILE" | tar -C "$WORK" -xzf -
 D="$(find "$WORK" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 
 echo "Restoring roles, schema and data"

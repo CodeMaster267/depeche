@@ -1,20 +1,18 @@
 name: Nightly backup
 
-# Lives in the PRIVATE repo CodeMaster267/depeche-private (copy kept in the app repo at
-# ops/private-repo/), because the app repo is public and anyone signed in to GitHub can download a
-# public repo's artifacts. It checks out the app repo's main branch for the scripts.
-#
-# Every night: dump the live database (and any Storage files), restore it into a separate empty
-# database and check every table and file, then keep the file as a private artifact of this run for
-# 30 days, then GitHub deletes it. Nothing older is kept, so anything a person deletes in Depeche is
-# gone from every backup within 30 days. Nothing is committed to git. Not encrypted (Hasan,
-# 2026-11-04): only people with access to this private repo can download it.
+# Every night: dump the live database (and any Storage files), encrypt it with BACKUP_PASSPHRASE,
+# restore it into a separate empty database and check every table and file, then keep the
+# encrypted file as a private artifact of this run for 30 days, then GitHub deletes it. Nothing
+# older is kept, so anything a person deletes in Depeche is gone from every backup within 30 days.
+# Nothing readable is stored anywhere, and nothing is committed to git.
 #
 # If anything fails, an issue is opened (GitHub emails it to Hasan); the next good run closes it.
-# The app repo's keep-alive.yml checks every day (in backup_runs) that this actually ran.
+# keep-alive.yml checks every day that this actually ran, and starts it if it didn't.
 #
 # Secrets (Settings → Secrets and variables → Actions):
-#   SUPABASE_DB_URL            the live database (same value as in the app repo)
+#   SUPABASE_DB_URL            already set, shared with database.yml
+#   BACKUP_PASSPHRASE          a long password, also saved in Hasan's password manager. Without it
+#                              the backups cannot be opened, so it must be kept somewhere safe.
 #   SUPABASE_SERVICE_ROLE_KEY  only needed once the app stores files (images, documents)
 #
 # To restore: see docs/backups.md.
@@ -38,12 +36,14 @@ jobs:
     timeout-minutes: 30
     env:
       DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
     steps:
       - name: Check the secrets are set
         run: |
           missing=""
           [ -n "$DB_URL" ] || missing="$missing SUPABASE_DB_URL"
+          [ -n "$BACKUP_PASSPHRASE" ] || missing="$missing BACKUP_PASSPHRASE"
           if [ -n "$missing" ]; then
             echo "::error::Missing repository secret(s):$missing. No backup was made."
             exit 1
@@ -51,32 +51,28 @@ jobs:
           echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
           echo "stamp=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
-        with:
-          repository: CodeMaster267/depeche  # the app's public repo: scripts only, no secrets in it
-          ref: main
-          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Back up
+      - name: Back up and encrypt
         run: scripts/backup/backup.sh "$RUNNER_TEMP/backup"
       - name: Start a separate, empty database
         run: echo "RESTORE_DB=$(scripts/backup/scratch-db.sh)" >> "$GITHUB_ENV"
-      - name: Restore the file into it and check every table and file
-        run: RESTORE_REPORT="$RUNNER_TEMP/restore-report.json" scripts/backup/restore.sh "$RUNNER_TEMP/backup/depeche-backup-$stamp.tar.gz" "$RESTORE_DB"
-      - name: Keep the backup (private artifact)
+      - name: Restore the encrypted file into it and check every table and file
+        run: RESTORE_REPORT="$RUNNER_TEMP/restore-report.json" scripts/backup/restore.sh "$RUNNER_TEMP/backup/depeche-backup-$stamp.tar.gz.gpg" "$RESTORE_DB"
+      - name: Keep the encrypted backup
         uses: actions/upload-artifact@v4
         with:
           name: depeche-backup-${{ env.stamp }}-run${{ github.run_number }}
-          path: ${{ runner.temp }}/backup/depeche-backup-${{ env.stamp }}.tar.gz
+          path: ${{ runner.temp }}/backup/depeche-backup-${{ env.stamp }}.tar.gz.gpg
           retention-days: 30  # never longer: deleted chats must leave every backup within 30 days
           compression-level: 0
           if-no-files-found: error
       - name: Record the verified backup in the live database
         run: |
-          size=$(wc -c < "$RUNNER_TEMP/backup/depeche-backup-$stamp.tar.gz")
+          size=$(wc -c < "$RUNNER_TEMP/backup/depeche-backup-$stamp.tar.gz.gpg")
           read -r tables rows files < <(node -e 'const r = require(process.argv[1]); console.log(r.tables, r.rows, r.files)' "$RUNNER_TEMP/restore-report.json")
           psql "$DB_URL" -v ON_ERROR_STOP=1 --quiet \
             -v name="depeche-backup-$stamp" -v started="$started_at" -v size="$size" -v tables="$tables" \
@@ -86,9 +82,9 @@ jobs:
           SQL
       - name: Show it on the Health screen
         run: |
-          size=$(wc -c < "$RUNNER_TEMP/backup/depeche-backup-$stamp.tar.gz")
+          size=$(wc -c < "$RUNNER_TEMP/backup/depeche-backup-$stamp.tar.gz.gpg")
           read -r rows files < <(node -e 'const r = require(process.argv[1]); console.log(r.rows, r.files)' "$RUNNER_TEMP/restore-report.json")
-          scripts/backup/record-check.sh backup true "$stamp, $(numfmt --to=iec "$size")B, kept 30 days in the private repo"
+          scripts/backup/record-check.sh backup true "$stamp, $(numfmt --to=iec "$size")B encrypted, kept 30 days"
           scripts/backup/record-check.sh restore_test true "$stamp: $rows rows and $files file(s) restored into a separate database and matched"
 
   alert:
@@ -102,10 +98,6 @@ jobs:
       DB_URL: ${{ secrets.SUPABASE_DB_URL }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          repository: CodeMaster267/depeche  # the app's public repo: scripts only, no secrets in it
-          ref: main
-          persist-credentials: false
       - name: Show the failure on the Health screen
         run: |
           scripts/backup/record-check.sh backup false "$(date -u +%Y-%m-%d): backup failed, see $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -124,10 +116,6 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          repository: CodeMaster267/depeche  # the app's public repo: scripts only, no secrets in it
-          ref: main
-          persist-credentials: false
       - name: Close any open backup alert
         run: |
           scripts/backup/alert.sh close backup-failed "Fixed: tonight's backup worked and its restore test passed ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
