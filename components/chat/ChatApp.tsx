@@ -49,7 +49,7 @@ import { EditingChip, MakingPicture, ReplyPictures, isPicture } from "./Pictures
 // Loaded only when someone scans, so the chat itself stays quick to open.
 const ScanSheet = dynamic(() => import("./ScanSheet"), { ssr: false });
 import type { Source } from "@/lib/chat/thread";
-import { RippleField } from "@/components/RippleField";
+import { ChatRipple, RippleField } from "@/components/RippleField";
 import { SOURCE_NAMES } from "@/lib/import/types";
 import { LOOK_ACTION, Shortcuts, useLookTexts, type LookAction } from "@/components/design/Look";
 
@@ -227,6 +227,8 @@ export function ChatApp({
   const pinnedToBottom = useRef(true);
   const streamingReply = messages.find((m) => m.streaming);
   const lastReply = messages.at(-1)?.role === "assistant" ? messages.at(-1) : undefined;
+  // Finished answers: each new one sends a faint ripple behind the chat.
+  const answers = messages.filter((m) => m.role === "assistant" && !m.streaming).length;
   const hasCanvas = messages.some((m) => m.role === "assistant" && (m.content.text ?? "").includes("canvas:"));
   const canvas = useCanvas(chat?.id ?? null, streamingReply ? (streamingReply.content.text ?? "") : null, lastReply?.content.text ?? null, hasCanvas);
 
@@ -1030,6 +1032,15 @@ export function ChatApp({
           </div>
         ) : null}
 
+        {/* The letterflip field sits behind the conversation, outside the scroller so it stays put:
+            an empty new chat gets the full field (clear of the greeting); an open chat gets a soft
+            ripple that fades when the chat opens and again, fainter, when an answer arrives. */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+        {messages.length === 0 ? (
+          <RippleField clear="[data-ripple-clear] > *" />
+        ) : (
+          <ChatRipple key={chat?.id ?? "new"} pulseKey={answers} />
+        )}
         <div
           ref={scroller}
           className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
@@ -1038,8 +1049,6 @@ export function ChatApp({
             pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           }}
         >
-          {/* An empty new chat gets the letterflip field behind it, clear of the greeting. */}
-          {messages.length === 0 ? <RippleField clear="[data-ripple-clear] > *" /> : null}
           <CanvasOpener.Provider value={canvas.open}>
           <div data-part="thread" className="relative mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
             {messages.length === 0 && project && !chat ? (
@@ -1181,6 +1190,7 @@ export function ChatApp({
             ].filter(Boolean))}
           </div>
           </CanvasOpener.Provider>
+        </div>
         </div>
 
         <div data-part="composer-wrap" className="mx-auto w-full max-w-[760px] px-3 md:px-8" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
