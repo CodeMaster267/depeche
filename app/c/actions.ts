@@ -5,11 +5,12 @@ import { requireMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
 import { loadChat, loadShell } from "@/lib/chat/load";
 import { UPLOAD_BUCKET } from "@/lib/chat/files";
-import type { MessageRow } from "@/lib/chat/thread";
+import type { ChatRow, MessageRow } from "@/lib/chat/thread";
 
 /**
  * Chat housekeeping. Everything runs with the person's own session, so row-level security makes
- * sure only their own chats can be read, renamed, pinned or deleted.
+ * sure only their own chats can be read, renamed, pinned,
+ * archived or deleted.
  */
 export async function refreshShell() {
   return loadShell(await requireMe());
@@ -31,6 +32,31 @@ export async function pinChat(chatId: string, pinned: boolean) {
   const me = await requireMe();
   await (await supabaseServer()).from("chats").update({ pinned }).eq("id", chatId).eq("owner_id", me.userId);
   revalidatePath("/", "layout");
+}
+
+/** Archive (out of the list, kept) or restore one of your chats. */
+export async function archiveChat(chatId: string, archived: boolean) {
+  const me = await requireMe();
+  await (await supabaseServer())
+    .from("chats")
+    .update({ archived_at: archived ? new Date().toISOString() : null })
+    .eq("id", chatId)
+    .eq("owner_id", me.userId);
+  revalidatePath("/", "layout");
+}
+
+/** Your archived chats, most recently archived first. */
+export async function listArchived(): Promise<ChatRow[]> {
+  const me = await requireMe();
+  const { data } = await (await supabaseServer())
+    .from("chats")
+    .select("id, title, model, pinned, updated_at, archived_at")
+    .eq("owner_id", me.userId)
+    .not("archived_at", "is", null)
+    .order("archived_at", { ascending: false })
+    .limit(500)
+    .returns<ChatRow[]>();
+  return data ?? [];
 }
 
 export async function deleteChat(chatId: string) {

@@ -76,7 +76,10 @@ export async function noSidewaysScroll(page: Page) {
 /** Collects page errors and console errors so a test can assert there were none. */
 export function watchErrors(page: Page): string[] {
   const errors: string[] = [];
-  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("pageerror", (e) => {
+    if (/_rsc=.* due to access control checks/.test(e.message)) return; // the same dropped prefetch, below
+    errors.push(e.message);
+  });
   page.on("console", (m) => {
     if (m.type() !== "error") return;
     // Safari logs a Next.js page prefetch (`?_rsc=`) that a navigation cancels as an "access
