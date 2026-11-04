@@ -574,3 +574,14 @@ body {
   .voice-orb { transition: opacity 200ms ease; transform: none !important; }
   .voice-orb-speaking, .voice-orb-busy, .voice-dots { animation: none; }
 }
+
+/* App lock: the PIN dots shake once after a wrong PIN. */
+@keyframes lock-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-10px); }
+  40%, 80% { transform: translateX(10px); }
+}
+.lock-shake { animation: lock-shake 0.36s ease-in-out; }
+@media (prefers-reduced-motion: reduce) {
+  .lock-shake { animation: none; }
+}
