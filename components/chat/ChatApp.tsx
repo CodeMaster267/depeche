@@ -12,6 +12,7 @@ import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/vo
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
 import { ACCEPT, AttachmentTray, useAttachments, type Pending } from "./Attachments";
+import { AskAboutSelection, CostButton, FollowUps, QuoteChip } from "./Extras";
 import { ModelPicker } from "./ModelPicker";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
@@ -65,6 +66,8 @@ export function ChatApp({
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // The part of an answer the next message asks about, picked by selecting it.
+  const [quote, setQuote] = useState<string | null>(null);
   // Web search is on unless this person turned it off on this device.
   const [search, setSearch] = useState(true);
   useEffect(() => {
@@ -165,7 +168,7 @@ export function ChatApp({
   };
 
   async function run(
-    body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean; parent?: string | null },
+    body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean; parent?: string | null; quote?: string },
     optimistic: Live[],
   ) {
     if (!model) return;
@@ -205,6 +208,7 @@ export function ChatApp({
         setTree((list) => list.filter((m) => m.id !== replyId && !optimistic.some((o) => o.id === m.id)));
         setLeaf(before);
         if (body.text) setDraft(body.text);
+        if (body.quote) setQuote(body.quote);
         setBanner(error ?? "Couldn't send that. Try again.");
         if (res.status === 409) sync();
         return;
@@ -335,44 +339,47 @@ export function ChatApp({
     // A picture model needs to be told what to make or change.
     if (imaging && !text) return;
     setDraft("");
+    setQuote(null);
     const files = attachments.take();
-    sendText(text, false, editing ? [editing, ...files].slice(0, 5) : files);
+    sendText(text, false, editing ? [editing, ...files].slice(0, 5) : files, quote ?? undefined);
   };
 
   // The message a new one follows: the end of the conversation on screen.
   const end = messages.at(-1);
   const after = chat && end && !end.id.startsWith("local-") ? { parent: end.id } : {};
 
-  const sendText = (text: string, voice = false, files: FileRef[] = []) => {
+  const sendText = (text: string, voice = false, files: FileRef[] = [], quote?: string) => {
     if ((!text && !files.length) || busy || !model) return;
     const mine: Live = {
       id: draftId(),
       chat_id: chat?.id ?? "",
       parent_id: after.parent ?? null,
       role: "user",
-      content: files.length ? { text, files } : { text },
+      content: { text, ...(files.length ? { files } : {}), ...(quote ? { quote } : {}) },
       status: "completed",
       model: null,
       created_at: new Date().toISOString(),
     };
-    run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}), ...after }, [mine]);
+    run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}), ...(quote ? { quote } : {}), ...after }, [mine]);
   };
 
   /** Send a changed copy of one of your messages; the original and what followed it are kept. */
   const edit = (original: MessageRow, text: string) => {
     if (busy || !model || !chat) return;
     const files = original.content.files ?? [];
+    const quote = original.content.quote;
     const mine: Live = {
       id: draftId(),
       chat_id: chat.id,
       parent_id: original.parent_id,
       role: "user",
-      content: files.length ? { text, files } : { text },
+      // An edited question still asks about the same part of an answer.
+      content: { text, ...(files.length ? { files } : {}), ...(quote ? { quote } : {}) },
       status: "completed",
       model: null,
       created_at: new Date().toISOString(),
     };
-    run({ text, ...(files.length ? { files } : {}), parent: original.parent_id }, [mine]);
+    run({ text, ...(files.length ? { files } : {}), ...(quote ? { quote } : {}), parent: original.parent_id }, [mine]);
   };
 
   /** Show another version of a message, and the conversation that carried on from it. */
@@ -484,6 +491,9 @@ export function ChatApp({
                   canRegenerate={!busy && !!m.parent_id && !m.parent_id.startsWith("local-")}
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
                   versions={<ReplyVersions message={m} tree={tree} busy={busy} onPick={showVersion} />}
+                  // Suggested follow-ups only under the newest answer, once it's finished.
+                  followUps={!busy && m.id === messages.at(-1)?.id ? m.content.followups : undefined}
+                  onFollowUp={(q) => sendText(q)}
                 />
               ),
             )}
@@ -500,6 +510,8 @@ export function ChatApp({
             editing={editing}
             onClearEditing={() => setEditLast(false)}
             placeholder={imaging ? (editing || attachments.items.some((x) => x.mime.startsWith("image/")) ? "Describe what to change" : "Describe a picture to make") : "Message Depeche"}
+            quote={quote}
+            onClearQuote={() => setQuote(null)}
             attachments={attachments.items}
             onAttach={async (files) => {
               const skipped = await attachments.add(files);
@@ -531,6 +543,13 @@ export function ChatApp({
         </div>
       </div>
 
+      <AskAboutSelection
+        scroller={scroller}
+        onAsk={(text) => {
+          setQuote(text);
+          document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Depeche"]')?.focus();
+        }}
+      />
       {voiceOpen ? (
         <VoiceMode
           messages={messages}
@@ -570,12 +589,16 @@ function Reply({
   canRegenerate,
   onRegenerate,
   onEdit,
+  followUps,
+  onFollowUp,
   versions,
 }: {
   message: Live;
   canRegenerate: boolean;
   onRegenerate: () => void;
   onEdit?: (f: FileRef) => void;
+  followUps?: string[];
+  onFollowUp: (q: string) => void;
   /** "‹ 1/2 ›" when this reply has other versions. */
   versions?: ReactNode;
 }) {
@@ -583,12 +606,16 @@ function Reply({
   const [source, setSource] = useState(false);
   const info = findModel(m.model);
   const text = m.content.text ?? "";
-  const cost = m.content.cost;
   return (
     <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
       <Activity message={m} />
       {m.content.files?.length ? <ReplyPictures files={m.content.files} onEdit={onEdit} /> : null}
-      {text ? <Markdown text={text} streaming={m.streaming} /> : null}
+      {text ? (
+        // Text selected in here can be asked about (see AskAboutSelection).
+        <div data-reply-text className="contents">
+          <Markdown text={text} streaming={m.streaming} />
+        </div>
+      ) : null}
       {m.streaming && m.making ? <MakingPicture editing={m.editing} /> : null}
       {m.streaming && !m.searchingNow && !m.thinkingNow && !m.making ? (
         <span aria-label="Writing" className="block h-6">
@@ -598,6 +625,7 @@ function Reply({
       {!m.streaming && m.content.suggestions ? <SearchSuggestions html={m.content.suggestions} /> : null}
       {m.content.notice ? <p className="text-[14px] text-mute">{m.content.notice}</p> : null}
       {!m.streaming && m.memory ? <MemorySuggestion key={m.memory.id} memory={m.memory} /> : null}
+      {!m.streaming && followUps?.length ? <FollowUps questions={followUps} onAsk={onFollowUp} /> : null}
       {m.status === "stopped" ? <p className="text-[14px] text-mute">Stopped.</p> : null}
       {m.status === "failed" ? (
         <p role="alert" className="rounded-2xl border border-fg px-4 py-3 text-[15px]">
@@ -642,9 +670,14 @@ function Reply({
             {versions}
             {copied ? <span className="text-[13px]">Copied</span> : null}
           </span>
-          <span className="font-mono text-[12px]">
+          <span className="flex items-center gap-1 font-mono text-[12px]">
             {info?.short ?? m.model}
-            {typeof cost === "number" && cost > 0 ? ` · $${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}` : ""}
+            {typeof m.content.cost === "number" && (m.content.cost > 0 || m.content.usage) ? (
+              <>
+                <span aria-hidden>{" · "}</span>
+                <CostButton content={m.content} />
+              </>
+            ) : null}
           </span>
         </div>
       ) : null}
@@ -657,6 +690,8 @@ function Composer({
   editing,
   onClearEditing,
   placeholder,
+  quote,
+  onClearQuote,
   attachments,
   onAttach,
   onRemoveAttachment,
@@ -678,6 +713,8 @@ function Composer({
   editing?: FileRef;
   onClearEditing: () => void;
   placeholder: string;
+  quote: string | null;
+  onClearQuote: () => void;
   search: boolean;
   searchable: boolean;
   onToggleSearch: () => void;
@@ -727,6 +764,7 @@ function Composer({
       }}
     >
       {editing ? <EditingChip file={editing} onClear={onClearEditing} /> : null}
+      {quote ? <QuoteChip quote={quote} onClear={onClearQuote} /> : null}
       <AttachmentTray items={attachments} onRemove={onRemoveAttachment} />
       <div className="flex items-end gap-1">
         <input

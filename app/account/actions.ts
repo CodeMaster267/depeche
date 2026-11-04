@@ -76,11 +76,12 @@ export async function deleteEverything(_: AccountState, form: FormData): Promise
     return { error: "Type delete to confirm." };
   }
   const db = await supabaseServer();
-  const [chats, memories] = await Promise.all([
+  const [chats, memories, instructions] = await Promise.all([
     db.from("chats").delete().eq("owner_id", me.userId),
     db.from("memories").delete().eq("owner_id", me.userId),
+    db.from("personal_instructions").delete().eq("owner_id", me.userId),
   ]);
-  if (chats.error || memories.error) return { error: "Couldn't delete everything. Try again." };
+  if (chats.error || memories.error || instructions.error) return { error: "Couldn't delete everything. Try again." };
   revalidatePath("/", "layout");
-  return { ok: "All your chats and memories are deleted." };
+  return { ok: "All your chats, memories and personal instructions are deleted." };
 }
