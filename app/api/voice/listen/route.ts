@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { MAX_AUDIO_BYTES, transcribe, wavSeconds } from "@/lib/voice/speech";
+import { MAX_AUDIO_BYTES, requestLanguages, transcribe, wavSeconds } from "@/lib/voice/speech";
 import { fail, prepare, reason, recordUsage, releaseHold, reserveVoice } from "@/lib/voice/server";
 
 export const maxDuration = 60;
@@ -21,15 +21,7 @@ export async function POST(req: NextRequest) {
   if (wav.length < 44 || String.fromCharCode(...wav.subarray(0, 4)) !== "RIFF") return fail(400, "That recording didn't come through. Try again.");
   if (wavSeconds(wav) < 0.3) return NextResponse.json({ text: "" });
 
-  // The languages the person speaks, main one first, as a hint ("en-GB,ur" becomes ["en", "ur"]).
-  const languages = [
-    ...new Set(
-      (req.headers.get("x-languages") ?? req.headers.get("x-language") ?? "")
-        .split(",")
-        .map((l) => l.trim().slice(0, 2).toLowerCase())
-        .filter((l) => /^[a-z]{2}$/.test(l)),
-    ),
-  ].slice(0, 4);
+  const languages = requestLanguages(req);
 
   const hold = await reserveVoice(me);
   if (hold instanceof NextResponse) return hold;
