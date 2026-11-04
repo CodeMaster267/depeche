@@ -20,8 +20,14 @@ test("an answer that reused cached input says so and costs less", async ({ page 
   const reply = page.getByTestId("reply").last();
   await expect(reply).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
 
-  await reply.getByTestId("message-cost").click();
+  // The chat's address changes once the answer is saved; a tap during that re-render can be lost
+  // (seen on Safari), so tap again until the details open.
+  await expect(page).toHaveURL(/\/c\//);
   const details = page.getByTestId("cost-details");
+  await expect(async () => {
+    if (!(await details.isVisible())) await reply.getByTestId("message-cost").click();
+    await expect(details).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
   await expect(details).toContainText("1,200 tokens");
   await expect(details.getByTestId("cost-cached")).toContainText("1,000 tokens");
   await expect(details).toContainText("read back from the provider's cache");
