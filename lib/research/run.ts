@@ -366,12 +366,12 @@ async function callModel(
   }, 5_000);
 
   let used = model;
-  let usage: { input: number; output: number } | undefined;
+  let usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number } | undefined;
   let queried = 0;
   try {
     for await (const ev of streamReply({ model, apiKey, system: opts.system, turns: [{ role: "user", text: opts.user }], signal: abort.signal, search: opts.search, maxOutput })) {
       if (ev.type === "text") result.text += ev.text;
-      else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
+      else if (ev.type === "usage") usage = { input: ev.input, output: ev.output, cacheRead: ev.cacheRead, cacheWrite: ev.cacheWrite };
       else if (ev.type === "model") used = findModel(ev.id) ?? model;
       else if (ev.type === "searching") {
         if (ev.query && ev.where !== "chat") queried++;
@@ -388,7 +388,7 @@ async function callModel(
   // A call cut short has no usage report: estimate about four characters per token, erring high.
   if (!usage) usage = { input: result.error ? 0 : input, output: Math.ceil(result.text.length / 4) };
   result.searches = Math.max(result.searches, queried);
-  result.cost = estimateCost(used, usage.input, usage.output) + searchCost(used.provider, result.searches);
+  result.cost = estimateCost(used, usage.input, usage.output, { read: usage.cacheRead, write: usage.cacheWrite }) + searchCost(used.provider, result.searches);
   await admin.rpc("settle_spend", {
     p_hold: hold.hold_id,
     p_message: null,
