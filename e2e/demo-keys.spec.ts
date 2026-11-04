@@ -11,6 +11,7 @@ test("a demo key opens the owner's account once, in a limited demo", async ({ pa
   const word = `demo ${Math.random().toString(36).slice(2, 10)}`;
 
   await signInWithPassword(page, OWNER.email, OWNER.password);
+  await expect(page.getByRole("heading", { name: `Hi, ${OWNER.name}.` })).toBeVisible({ timeout: 20_000 });
   await page.goto("/account");
   await expect(page.locator("form[data-ready]").first()).toBeAttached();
   const add = page.getByTestId("add-demo-key");
