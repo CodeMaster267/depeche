@@ -676,3 +676,6 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .account-menu { animation: none; }
 }
+
+/* The message box's hint stays on one line on narrow phones (cut with "…") instead of wrapping. */
+.composer-input::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

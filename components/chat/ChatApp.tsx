@@ -1174,7 +1174,7 @@ function Composer({
           onClick={() => picker.current?.click()}
           disabled={disabled}
           aria-label="Attach photos or files"
-          className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
+          className="press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
         >
           <PaperclipIcon />
         </button>
@@ -1185,7 +1185,7 @@ function Composer({
           aria-pressed={search}
           aria-label="Search the web"
           title={!searchable ? "This model can't search the web" : search ? "Web search on: the model searches when it needs to" : "Web search off"}
-          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${search ? "text-fg" : "text-faint"}`}
+          className={`press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${search ? "text-fg" : "text-faint"}`}
         >
           {search ? <GlobeIcon /> : <GlobeOffIcon />}
         </button>
@@ -1196,7 +1196,7 @@ function Composer({
           aria-pressed={deep}
           aria-label="Deep research"
           title={!deepable ? "This model can't do deep research" : deep ? "Deep research on for this message" : "Deep research: a long report with sources"}
-          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${deep ? "bg-inv text-on-inv" : "text-faint hover:text-fg"}`}
+          className={`press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${deep ? "bg-inv text-on-inv" : "text-faint hover:text-fg"}`}
         >
           <ResearchIcon />
         </button>
@@ -1221,7 +1221,7 @@ function Composer({
           placeholder={hint}
           aria-label="Message Depeche"
           disabled={disabled}
-          className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
+          className="composer-input max-h-[220px] min-h-[44px] min-w-0 flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
         />
         {voice ? <DictateButton onText={onDictated} onError={onVoiceError} disabled={disabled} /> : null}
         {busy ? (
