@@ -81,6 +81,9 @@ async function ready(page: Page) {
 
 test.beforeEach(async ({ page }) => {
   await fakeMicrophone(page);
+  // The fake "voice" comes back every few seconds, which would talk over every answer; the
+  // talking-over test turns this back on.
+  await page.addInitScript(() => localStorage.setItem("depeche:voice-talk-over", "off"));
 });
 
 test("the mic writes what you said into the box", async ({ page }) => {
@@ -102,6 +105,8 @@ test("voice chat listens, sends, reads the reply aloud and listens again", async
   const errors = watchErrors(page);
   page.on("console", (m) => m.text().includes("[voice]") && console.log(info.project.name, m.text()));
   await ready(page);
+  const calls: string[] = [];
+  page.on("request", (r) => r.url().includes("/api/voice/") && calls.push(new URL(r.url()).pathname));
   await page.getByRole("button", { name: "Voice chat" }).click();
   const dialog = page.getByRole("dialog", { name: "Voice chat" });
   await expect(dialog).toBeVisible();
@@ -121,6 +126,10 @@ test("voice chat listens, sends, reads the reply aloud and listens again", async
   await expect(page.getByTestId("user-message").last()).toHaveText("What is the quadratic formula?");
   await expect(page.getByTestId("reply").last()).toContainText("worked answer");
   expect(page.url()).toMatch(/\/c\/[0-9a-f-]{36}$/);
+  // Heard live (no recording uploaded), and the live session's cost was settled on closing.
+  expect(calls).toContain("/api/voice/live");
+  expect(calls).not.toContain("/api/voice/listen");
+  await expect.poll(() => calls.includes("/api/voice/live/done")).toBe(true);
   // Safari reports link prefetches it cancels; those aren't errors in the page.
   expect(errors.filter((e) => !/_rsc=.*access control checks/.test(e))).toEqual([]);
 });
@@ -182,11 +191,46 @@ test("the languages you speak can be picked", async ({ page }) => {
   await ready(page);
   await page.getByRole("button", { name: "Voice chat" }).click();
   const dialog = page.getByRole("dialog", { name: "Voice chat" });
+  // English, with Arabic and Urdu expected too, unless the person picks otherwise.
+  await expect(dialog.getByRole("button", { name: "Languages: English + Arabic + Urdu" })).toBeVisible();
   await dialog.getByRole("button", { name: /^Languages:/ }).click();
-  await dialog.getByRole("group", { name: "Languages you speak" }).getByRole("button", { name: "Urdu" }).click();
-  await expect(dialog.getByRole("button", { name: /^Languages:.*Urdu/ })).toBeVisible();
-  // Writing out what you said sends both languages.
-  const sent = page.waitForRequest((r) => r.url().endsWith("/api/voice/listen"));
-  expect((await sent).headers()["x-languages"]).toContain("ur");
+  await dialog.getByRole("group", { name: "Languages you speak" }).getByRole("button", { name: "Arabic" }).click();
+  await expect(dialog.getByRole("button", { name: "Languages: English + Urdu" })).toBeVisible();
+  // The next turn listens for both languages.
+  const sent = page.waitForRequest((r) => r.url().endsWith("/api/voice/live") && r.headers()["x-languages"] === "en,ur");
+  await expect(sent).resolves.toBeTruthy();
+  await dialog.getByRole("button", { name: "End voice chat" }).click();
+});
+
+test("without live listening, voice chat records and writes out instead", async ({ page }) => {
+  test.setTimeout(90_000);
+  await ready(page);
+  await page.route("**/api/voice/live", (r) => r.fulfill({ status: 404, json: { off: "Live listening needs a Google key." } }));
+  const listened = page.waitForRequest((r) => r.url().endsWith("/api/voice/listen"));
+  await page.getByRole("button", { name: "Voice chat" }).click();
+  const dialog = page.getByRole("dialog", { name: "Voice chat" });
+  await listened;
+  await expect(dialog.getByTestId("voice-you")).toHaveText("What is the quadratic formula?", { timeout: 15_000 });
+  await expect(dialog.getByTestId("voice-answer")).toContainText("worked answer", { timeout: 15_000 });
+  await dialog.getByRole("button", { name: "End voice chat" }).click();
+});
+
+test("talking over the answer stops it and listens", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => localStorage.setItem("depeche:voice-talk-over", "on"));
+  let talkedOver = false;
+  page.on("console", (m) => m.text().includes("talked over") && (talkedOver = true));
+  await ready(page);
+  await page.getByRole("button", { name: "Voice chat" }).click();
+  const dialog = page.getByRole("dialog", { name: "Voice chat" });
+  await expect(dialog.getByRole("button", { name: "Talk over answers: on" })).toBeVisible();
+  await expect(dialog.getByTestId("voice-you")).toHaveText("What is the quadratic formula?", { timeout: 15_000 });
+  // The fake voice comes back while the answer is being read, which cuts it off and is sent next.
+  await expect.poll(() => talkedOver, { timeout: 30_000 }).toBe(true);
+  await expect(page.getByTestId("user-message")).toHaveCount(2, { timeout: 30_000 });
+  // It can be turned off, and stays off.
+  await dialog.getByRole("button", { name: "Talk over answers: on" }).click();
+  await expect(dialog.getByRole("button", { name: "Talk over answers: off" })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("depeche:voice-talk-over"))).toBe("off");
   await dialog.getByRole("button", { name: "End voice chat" }).click();
 });

@@ -9,6 +9,7 @@ import { signOut } from "@/app/sign-in/actions";
 import { signOutEverywhere } from "./actions";
 import { lockSession } from "@/lib/lock/server";
 import { AppLock } from "./lock";
+import { ExportButton } from "@/components/ExportButton";
 import { DeleteEverythingForm, KeepChatsToggle, PasswordForm, ProfileForm, ShareTitlesToggle } from "./forms";
 
 export const metadata: Metadata = { title: "Account · Depeche" };
@@ -98,6 +99,13 @@ export default async function Account() {
             </ul>
           </Section>
         ) : null}
+        <Section title="Your data">
+          <p className="text-[15px] text-mute">
+            Download a zip of all your chats, memories, the files Depeche still has, your spending and your settings.
+            Chats come as Markdown you can read anywhere, plus JSON with every detail. Only your own data is in it.
+          </p>
+          <ExportButton userId={me.userId} email={me.email} />
+        </Section>
         <Section title="Delete">
           <p className="text-[15px] text-mute">
             Permanently delete all your chats and memories. They&apos;re gone straight away, and out of Depeche&apos;s
