@@ -991,8 +991,10 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch, ha
     yield { type: "usage", input: 900, output: 120 };
     return;
   }
+  // "my first message" makes it repeat the conversation's first message, to test what history it got.
+  const first = q.includes("my first message") ? `Your first message was: "${turns[0]?.text.split("\n")[0].slice(0, 80)}" (${turns.length} turns).\n\n` : "";
   // Says when it was asked to think harder, to test the switch reaches the model.
-  const reply = (harder ? "I thought harder about this.\n\n" : "") + asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + skilled + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
+  const reply = (harder ? "I thought harder about this.\n\n" : "") + first + asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + skilled + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

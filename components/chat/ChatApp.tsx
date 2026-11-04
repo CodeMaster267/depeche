@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
 import type { RunContext } from "@/components/markdown/RunCode";
@@ -14,10 +15,13 @@ import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/vo
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
 import { markAway } from "@/lib/push/client";
-import { ACCEPT, AttachmentTray, useAttachments, type Pending } from "./Attachments";
+import { ACCEPT, AUDIO_ACCEPT, AttachmentTray, useAttachments, type Pending } from "./Attachments";
 import { AskAboutSelection, CostButton, FollowUps, QuoteChip } from "./Extras";
 import { ModelPicker } from "./ModelPicker";
 import { Compare } from "./Compare";
+import { TemporaryToggle, historyOf, type TemporaryTurn } from "./Temporary";
+import { supabaseBrowser } from "@/lib/supabase/browser";
+import { UPLOAD_BUCKET } from "@/lib/chat/files";
 import { comparedWith } from "@/lib/chat/compare";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { SavedPrompts } from "./SavedPrompts";
@@ -28,12 +32,15 @@ import { CanvasIcon, CanvasMessage, CanvasOpener, CanvasPane, useCanvas } from "
 import { ChatMenu } from "./ChatMenu";
 import { DeletionNotice } from "./DeletionNotice";
 import { UserMessage, VersionSwitch } from "./Versions";
-import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
+import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, PhotoIcon, RetryIcon, ScanIcon, StopIcon, WaveIcon } from "./icons";
 import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
 import { ResearchCard, ResearchIcon, runFor, useResearch } from "./Research";
 import type { RunView } from "@/lib/research/types";
 import { EditingChip, MakingPicture, ReplyPictures, isPicture } from "./Pictures";
+
+// Loaded only when someone scans, so the chat itself stays quick to open.
+const ScanSheet = dynamic(() => import("./ScanSheet"), { ssr: false });
 import type { Source } from "@/lib/chat/thread";
 import { SOURCE_NAMES } from "@/lib/import/types";
 import { LOOK_ACTION, Shortcuts, useLookTexts, type LookAction } from "@/components/design/Look";
@@ -71,6 +78,7 @@ export function ChatApp({
   messages: initial,
   all: initialAll,
   focus,
+  temporary: startTemporary = false,
 }: {
   shell: Shell;
   chat: ChatRow | null;
@@ -79,8 +87,25 @@ export function ChatApp({
   all?: MessageRow[];
   /** A message to scroll to and mark, when the chat was opened from a search result. */
   focus?: string | null;
+  /** Start as a temporary chat (opened from /?temporary). */
+  temporary?: boolean;
 }) {
   const router = useRouter();
+  // A temporary chat lives only on this screen: nothing is saved, and it's gone once you leave.
+  const [temporary, setTemporary] = useState(startTemporary && !initialChat);
+  // Files sent in a temporary chat are deleted when you leave it (the daily clean-up catches any left).
+  const temporaryFiles = useRef<string[]>([]);
+  useEffect(() => {
+    const forget = () => {
+      const paths = temporaryFiles.current.splice(0);
+      if (paths.length) supabaseBrowser().storage.from(UPLOAD_BUCKET).remove(paths).catch(() => {});
+    };
+    window.addEventListener("pagehide", forget);
+    return () => {
+      window.removeEventListener("pagehide", forget);
+      forget();
+    };
+  }, []);
   const [shell, setShell] = useState(initialShell);
   const [chat, setChat] = useState<ChatRow | null>(initialChat);
   // Edits and regenerations sit beside the originals, so a chat is a tree. `leaf` is where the
@@ -101,6 +126,8 @@ export function ChatApp({
   const [drawer, setDrawer] = useState(false);
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  /** The scanner, open with the photos it was started with. */
+  const [scan, setScan] = useState<File[] | null>(null);
   const [draft, setDraftState] = useState("");
   // Unsent text is kept on this device per chat, so it's still there when you come back.
   const draftChat = useRef(initialChat?.id ?? null);
@@ -152,7 +179,7 @@ export function ChatApp({
   const [voiceOpen, setVoiceOpen] = useState(false);
   // Deep research: on for the next message only.
   const [deep, setDeep] = useState(false);
-  const attachments = useAttachments(initialShell.userId);
+  const attachments = useAttachments(initialShell.userId, (message) => setBanner(message));
   // Replies being written right now: one, or two or three when comparing models.
   const aborts = useRef(new Set<AbortController>());
   const stopAll = () => aborts.current.forEach((a) => a.abort());
@@ -345,9 +372,19 @@ export function ChatApp({
   };
 
   async function run(
-    body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean; parent?: string | null; quote?: string; compare?: CompareTag },
+    body: {
+      text?: string;
+      files?: FileRef[];
+      regenerate?: string;
+      voice?: boolean;
+      parent?: string | null;
+      quote?: string;
+      compare?: CompareTag;
+      temporary?: boolean;
+      history?: TemporaryTurn[];
+    },
     optimistic: Live[],
-    opts: RunOptions = {},
+    opts: RunOptions & { question?: string } = {},
   ) {
     const model = opts.model ?? selected;
     if (!model) return;
@@ -361,7 +398,7 @@ export function ChatApp({
     const placeholder: Live = {
       id: replyId,
       chat_id: chat?.id ?? "",
-      parent_id: optimistic[0]?.id ?? body.regenerate ?? null,
+      parent_id: optimistic[0]?.id ?? body.regenerate ?? opts.question ?? null,
       role: "assistant",
       content: body.compare ? { text: "", compare: body.compare } : { text: "" },
       status: "streaming",
@@ -435,7 +472,7 @@ export function ChatApp({
         for (const line of lines) {
           if (!line) continue;
           const ev = JSON.parse(line) as
-            | { type: "start"; chatId: string; userMessage: MessageRow }
+            | { type: "start"; chatId: string | null; userMessage: MessageRow }
             | { type: "text"; text: string }
             | { type: "thinking"; text: string }
             | { type: "notice"; text: string }
@@ -443,8 +480,10 @@ export function ChatApp({
             | { type: "sources"; sources: Source[] }
             | { type: "making"; editing?: boolean }
             | { type: "done" | "error"; message: MessageRow | null; error?: string };
-          if (ev.type === "start") {
-            if (!chatId) {
+          if (ev.type === "start" && body.temporary) {
+            // Nothing was saved: the question keeps its place on screen under its own id.
+          } else if (ev.type === "start") {
+            if (!chatId && ev.chatId) {
               chatId = ev.chatId;
               const created: ChatRow = {
                 id: ev.chatId,
@@ -468,7 +507,7 @@ export function ChatApp({
                 list.map((m) => (m.id === local ? real : m.id === replyId ? { ...m, parent_id: real.id, chat_id: real.chat_id } : m)),
               );
             }
-            opts.onStart?.(ev.chatId, ev.userMessage.id);
+            if (ev.chatId) opts.onStart?.(ev.chatId, ev.userMessage.id);
           } else if (ev.type === "text") {
             pending += ev.text;
             if (!frame) frame = requestAnimationFrame(flush);
@@ -501,7 +540,8 @@ export function ChatApp({
           } else {
             if (frame) cancelAnimationFrame(frame);
             flush();
-            const saved = ev.message;
+            // A temporary chat's reply hangs under the question as it is on screen.
+            const saved = ev.message && body.temporary ? { ...ev.message, parent_id: placeholder.parent_id } : ev.message;
             if (saved) {
               if (follow) ended.current = saved.status === "completed" ? "completed" : "failed";
               setTree((list) => list.map((m) => (m.id === replyId ? saved : m)));
@@ -561,6 +601,7 @@ export function ChatApp({
       return;
     }
     if (deep && searchable && !imaging) {
+      if (temporary) return setBanner("Deep research isn't available in a temporary chat.");
       if (attachments.items.length) return setBanner("Deep research works from your message only. Remove the attached files first.");
       if (!text) return;
       setDraft("");
@@ -609,6 +650,11 @@ export function ChatApp({
       model: null,
       created_at: new Date().toISOString(),
     };
+    if (temporary) {
+      temporaryFiles.current.push(...files.map((f) => f.path));
+      run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}), temporary, history: historyOf(messages) }, [{ ...mine, parent_id: end?.id ?? null }]);
+      return;
+    }
     const others = compareIds.map((id) => findModel(id)).filter((m): m is Model => !!m && !m.image && shell.modelIds.includes(m.id));
     if (!voice && others.length >= 2) {
       // Comparing: the first model answers the message as usual; once it's saved, the others answer
@@ -688,6 +734,18 @@ export function ChatApp({
 
   const regenerate = (questionId: string) => {
     if (busy) return;
+    if (temporary) {
+      // Nothing is stored, so ask the question again with the conversation before it.
+      const at = messages.findIndex((m) => m.id === questionId);
+      const q = messages[at];
+      if (!q) return;
+      run(
+        { text: q.content.text ?? "", ...(q.content.files?.length ? { files: q.content.files } : {}), temporary, history: historyOf(messages.slice(0, at)) },
+        [],
+        { question: q.id },
+      );
+      return;
+    }
     // The old reply is kept as an earlier version; the new one is shown in its place.
     run({ regenerate: questionId }, []);
   };
@@ -778,7 +836,7 @@ export function ChatApp({
             <MenuIcon />
           </button>
           <div className="flex min-w-0 flex-1 flex-col items-center md:flex-row md:items-center md:gap-4">
-            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">{chat?.title ?? "New chat"}</h1>
+            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">{chat?.title ?? (temporary ? "Temporary chat" : "New chat")}</h1>
             {model ? (
               <button
                 type="button"
@@ -811,7 +869,14 @@ export function ChatApp({
               <NewChatIcon className="h-[19px] w-[19px]" />
             </Link>
           ) : (
-            <span className="h-10 w-10 shrink-0 md:hidden" aria-hidden />
+            // An empty new chat can become a temporary one; once it has messages it stays as it is.
+            <TemporaryToggle
+              on={temporary}
+              onToggle={() => {
+                setTemporary((t) => !t);
+                window.history.replaceState(null, "", temporary ? "/" : "/?temporary");
+              }}
+            />
           )}
         </header>
         <DeletionNotice
@@ -846,8 +911,13 @@ export function ChatApp({
           <div data-part="thread" className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
             {messages.length === 0 ? (
               <div className="flex flex-col gap-2 pt-[12vh]">
-                <h2 data-part="greeting" className="text-[34px] font-semibold tracking-tight">{look.greeting(shell.name)}</h2>
-                {noModels ? (
+                <h2 data-part="greeting" className="text-[34px] font-semibold tracking-tight">{temporary ? "Temporary chat" : look.greeting(shell.name)}</h2>
+                {temporary && !noModels ? (
+                  <p data-testid="temporary-note" className="max-w-[460px] text-[17px] text-mute">
+                    This chat won&apos;t be saved or added to your chats, and nothing in it is remembered. It&apos;s gone once you
+                    leave or start a new chat.
+                  </p>
+                ) : noModels ? (
                   <p className="text-[17px] text-mute">
                     {shell.isAdmin ? (
                       <>
@@ -922,7 +992,7 @@ export function ChatApp({
                   found={found === m.id}
                   onEdit={pictureModels.length ? (f) => editPicture(f, m.model) : undefined}
                   run={fresh.has(m.id) ? runContexts.fresh : runContexts.old}
-                  canRegenerate={!busy && !!m.parent_id && !m.parent_id.startsWith("local-")}
+                  canRegenerate={!busy && !!m.parent_id && (temporary || !m.parent_id.startsWith("local-"))}
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
                   versions={<ReplyVersions message={m} tree={tree} busy={busy} onPick={showVersion} />}
                   // Suggested follow-ups only under the newest answer, once it's finished.
@@ -955,6 +1025,16 @@ export function ChatApp({
               {banner}
             </p>
           ) : null}
+          {scan ? (
+            <ScanSheet
+              initial={scan}
+              onClose={() => setScan(null)}
+              onAttach={async (file) => {
+                const skipped = await attachments.add([file]);
+                if (skipped) setBanner("You can attach up to 5 files to one message.");
+              }}
+            />
+          ) : null}
           {queue.length ? (
             <ul aria-label="Queued messages" className="mb-2 flex flex-col gap-1.5">
               {queue.map((q, i) => (
@@ -984,6 +1064,7 @@ export function ChatApp({
             </ul>
           ) : null}
           <Composer
+            onScan={(files) => setScan(files)}
             think={think && thinkable}
             thinkable={thinkable}
             onToggleThink={() => {
@@ -1220,6 +1301,7 @@ function Reply({
 }
 
 function Composer({
+  onScan,
   editing,
   onClearEditing,
   placeholder,
@@ -1283,9 +1365,13 @@ function Composer({
   onVoice: () => void;
   onDictated: (text: string) => void;
   onVoiceError: (msg: string) => void;
+  onScan: (photos: File[]) => void;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
+  const recordings = useRef<HTMLInputElement>(null);
+  const [menu, setMenu] = useState(false);
   const look = useLookTexts();
   // A look can reword the usual prompt; picture prompts stay as they are.
   const hint = placeholder === "Message Depeche" && look.placeholder ? look.placeholder : placeholder;
@@ -1359,15 +1445,75 @@ function Composer({
             if (files.length) onAttach(files);
           }}
         />
-        <button
-          type="button"
-          onClick={() => picker.current?.click()}
-          disabled={disabled}
-          aria-label="Attach photos or files"
-          className="press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
-        >
-          <PaperclipIcon />
-        </button>
+        {/* Scanning opens the camera straight away on a phone (a file picker on a computer). */}
+        <input
+          ref={camera}
+          type="file"
+          multiple
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          data-testid="scan-input"
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = "";
+            if (files.length) onScan(files);
+          }}
+        />
+        <input
+          ref={recordings}
+          type="file"
+          multiple
+          accept={AUDIO_ACCEPT}
+          className="hidden"
+          data-testid="audio-input"
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = "";
+            if (files.length) onAttach(files);
+          }}
+        />
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => setMenu(!menu)}
+            disabled={disabled}
+            aria-label="Attach"
+            aria-haspopup="menu"
+            aria-expanded={menu}
+            className="press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
+          >
+            <PaperclipIcon />
+          </button>
+          {menu ? (
+            <>
+              <button type="button" aria-label="Close" tabIndex={-1} className="fixed inset-0 z-20 cursor-default" onClick={() => setMenu(false)} />
+              <div role="menu" aria-label="Attach" onKeyDown={(e) => e.key === "Escape" && setMenu(false)} className="absolute bottom-12 left-0 z-30 w-64 overflow-hidden rounded-2xl border border-line bg-bg py-1 text-[16px] shadow-lg">
+                {(
+                  [
+                    ["Photos and files", PhotoIcon, picker],
+                    ["Scan pages", ScanIcon, camera],
+                    ["Voice note or recording", WaveIcon, recordings],
+                  ] as const
+                ).map(([label, Icon, input]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-soft"
+                    onClick={() => {
+                      setMenu(false);
+                      input.current?.click();
+                    }}
+                  >
+                    <Icon className="shrink-0 text-mute" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
         <button
           type="button"
           onClick={onToggleSearch}

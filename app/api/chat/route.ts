@@ -45,6 +45,12 @@ type Body = {
   search?: boolean;
   /** Sent from voice chat: the reply will be read aloud. */
   voice?: boolean;
+  /**
+   * A temporary chat: nothing is saved (no chat, no messages, no memories), so the browser sends
+   * the conversation so far with each message. Only the cost is recorded, for the spending limit.
+   */
+  temporary?: boolean;
+  history?: unknown[];
   /** The canvas open beside the chat, if any; otherwise the chat's most recent canvas is used. */
   canvasId?: string | null;
   /** The part of an earlier answer this message asks about. */
@@ -54,6 +60,9 @@ type Body = {
   /** "Think harder": the model's highest usual reasoning effort, where it takes one. */
   harder?: boolean;
 };
+
+/** The most turns a temporary chat sends back with each message. */
+const MAX_TEMPORARY_TURNS = 400;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status: number, error: string) => NextResponse.json({ error }, { status });
@@ -98,6 +107,32 @@ export async function POST(req: NextRequest) {
   const parentGiven = "parent" in body && !body.regenerate;
   if (parentGiven && body.parent !== null && !UUID.test(String(body.parent))) return fail(404, "That message doesn't exist.");
   const compare = compareTag(body.compare);
+  const temporary = body.temporary === true;
+  if (temporary && (body.chatId || body.regenerate || compare || parentGiven)) return fail(400, "Something went wrong. Try again.");
+  // A temporary chat's earlier turns, as the browser holds them. Only your own files can be named.
+  let history: MessageRow[] = [];
+  if (temporary) {
+    const raw = Array.isArray(body.history) ? body.history : [];
+    if (raw.length > MAX_TEMPORARY_TURNS) return fail(400, "This temporary chat is too long. Start a new one.");
+    const at = Date.now() - raw.length - 1;
+    for (const [i, h] of raw.entries()) {
+      const turn = (h ?? {}) as { role?: unknown; text?: unknown; files?: unknown };
+      if ((turn.role !== "user" && turn.role !== "assistant") || typeof turn.text !== "string" || turn.text.length > MAX_MESSAGE_CHARS) {
+        return fail(400, "Something went wrong. Try again.");
+      }
+      const turnFiles = turn.role === "user" && Array.isArray(turn.files) ? turn.files.filter((f) => isFileRef(f, me.userId)) : [];
+      history.push({
+        id: `temporary-${i}`,
+        chat_id: "",
+        parent_id: i ? `temporary-${i - 1}` : null,
+        role: turn.role,
+        content: turnFiles.length ? { text: turn.text, files: turnFiles } : { text: turn.text },
+        status: "completed",
+        model: null,
+        created_at: new Date(at + i).toISOString(),
+      });
+    }
+  }
 
   const db = await supabaseServer();
   const admin = supabaseAdmin();
@@ -119,7 +154,7 @@ export async function POST(req: NextRequest) {
 
   // The chat: an existing one of yours, or (once the spending hold is in place) a new one.
   let chatId = body.chatId ?? null;
-  let all: MessageRow[] = [];
+  let all: MessageRow[] = history;
   let canvas: OpenCanvas | null = null;
   if (chatId) {
     const { data: chat } = await db.from("chats").select("id").eq("id", chatId).eq("owner_id", me.userId).maybeSingle();
@@ -140,6 +175,7 @@ export async function POST(req: NextRequest) {
 
   // Picture models make or edit a picture instead of writing a reply.
   if (model.image) {
+    if (temporary) return fail(400, "Pictures can't be made in a temporary chat. Start a normal chat for pictures.");
     return pictureReply({
       me, db, admin, model, apiKey, chatId, all, text, files: fileRefs,
       clientRequestId: body.clientRequestId, regenerate: body.regenerate,
@@ -152,15 +188,18 @@ export async function POST(req: NextRequest) {
   const search = body.search === true;
   // Thinking harder costs more output, which stays within the same spending hold.
   const harder = body.harder === true && canThinkHarder(model);
-  // What the person asked Depeche to remember. Their own rows only, read as them.
-  const { data: remembered } = await db
-    .from("memories")
-    .select("content, about")
-    .eq("owner_id", me.userId)
-    .eq("status", "active")
-    .order("updated_at", { ascending: false })
-    .limit(MEMORY_PROMPT_LIMIT)
-    .returns<RememberedFact[]>();
+  // What the person asked Depeche to remember. Their own rows only, read as them. A temporary chat
+  // neither uses nor suggests memories.
+  const { data: remembered } = temporary
+    ? { data: [] as RememberedFact[] }
+    : await db
+        .from("memories")
+        .select("content, about")
+        .eq("owner_id", me.userId)
+        .eq("status", "active")
+        .order("updated_at", { ascending: false })
+        .limit(MEMORY_PROMPT_LIMIT)
+        .returns<RememberedFact[]>();
   // Their personal instructions ("About you", "How should Depeche answer"), also read as them.
   const { data: instructions } = await db
     .from("personal_instructions")
@@ -176,6 +215,7 @@ export async function POST(req: NextRequest) {
     remembered ?? [],
     instructions,
     canvas,
+    temporary,
   ) + (skills.length ? `\n\n${skillsPrompt(me.profile.display_name, skills)}` : "");
   let historyChars = 0;
   const seen = [system, text, quote ?? ""];
@@ -202,7 +242,7 @@ export async function POST(req: NextRequest) {
   // long chats today; summarised ones once compaction lands). Each lookup sends the conversation
   // to the model again, so the hold covers that too, or the tool isn't offered.
   const historyTotal = all.reduce((n, m) => n + (m.content.text?.length ?? 0), text.length);
-  let mayLookUp = canLookUp(model.provider) && (historyTotal + fileTokens * 2 > HISTORY_CHARS * 0.8 || fakeAi());
+  let mayLookUp = !temporary && canLookUp(model.provider) && (historyTotal + fileTokens * 2 > HISTORY_CHARS * 0.8 || fakeAi());
   const reserve = async (lookups: boolean) => {
     const baseInput = inputTokensUpperBound(seen);
     const searchInput = search ? MAX_SEARCHES * SEARCH_INPUT_TOKENS : 0;
@@ -234,7 +274,7 @@ export async function POST(req: NextRequest) {
     });
   const maxOutput = plan.maxOutput(Number(hold.amount_usd));
 
-  if (!chatId) {
+  if (!chatId && !temporary) {
     const { data: chat, error } = await db
       .from("chats")
       .insert({ owner_id: me.userId, title: titleFrom(text || fileRefs[0]?.name || ""), model: model.id })
@@ -256,6 +296,19 @@ export async function POST(req: NextRequest) {
       return fail(404, "That message doesn't exist.");
     }
     question = q;
+  } else if (temporary) {
+    // Never saved: the question only exists for this request.
+    question = {
+      id: crypto.randomUUID(),
+      chat_id: "",
+      parent_id: all.at(-1)?.id ?? null,
+      role: "user",
+      content: fileRefs.length ? { text, files: fileRefs.map(({ path, name, mime, size }) => ({ path, name, mime, size })) } : { text },
+      status: "completed",
+      model: null,
+      created_at: new Date().toISOString(),
+    };
+    all = [...all, question];
   } else {
     const parent = parentGiven ? (body.parent ? all.find((m) => m.id === body.parent) : undefined) : activePath(all).at(-1);
     const { data: inserted, error } = await db
@@ -351,7 +404,7 @@ export async function POST(req: NextRequest) {
   const earlier = path.filter((m) => m.id !== question.id);
   const chatSearch =
     mayLookUp && (shouldOfferChatSearch(earlier, sent) || fakeAi())
-      ? chatSearcher(db, chatId, earlier, me.profile.display_name)
+      ? chatSearcher(db, chatId!, earlier, me.profile.display_name)
       : undefined;
 
   const abort = new AbortController();
@@ -374,7 +427,7 @@ export async function POST(req: NextRequest) {
           open = false;
         }
       };
-      send({ type: "start", chatId: finalChatId, userMessageId: questionId, userMessage: question });
+      send({ type: "start", chatId: finalChatId, temporary, userMessageId: questionId, userMessage: question });
 
       let reply = "";
       const memory = memoryFilter();
@@ -395,7 +448,7 @@ export async function POST(req: NextRequest) {
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch, cacheKey: finalChatId, harder })) {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch, cacheKey: finalChatId ?? undefined, harder })) {
           if (ev.type !== "thinking") clock.stopped();
           if (ev.type === "thinking") {
             clock.thinking();
@@ -461,48 +514,57 @@ export async function POST(req: NextRequest) {
       const cost =
         estimateCost(used, usage.input, usage.output, { read: usage.cacheRead, write: usage.cacheWrite }) + searchCost(used.provider, searches);
 
-      const { data: saved } = await admin
-        .from("messages")
-        .insert({
-          chat_id: finalChatId,
-          owner_id: me.userId,
-          parent_id: questionId,
-          role: "assistant",
-          content: {
-            text: reply,
-            ...(notice ? { notice } : {}),
-            ...(error ? { error } : {}),
-            ...(sources.length ? { sources } : {}),
-            ...(searches ? { searches } : {}),
-            ...(suggestions ? { suggestions } : {}),
-            ...(status === "completed" && parseFollowUps(followups.found).length ? { followups: parseFollowUps(followups.found) } : {}),
-            usage: {
-              input: usage.input,
-              output: usage.output,
-              ...(usage.cacheRead ? { cached: usage.cacheRead } : {}),
-              ...(estimated ? { estimated } : {}),
-            },
-            ...(harder ? { harder: true } : {}),
-            ...(reasoning.trim() ? { reasoning, thoughtMs: clock.ms } : {}),
-            ...(queries.length ? { queries } : {}),
-            ...(lookups.length ? { lookups } : {}),
-            ...(read.length ? { read } : {}),
-            ...(skills.length ? { skills: skills.map((s) => ({ id: s.id, name: s.name })) } : {}),
-            ...(compare ? { compare } : {}),
-            cost,
-          },
-          status,
-          provider: used.provider,
-          model: used.id,
-        })
-        .select("id, chat_id, parent_id, role, content, status, model, created_at")
-        .single<MessageRow>();
+      const content: MessageRow["content"] = {
+        text: reply,
+        ...(notice ? { notice } : {}),
+        ...(error ? { error } : {}),
+        ...(sources.length ? { sources } : {}),
+        ...(searches ? { searches } : {}),
+        ...(suggestions ? { suggestions } : {}),
+        ...(status === "completed" && parseFollowUps(followups.found).length ? { followups: parseFollowUps(followups.found) } : {}),
+        usage: {
+          input: usage.input,
+          output: usage.output,
+          ...(usage.cacheRead ? { cached: usage.cacheRead } : {}),
+          ...(estimated ? { estimated } : {}),
+        },
+        ...(harder ? { harder: true } : {}),
+        ...(reasoning.trim() ? { reasoning, thoughtMs: clock.ms } : {}),
+        ...(queries.length ? { queries } : {}),
+        ...(lookups.length ? { lookups } : {}),
+        ...(read.length ? { read } : {}),
+        ...(skills.length ? { skills: skills.map((s) => ({ id: s.id, name: s.name })) } : {}),
+        ...(compare ? { compare } : {}),
+        cost,
+      };
+      // A temporary chat's reply goes to the browser only.
+      const { data: saved } = temporary
+        ? {
+            data: {
+              id: crypto.randomUUID(), chat_id: "", parent_id: questionId, role: "assistant", content, status, model: used.id,
+              created_at: new Date().toISOString(),
+            } satisfies MessageRow as MessageRow,
+          }
+        : await admin
+            .from("messages")
+            .insert({
+              chat_id: finalChatId,
+              owner_id: me.userId,
+              parent_id: questionId,
+              role: "assistant",
+              content,
+              status,
+              provider: used.provider,
+              model: used.id,
+            })
+            .select("id, chat_id, parent_id, role, content, status, model, created_at")
+            .single<MessageRow>();
       const now = new Date().toISOString();
       await Promise.all([
         // Swap the hold for what the reply really cost.
         admin.rpc("settle_spend", {
           p_hold: hold.hold_id,
-          p_message: saved?.id ?? null,
+          p_message: temporary ? null : (saved?.id ?? null),
           p_provider: used.provider,
           p_model: used.id,
           p_input: usage.input,
@@ -510,16 +572,18 @@ export async function POST(req: NextRequest) {
           p_cost: Number(cost.toFixed(6)),
         }),
         // Writing in an archived chat brings it back to the list.
-        admin.from("chats").update({ updated_at: now, model: model.id, archived_at: null }).eq("id", finalChatId),
+        finalChatId
+          ? admin.from("chats").update({ updated_at: now, model: model.id, archived_at: null }).eq("id", finalChatId)
+          : null,
         admin.from("profiles").update({ last_model: model.id }).eq("id", me.userId),
       ]);
 
       // Canvases the reply wrote become the AI's new versions, kept even if the reply was stopped
       // after the block was finished.
-      if (saved && reply) await saveReplyCanvases(admin, me.userId, finalChatId, saved.id, reply).catch(() => {});
+      if (saved && reply && finalChatId) await saveReplyCanvases(admin, me.userId, finalChatId, saved.id, reply).catch(() => {});
 
       // A suggested memory waits for the person to keep or dismiss it; nothing is used until then.
-      const fact = status === "completed" ? memory.suggestions[0] : undefined;
+      const fact = status === "completed" && !temporary ? memory.suggestions[0] : undefined;
       if (saved && fact) {
         const { data: suggested } = await admin
           .from("memories")
@@ -537,7 +601,7 @@ export async function POST(req: NextRequest) {
         // The browser already went away.
       }
       // Left the app while this was being written? A notification says it's ready.
-      if (status !== "stopped" && UUID.test(body.clientRequestId ?? "")) {
+      if (finalChatId && status !== "stopped" && UUID.test(body.clientRequestId ?? "")) {
         await notifyIfAway(me.userId, body.clientRequestId!, finalChatId, status === "completed").catch(() => {});
       }
       finished();
@@ -631,18 +695,20 @@ function canvasPrompt(name: string, c: OpenCanvas): string {
   ].join("\n");
 }
 
-function systemPrompt(name: string, voice: boolean, memories: RememberedFact[], instructions: PersonalInstructions | null, canvas: OpenCanvas | null = null): string {
+function systemPrompt(name: string, voice: boolean, memories: RememberedFact[], instructions: PersonalInstructions | null, canvas: OpenCanvas | null = null, temporary = false): string {
   return [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
-    memoryInstructions(name, memories),
+    temporary
+      ? `This is a temporary chat: it isn't saved and nothing from it is remembered. If ${name} asks you to remember something, say that temporary chats can't save memories.`
+      : memoryInstructions(name, memories),
     personalInstructions(name, instructions),
     voice ? "" : FILE_INSTRUCTIONS,
     voice ? "" : CHART_INSTRUCTIONS,
     voice ? "" : CODE_INSTRUCTIONS,
     voice ? "" : DESIGN_INSTRUCTIONS,
-    voice ? "" : CANVAS_INSTRUCTIONS(name),
+    voice || temporary ? "" : CANVAS_INSTRUCTIONS(name),
     voice ? "" : followUpInstructions(name),
     voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."
