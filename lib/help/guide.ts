@@ -197,6 +197,7 @@ Replies sometimes suggest something to remember; nothing is kept unless you tap 
 - Changes made to your account: anything an admin changed for you.
 - Your data: download a zip of all your chats, memories, files, spending and settings.
 - Bring in old chats: import your ChatGPT, Claude or Gemini export (see Importing).
+- Demo keys (Hasan only, as the app's owner): add a one-time demo key (a word or two) for someone to try Depeche (see Demo keys).
 - Delete: permanently delete all your chats, memories and instructions (type delete to confirm).
 - Something broken?: link to Report a bug.`,
   },
@@ -302,6 +303,11 @@ Depeche is invite-only: there is no sign-up. Your family admin sends you an invi
 ([sign-in page](/sign-in)) use your email (Depeche emails you a link and a 6-digit code; type the code if the link opens
 in the wrong browser, which is common in the iPhone home-screen app), your username or email with a password if you set
 one, or Google. You can be signed in on several devices. Hasan set up Depeche once at /setup.
+
+Demo keys: on the sign-in page, "Have a demo key?" takes a one-time demo key from Hasan and opens his account for a demo.
+Each key works once and is then used up. A demo lasts up to 12 hours and can't open Account, Family (API keys and
+members) or Health. Hasan adds keys in [Account → Demo keys](/account#demo-keys) (only a scrambled copy is kept, so he
+writes the word down) and ends a demo early with "Sign out everywhere".
 
 Install it like an app: on iPhone or iPad, open Depeche in Safari, tap Share, then "Add to Home Screen". On Android,
 Chrome's menu → "Add to Home screen" or "Install app".`,
