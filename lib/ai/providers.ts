@@ -2,10 +2,12 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { FunctionCallingConfigMode, GoogleGenAI, type Part } from "@google/genai";
-import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
+import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canLookUp, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
 import { MAX_OUTPUT } from "@/lib/ai/budget";
 import { CHAT_SEARCH_TOOL, MAX_CHAT_SEARCHES, type ChatSearch } from "@/lib/chat/search";
 import { GROQ_VISION_MODEL, groqReply } from "@/lib/ai/groq";
+import { DEEPSEEK_VISION_MODEL, deepseekReply } from "@/lib/ai/deepseek";
+import { xaiReply } from "@/lib/ai/xai";
 import type { Source } from "@/lib/chat/thread";
 import { webSource } from "@/lib/ai/sources";
 
@@ -71,13 +73,19 @@ const BUSY_FALLBACK: Record<string, string> = {
   "openai/gpt-oss-120b": "openai/gpt-oss-20b",
   "openai/gpt-oss-20b": "openai/gpt-oss-120b",
   "qwen/qwen3.8-27b": "openai/gpt-oss-120b",
+  // DeepSeek often says its servers are busy at peak times.
+  "deepseek-v4-pro": "deepseek-flash",
+  "deepseek-flash": "deepseek-v4-pro",
+  "grok-4.7": "grok-4.3",
+  "grok-4.3": "grok-4.7",
 };
 
 /** Every model that might answer when this one is chosen, so a spending hold covers the dearest. */
 export function modelsThatMayAnswer(model: Model): Model[] {
   const backup = findModel(BUSY_FALLBACK[model.id]);
-  // On Groq, Qwen answers messages with pictures.
-  const vision = model.provider === "groq" ? findModel(GROQ_VISION_MODEL) : undefined;
+  // On Groq, Qwen answers messages with pictures; on DeepSeek, Flash does.
+  const vision =
+    model.provider === "groq" ? findModel(GROQ_VISION_MODEL) : model.provider === "deepseek" ? findModel(DEEPSEEK_VISION_MODEL) : undefined;
   return [model, backup, vision].filter((m, i, all): m is Model => !!m && all.findIndex((x) => x?.id === m.id) === i);
 }
 
@@ -122,7 +130,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
         yield { type: "notice", text: `${req.model.name} ${why}, so ${attempt.model.name} answered instead.` };
       }
       // Telling a model it can search without giving it the tool makes some reply with nothing.
-      const lookup = attempt.model.provider === "groq" ? undefined : chatSearch;
+      const lookup = canLookUp(attempt.model.provider) ? chatSearch : undefined;
       const system = [req.system, search ? SEARCH_HINT : "", lookup ? CHAT_SEARCH_HINT : ""].filter(Boolean).join(" ");
       const r = { ...req, model: attempt.model, search, chatSearch: lookup, think, system };
       const inner = fakeAi()
@@ -133,7 +141,11 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
             ? openaiReply(r)
             : r.model.provider === "groq"
               ? groqReply(r)
-              : googleReply(r);
+              : r.model.provider === "deepseek"
+                ? deepseekReply(r)
+                : r.model.provider === "xai"
+                  ? xaiReply(r)
+                  : googleReply(r);
       for await (const ev of inner) {
         // Retrying after reasoning was shown would show it twice, so that counts as written too.
         if (ev.type === "text" || ev.type === "thinking") wrote = true;
@@ -154,7 +166,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       }
       // If a provider won't take the chat-search tool (some can't mix it with their own web
       // search), answer without it rather than failing or dropping web search.
-      if (chatSearch && attempt.model.provider !== "groq" && status(e) === 400) {
+      if (chatSearch && canLookUp(attempt.model.provider) && status(e) === 400) {
         chatSearch = undefined;
         console.error("[chat] chat search tool refused, answering without it", detail(e));
         i--;
@@ -643,6 +655,9 @@ function friendlyError(provider: Provider, e: unknown): string {
   const name = PROVIDER_NAME[provider];
   const code = status(e);
   const msg = detail(e);
+  // DeepSeek says 402 "Insufficient Balance"; xAI says 403 when a team has no credits or hit its spending limit.
+  if (code === 402 || /insufficient balance|doesn't have any credits|no credits|spending limit|exhausted its credits/i.test(msg))
+    return `${name} says your family's key is out of credit. Ask your family admin to add credit with ${name}.`;
   if (code === 401 || code === 403 || /api key|unauthori[sz]ed|permission/i.test(msg))
     return `${name} didn't accept your family's key. Ask your family admin to check it in Family settings.`;
   if (provider === "google" && (code === 429 || /quota|rate limit|resource.?exhausted/i.test(msg)))
@@ -690,8 +705,9 @@ export async function listKeyModels(provider: Provider, key: string): Promise<st
       const res = await fetch("https://api.openai.com/v1/models", { signal, headers: { authorization: `Bearer ${key}` } });
       if (!res.ok) return res.status === 401 || res.status === 403 ? null : ours;
       for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
-    } else if (provider === "groq") {
-      const res = await fetch("https://api.groq.com/openai/v1/models", { signal, headers: { authorization: `Bearer ${key}` } });
+    } else if (provider === "groq" || provider === "deepseek" || provider === "xai") {
+      const url = { groq: "https://api.groq.com/openai/v1/models", deepseek: "https://api.deepseek.com/models", xai: "https://api.x.ai/v1/models" }[provider];
+      const res = await fetch(url, { signal, headers: { authorization: `Bearer ${key}` } });
       if (!res.ok) return res.status === 401 || res.status === 403 ? null : ours;
       for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
     } else {
@@ -708,7 +724,9 @@ export async function listKeyModels(provider: Provider, key: string): Promise<st
         page = body.nextPageToken;
       }
     }
-    const usable = ours.filter((id) => seen.has(id));
+    // xAI and DeepSeek may list a model under a dated name (grok-4.3-0612) that its short name points to.
+    const dated = provider === "xai" || provider === "deepseek";
+    const usable = ours.filter((id) => seen.has(id) || (dated && [...seen].some((s) => s.startsWith(`${id}-`))));
     // If none of our names match, the provider has probably renamed things; better to offer
     // everything than nothing.
     return usable.length ? usable : ours;
