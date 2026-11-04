@@ -7,41 +7,19 @@ import { MAX_FILE_CHARS, MAX_FILES, MAX_INSTRUCTIONS, cleanDraft, textsOf, tidy,
 import { refusal, screenRules, type ScreenResult } from "./screen";
 
 /**
- * Writing and checking skills with the family's own keys. A good, reasonably priced model writes
- * the skill (and names it); a small, cheap one checks it. Both count toward the person's monthly
- * spending limit like any reply, and a skill costs about a cent or two to make.
+ * Writing and checking skills with the family's own keys. One of SKILL_MODELS writes the skill
+ * (and names it) and checks it. Both count toward the person's monthly
+ * spending limit like any reply; a skill costs about 10 to 20 cents to make.
  */
 
-/** Good at following a brief, without the price of the very biggest models. */
-export const WRITERS = [
-  "claude-sonnet-5-5",
-  "gpt-6.1-sol",
-  "gemini-3.8-flash",
-  "deepseek-v4-pro",
-  "grok-4.3",
-  "gpt-6.1-terra",
-  "claude-opus-5-5",
-  "gemini-4-argon",
-  "openai/gpt-oss-120b",
-  "claude-haiku-5-5",
-  "gpt-6-luna",
-  "deepseek-flash",
-  "gemini-3.5-flash-lite",
-];
-
-/** Small and cheap: the check is a yes or no with a reason. */
-export const CHECKERS = [
-  "claude-haiku-5-5",
-  "gpt-6-luna",
-  "gemini-3.5-flash-lite",
-  "deepseek-flash",
-  "openai/gpt-oss-120b",
-  "grok-4.3",
-  "gpt-6.1-terra",
-  "gemini-3.8-flash",
-  "claude-sonnet-5-5",
-  "gpt-6.1-sol",
-];
+/**
+ * Hasan (2026-11-04): skills are written, and checked, only by Claude Opus 5.5, Gemini 4 Argon or
+ * GPT-6.1 Sol. Never Fable (that one is only for people who pick it in a chat), and no fallback to
+ * any other model: without a key for one of these, no skill is made.
+ */
+export const SKILL_MODELS = ["claude-opus-5-5", "gemini-4-argon", "gpt-6.1-sol"];
+export const WRITERS = SKILL_MODELS;
+export const CHECKERS = SKILL_MODELS;
 
 /** The longest answer the writer may give: a full skill with files is about 6,000 tokens. */
 export const WRITE_OUTPUT = 9_000;

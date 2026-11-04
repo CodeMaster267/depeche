@@ -223,8 +223,9 @@ Voice works while the app is open; iPhones don't let websites listen in the back
     text: `
 [Skills](/skills) (your name at the bottom of the side menu → Skills) teach Depeche how to help with one kind of task, like a family budget or planning a
 wedding. Add a skill to "My skills" and your chats pick it up by themselves whenever a message is about it (or names it).
-- Make a skill: describe what it should help with; a model writes it and names it. Every skill is checked for safety
-  and goes in the Library for everyone on Depeche.
+- Make a skill: describe what it should help with; Claude Opus 5.5, Gemini 4 Argon or GPT-6.1 Sol writes it and names
+  it (it needs a family key for one of them, and costs about 10 to 20 cents). Every skill is checked for safety and goes
+  in the Library for everyone on Depeche.
 - Library: search everyone's skills and tap Add (or Remove) to choose which are yours.
 - Tap a skill to see its Instructions, any Files, and "Picked up when a message mentions" (the words that trigger it).
   If you made it, "Change this skill" lets you ask for changes or edit it yourself, and Delete takes it out of the

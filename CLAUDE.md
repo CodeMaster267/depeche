@@ -59,7 +59,7 @@ under reduced motion. Mockups: `/mnt/project-files/depeche/screens/` in the proj
 ## Skills
 
 - `/skills`: packs of instructions (plus up to 4 text files) a chat picks up by itself. A model writes
-  and names each one (`lib/skills/write.ts`, family keys, counts toward spending); the person never
+  and names each one (`lib/skills/write.ts`: only Opus 5.5, Argon or Sol, never Fable; family keys; counts toward spending); the person never
   types the name. One library for every Depeche user across families; each person adds skills to
   their own list, and only those are matched (free trigger-word matching, `lib/skills/match.ts`).
 - Only the server writes skills, and every new version is screened (rules in `lib/skills/screen.ts`,
