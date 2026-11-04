@@ -45,3 +45,14 @@ describe("encodeWav", () => {
     expect(bytes.length).toBe(44 + 32_000);
   });
 });
+
+describe("toPcm16", () => {
+  it("turns a 48 kHz piece into 16 kHz samples for live listening", async () => {
+    const { toPcm16 } = await import("@/lib/voice/client");
+    const input = new Float32Array(4800).fill(0.5);
+    const out = toPcm16(input, 48_000);
+    expect(out.length).toBe(1600);
+    expect(out[0]).toBe(Math.floor(0.5 * 0x7fff));
+    expect(toPcm16(new Float32Array(3).fill(-2), 48_000)[0]).toBe(-0x8000);
+  });
+});

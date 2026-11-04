@@ -3,7 +3,7 @@ import { getMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
-import { MAX_SEARCHES, estimateCost, findModel, searchCost } from "@/lib/ai/models";
+import { MAX_SEARCHES, canLookUp, estimateCost, findModel, searchCost } from "@/lib/ai/models";
 import { ProviderError, fakeAi, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
 import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOfferChatSearch } from "@/lib/chat/search";
 import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
   // long chats today; summarised ones once compaction lands). Each lookup sends the conversation
   // to the model again, so the hold covers that too, or the tool isn't offered.
   const historyTotal = all.reduce((n, m) => n + (m.content.text?.length ?? 0), text.length);
-  let mayLookUp = model.provider !== "groq" && (historyTotal + fileTokens * 2 > HISTORY_CHARS * 0.8 || fakeAi());
+  let mayLookUp = canLookUp(model.provider) && (historyTotal + fileTokens * 2 > HISTORY_CHARS * 0.8 || fakeAi());
   const reserve = async (lookups: boolean) => {
     const baseInput = inputTokensUpperBound(seen);
     const searchInput = search ? MAX_SEARCHES * SEARCH_INPUT_TOKENS : 0;

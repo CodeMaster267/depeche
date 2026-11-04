@@ -74,7 +74,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   const pinnedToBottom = useRef(true);
 
   const model = findModel(modelId);
-  // Some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
+  // DeepSeek and some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
   const searchable = canSearch(model);
   const noModels = shell.modelIds.length === 0;
   // Listening needs a provider that understands audio (Groq, OpenAI or Google); Claude has none.
