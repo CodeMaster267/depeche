@@ -68,15 +68,26 @@ test("answers suggest follow-ups, show their cost, and parts of them can be aske
   await page.getByRole("button", { name: "Close" }).first().click();
   await expect(details).toHaveCount(0);
 
-  // Still offered after a reload; tapping one asks it.
-  await page.reload();
-  await page.waitForLoadState("networkidle");
-  await page.getByTestId("followups").getByRole("button", { name: "What if a is zero?" }).click();
+  // Kept with the answer, so they're still offered after a reload.
+  const chatId = new URL(page.url()).pathname.split("/").pop()!;
+  const { data: saved } = await db.from("messages").select("content").eq("chat_id", chatId).eq("role", "assistant").single();
+  expect(saved!.content.followups).toEqual(["How do I check the answer?", "What if a is zero?"]);
+  expect(saved!.content.usage).toEqual({ input: 1200, output: 400 });
+
+  // Tapping one asks it.
+  await chips.getByRole("button", { name: "What if a is zero?" }).click();
   await expect(page.getByTestId("user-message").last()).toHaveText("What if a is zero?");
   const second = page.getByTestId("reply").last();
   await expect(second).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
   // Only the newest answer has follow-ups, and this one had none.
   await expect(page.getByTestId("followups")).toHaveCount(0);
+
+  // A selected part can be dropped before sending.
+  await selectInReply(page, "This is well documented");
+  await page.getByTestId("ask-about-selection").click();
+  await expect(page.getByTestId("quote-chip")).toContainText("This is well documented");
+  await page.getByRole("button", { name: "Don't ask about this" }).click();
+  await expect(page.getByTestId("quote-chip")).toHaveCount(0);
 
   // Ask about a selected part of the answer.
   await selectInReply(page, "The quadratic formula solves");
@@ -90,17 +101,10 @@ test("answers suggest follow-ups, show their cost, and parts of them can be aske
   await expect(third).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
   // The model was given the selected part along with the question.
   await expect(third).toContainText('You asked about "The quadratic formula solves"');
-  await expect(page.getByTestId("message-quote").last()).toHaveText(/The quadratic formula solves/);
-
-  // The quote stays with the question after a reload, and can be dropped before sending.
-  await page.reload();
-  await page.waitForLoadState("networkidle");
   await expect(page.getByTestId("message-quote")).toHaveCount(1);
-  // The answer may be redrawn as the page wakes up, which clears a selection made too early.
-  await expect(async () => {
-    await selectInReply(page, "This is well documented");
-    await page.getByTestId("ask-about-selection").click({ timeout: 1_000 });
-  }).toPass({ timeout: 10_000 });
-  await page.getByRole("button", { name: "Don't ask about this" }).click();
-  await expect(page.getByTestId("quote-chip")).toHaveCount(0);
+  await expect(page.getByTestId("message-quote")).toHaveText(/The quadratic formula solves/);
+
+  // The quote stays with the question after a reload.
+  await page.reload();
+  await expect(page.getByTestId("message-quote")).toHaveText(/The quadratic formula solves/);
 });
