@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useState } from "react";
 import { Button, Field, GoogleMark, Kept, Notice, keepOnError } from "@/components/ui";
 import { EmailCodeForm } from "@/components/EmailCodeForm";
-import { sendEmailLink, signInWithGoogle, signInWithPassword } from "./actions";
+import { sendEmailLink, signInWithDemoKey, signInWithGoogle, signInWithPassword } from "./actions";
 import { clearDrafts } from "@/lib/chat/composer";
 
 /** Email link first, Google second, username and password one tap away (as in the approved design). */
@@ -13,6 +13,8 @@ export function SignInForms() {
   const [mode, setMode] = useState<"email" | "password">("email");
   const [emailState, emailAction, emailPending] = useActionState(keepOnError(sendEmailLink), undefined);
   const [pwState, pwAction, pwPending] = useActionState(keepOnError(signInWithPassword), undefined);
+  const [demo, setDemo] = useState(false);
+  const [demoState, demoAction, demoPending] = useActionState(signInWithDemoKey, undefined);
 
   const sentTo = emailState?.sentTo;
 
@@ -64,6 +66,27 @@ export function SignInForms() {
       <Button type="button" variant="quiet" className="mt-2" onClick={() => setMode(mode === "email" ? "password" : "email")}>
         {mode === "email" ? "Use a username and password" : "Email me a sign-in link instead"}
       </Button>
+
+      {demo ? (
+        <form action={demoAction} className="mt-2 flex flex-col gap-3" data-testid="demo-key-form">
+          <Field
+            label="Demo key"
+            name="demoKey"
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            hint="Each demo key works once."
+            required
+          />
+          {demoState?.error ? <Notice tone="error">{demoState.error}</Notice> : null}
+          <Button variant="secondary" disabled={demoPending}>{demoPending ? "Opening…" : "Open the demo"}</Button>
+        </form>
+      ) : (
+        <Button type="button" variant="quiet" onClick={() => setDemo(true)}>
+          Have a demo key?
+        </Button>
+      )}
     </div>
   );
 }

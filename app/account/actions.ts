@@ -6,10 +6,12 @@ import { friendly, requireMe } from "@/lib/auth/session";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { supabaseServer } from "@/lib/supabase/server";
 import { cleanName, cleanUsername, passwordProblem } from "@/lib/validate";
+import { demoKeyHash, normalDemoKey, refuseDemo } from "@/lib/auth/demo";
 
 export type AccountState = { error?: string; ok?: string } | undefined;
 
 export async function saveProfile(_: AccountState, form: FormData): Promise<AccountState> {
+  await refuseDemo();
   const me = await requireMe();
   const name = cleanName(form.get("name"));
   if (!name) return { error: "Enter your name." };
@@ -30,6 +32,7 @@ export async function saveProfile(_: AccountState, form: FormData): Promise<Acco
 
 /** Also used on the page people land on after signing in with a temporary password. */
 export async function changePassword(_: AccountState, form: FormData): Promise<AccountState> {
+  await refuseDemo();
   const me = await requireMe({ allowTempPassword: true });
   const password = String(form.get("password") ?? "");
   const problem = passwordProblem(password);
@@ -44,6 +47,7 @@ export async function changePassword(_: AccountState, form: FormData): Promise<A
 
 /** Whether your chats are deleted after a month without use. Yours alone to change. */
 export async function setKeepChats(keep: boolean): Promise<void> {
+  await refuseDemo();
   const me = await requireMe();
   const supabase = await supabaseServer();
   await supabase.from("profiles").update({ keep_chats: keep }).eq("id", me.userId);
@@ -52,6 +56,7 @@ export async function setKeepChats(keep: boolean): Promise<void> {
 
 /** Whether your family admin can see your chat titles (never what's in them). Yours to decide. */
 export async function setShareTitles(share: boolean): Promise<void> {
+  await refuseDemo();
   const me = await requireMe();
   await (await supabaseServer()).from("profiles").update({ share_titles: share }).eq("id", me.userId);
   revalidatePath("/account");
@@ -59,6 +64,7 @@ export async function setShareTitles(share: boolean): Promise<void> {
 
 /** Ends every session you have, on every device, including this one. */
 export async function signOutEverywhere(): Promise<void> {
+  await refuseDemo();
   const me = await requireMe({ allowTempPassword: true });
   await supabaseAdmin().rpc("sign_out_everywhere", { p_actor: me.userId, p_person: me.userId });
   await (await supabaseServer()).auth.signOut({ scope: "local" });
@@ -71,6 +77,7 @@ export async function signOutEverywhere(): Promise<void> {
  * them for at most 30 more days, then they are gone everywhere.
  */
 export async function deleteEverything(_: AccountState, form: FormData): Promise<AccountState> {
+  await refuseDemo();
   const me = await requireMe();
   if (String(form.get("confirm") ?? "").trim().toLowerCase() !== "delete") {
     return { error: "Type delete to confirm." };
@@ -84,4 +91,17 @@ export async function deleteEverything(_: AccountState, form: FormData): Promise
   if (chats.error || memories.error || instructions.error) return { error: "Couldn't delete everything. Try again." };
   revalidatePath("/", "layout");
   return { ok: "All your chats, memories and personal instructions are deleted." };
+}
+
+/** The app owner adds a one-time demo key. Only its keyed hash is kept. */
+export async function addDemoKey(_: AccountState, form: FormData): Promise<AccountState> {
+  await refuseDemo();
+  const me = await requireMe();
+  if (!me.profile.is_app_owner) return { error: "Only the app owner can add demo keys." };
+  const word = normalDemoKey(form.get("demoKey"));
+  if (word.length < 4) return { error: "Use at least 4 letters." };
+  const { error } = await supabaseAdmin().rpc("add_demo_key", { p_actor: me.userId, p_hash: demoKeyHash(word) });
+  if (error) return { error: friendly(error) };
+  revalidatePath("/account");
+  return { ok: "Added. It works once." };
 }

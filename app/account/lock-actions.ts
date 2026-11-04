@@ -1,5 +1,6 @@
 "use server";
 
+import { refuseDemo } from "@/lib/auth/demo";
 import { revalidatePath } from "next/cache";
 import { requireMe } from "@/lib/auth/session";
 import { supabaseAdmin } from "@/lib/supabase/admin";
@@ -46,6 +47,7 @@ async function currentPinProblem(s: LockSession, form: FormData): Promise<string
 
 /** Turns the lock on, or changes the PIN. */
 export async function savePin(_: LockState, form: FormData): Promise<LockState> {
+  await refuseDemo();
   const s = await me();
   const pin = String(form.get("pin") ?? "");
   if (!PIN_PATTERN.test(pin)) return { error: "Your PIN must be 4 to 8 digits." };
@@ -77,6 +79,7 @@ export async function savePin(_: LockState, form: FormData): Promise<LockState> 
 }
 
 export async function setLockTimeout(seconds: number): Promise<LockState> {
+  await refuseDemo();
   const s = await me();
   if (!(TIMEOUTS as readonly number[]).includes(seconds)) return { error: "Pick one of the options." };
   const { error } = await supabaseAdmin()
@@ -92,6 +95,7 @@ export async function setLockTimeout(seconds: number): Promise<LockState> {
 
 /** Turns the lock off everywhere, and forgets every device's Face ID / Touch ID. */
 export async function turnOffLock(_: LockState, form: FormData): Promise<LockState> {
+  await refuseDemo();
   const s = await me();
   const problem = await currentPinProblem(s, form);
   if (problem) return { error: problem };
@@ -107,6 +111,7 @@ export async function turnOffLock(_: LockState, form: FormData): Promise<LockSta
 
 /** Step 1 of setting up Face ID / Touch ID on this device. */
 export async function passkeyOptions() {
+  await refuseDemo();
   const s = await me();
   if (!s.meta) return { error: "Turn on the app lock with a PIN first." };
   const { profile } = await requireMe();
@@ -115,6 +120,7 @@ export async function passkeyOptions() {
 
 /** Step 2: the device made a passkey; check it and keep it. */
 export async function addPasskey(body: NewPasskey, label: string): Promise<LockState> {
+  await refuseDemo();
   const s = await me();
   if (!s.meta) return { error: "Turn on the app lock with a PIN first." };
   const problem = await savePasskey(s, body, LABELS.includes(label) ? label : "This device");
@@ -126,6 +132,7 @@ export async function addPasskey(body: NewPasskey, label: string): Promise<LockS
 }
 
 export async function removePasskey(id: string): Promise<LockState> {
+  await refuseDemo();
   const s = await me();
   const { error } = await supabaseAdmin().from("lock_passkeys").delete().eq("owner_id", s.userId).eq("id", id);
   if (error) return { error: "Couldn't remove it." };

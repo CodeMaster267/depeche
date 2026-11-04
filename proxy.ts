@@ -13,6 +13,7 @@ import {
   unlockState,
   windowFor,
 } from "@/lib/lock/token";
+import { demoState, isDemoBlocked } from "@/lib/auth/demo-meta";
 
 /**
  * Runs before every page. Keeps the Supabase session fresh (so people stay signed in on their
@@ -54,10 +55,44 @@ export async function proxy(request: NextRequest) {
   }
   if (data.user) {
     const { data: s } = await supabase.auth.getSession();
+    const demo = demoState(data.user.app_metadata, sessionClaims(s.session?.access_token)?.sessionId);
+    if (demo !== "none") return applyDemo(request, response, supabase, demo, path);
     return applyLock(request, response, s.session?.access_token, data.user.id, data.user.app_metadata, path);
   }
   if (request.cookies.has(SETTINGS_COOKIE)) response.cookies.delete(SETTINGS_COOKIE);
   return response;
+}
+
+/**
+ * A demo session (from a one-time demo key) stays out of the family's API keys, members, the
+ * account and Health, and is signed out once it ends. The app lock doesn't apply to it: the person
+ * holding the demo key was meant to get in, and they can't change the lock. Server actions on
+ * those pages refuse demo sessions too, whichever page they are called from.
+ */
+async function applyDemo(
+  request: NextRequest,
+  response: NextResponse,
+  supabase: ReturnType<typeof createServerClient>,
+  demo: "active" | "ended",
+  path: string,
+): Promise<NextResponse> {
+  if (demo === "ended" && !under(path, PUBLIC)) {
+    await supabase.auth.signOut({ scope: "local" });
+    const to = request.nextUrl.clone();
+    to.pathname = "/sign-in";
+    to.search = "";
+    const out = NextResponse.redirect(to);
+    for (const c of response.cookies.getAll()) out.cookies.set(c);
+    return out;
+  }
+  if (!isDemoBlocked(path)) return response;
+  const isPage = request.method === "GET" && !path.startsWith("/api/");
+  const to = request.nextUrl.clone();
+  to.pathname = "/";
+  to.search = "";
+  const no = isPage ? NextResponse.redirect(to) : NextResponse.json({ error: "That isn't available in a demo." }, { status: 403 });
+  for (const c of response.cookies.getAll()) no.cookies.set(c);
+  return no;
 }
 
 /**
