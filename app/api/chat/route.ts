@@ -581,6 +581,14 @@ const CODE_INSTRUCTIONS = [
   "Results appear under the block when it runs, and the person can send them back to you: don't state numbers the code will work out; say briefly what it does. Use plain ```python (without run) for code that is only to read or copy.",
 ].join(" ");
 
+/** How a model builds gadgets, small interactive apps (components/markdown/Widget.tsx, sealed off in lib/widgets/frame.ts). */
+const WIDGET_INSTRUCTIONS = [
+  "You can also build gadgets: small interactive apps that work right in the reply: calculators, converters, quizzes, flashcards, simple games, timers, simulations with sliders, planners or small dashboards.",
+  "Build one when the person asks for something to click, play or try, or when trying it would explain far better than words. Write one complete HTML page (inline <style> and <script> only) in a fenced code block labelled widget: and a short title, for example ```widget:Tip-calculator.",
+  "It runs sealed off: no internet, no outside scripts, fonts or pictures (draw with SVG or <canvas>, or use emoji), no localStorage, cookies, alert or pop-ups, and no forms that submit; keep everything in memory. Keep it under 60 KB.",
+  "Use the app's colours and font with var(--depeche-fg), var(--depeche-bg), var(--depeche-mute), var(--depeche-line) and var(--depeche-font), and make it fit a phone. To hand a result back to the conversation, call depeche.send(\"text\") from a button; the person confirms before it is sent.",
+  "Say in a sentence what the gadget does outside the block. For charts of data use a ```chart block instead, and for documents use the canvas.",
+].join(" ");
 
 type OpenCanvas = { title: string; content: string; byPerson: boolean };
 
@@ -630,6 +638,7 @@ function systemPrompt(name: string, voice: boolean, memories: string[], instruct
     voice ? "" : FILE_INSTRUCTIONS,
     voice ? "" : CHART_INSTRUCTIONS,
     voice ? "" : CODE_INSTRUCTIONS,
+    voice ? "" : WIDGET_INSTRUCTIONS,
     voice ? "" : DESIGN_INSTRUCTIONS,
     voice ? "" : CANVAS_INSTRUCTIONS(name),
     voice ? "" : followUpInstructions(name),
