@@ -112,3 +112,28 @@ jobs:
           else
             echo "::notice::main has no bug-fix rules yet (this pull request adds them), so there is nothing to check."
           fi
+
+  concierge-guide:
+    name: Concierge guide
+    # Concierge, the help assistant, answers from lib/help/guide.ts. A pull request that adds new
+    # screens or components (a new feature, usually) must update the guide too, or say in its
+    # description "Guide: no change" when nothing people see is new. Bug fixes are exempt.
+    if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'bugfix/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: New screens come with guide changes
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          added=$(git diff --name-only --diff-filter=A "$BASE_SHA"...HEAD -- app components | grep -E '\.tsx?$' | grep -vE '(^|/)(actions|route)\.ts$' || true)
+          if [ -z "$added" ]; then echo "No new screens or components."; exit 0; fi
+          if git diff --name-only "$BASE_SHA"...HEAD | grep -qx 'lib/help/guide.ts'; then echo "The guide was updated."; exit 0; fi
+          if printf '%s' "$PR_BODY" | grep -qi 'guide: no change'; then echo "Marked as needing no guide change."; exit 0; fi
+          echo "::error::This pull request adds new screens or components but doesn't update lib/help/guide.ts, which Concierge answers from. Say there what the feature does and where to tap, or write 'Guide: no change' in the description if nothing people see is new."
+          echo "$added"
+          exit 1

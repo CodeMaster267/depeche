@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
 import type { RunContext } from "@/components/markdown/RunCode";
@@ -18,7 +19,7 @@ import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/vo
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
 import { markAway } from "@/lib/push/client";
-import { ACCEPT, AttachmentTray, useAttachments, type Pending } from "./Attachments";
+import { ACCEPT, AUDIO_ACCEPT, AttachmentTray, useAttachments, type Pending } from "./Attachments";
 import { AskAboutSelection, CostButton, FollowUps, QuoteChip } from "./Extras";
 import { ModelPicker } from "./ModelPicker";
 import { Compare } from "./Compare";
@@ -30,12 +31,15 @@ import { CanvasIcon, CanvasMessage, CanvasOpener, CanvasPane, useCanvas } from "
 import { ChatMenu } from "./ChatMenu";
 import { DeletionNotice } from "./DeletionNotice";
 import { UserMessage, VersionSwitch } from "./Versions";
-import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, FolderIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, RetryIcon, SparkIcon, StopIcon } from "./icons";
+import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, FolderIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, PhotoIcon, RetryIcon, ScanIcon, SparkIcon, StopIcon, WaveIcon } from "./icons";
 import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
 import { ResearchCard, ResearchIcon, runFor, useResearch } from "./Research";
 import type { RunView } from "@/lib/research/types";
 import { EditingChip, MakingPicture, ReplyPictures, isPicture } from "./Pictures";
+
+// Loaded only when someone scans, so the chat itself stays quick to open.
+const ScanSheet = dynamic(() => import("./ScanSheet"), { ssr: false });
 import type { Source } from "@/lib/chat/thread";
 import { SOURCE_NAMES } from "@/lib/import/types";
 import { LOOK_ACTION, Shortcuts, useLookTexts, type LookAction } from "@/components/design/Look";
@@ -128,6 +132,8 @@ export function ChatApp({
   const [drawer, setDrawer] = useState(false);
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  /** The scanner, open with the photos it was started with. */
+  const [scan, setScan] = useState<File[] | null>(null);
   const [draft, setDraft] = useState("");
   // The part of an answer the next message asks about, picked by selecting it.
   const [quote, setQuote] = useState<string | null>(null);
@@ -158,7 +164,7 @@ export function ChatApp({
   const [voiceOpen, setVoiceOpen] = useState(false);
   // Deep research: on for the next message only.
   const [deep, setDeep] = useState(false);
-  const attachments = useAttachments(initialShell.userId);
+  const attachments = useAttachments(initialShell.userId, (message) => setBanner(message));
   // Replies being written right now: one, or two or three when comparing models.
   const aborts = useRef(new Set<AbortController>());
   const stopAll = () => aborts.current.forEach((a) => a.abort());
@@ -1030,7 +1036,18 @@ export function ChatApp({
               {banner}
             </p>
           ) : null}
+          {scan ? (
+            <ScanSheet
+              initial={scan}
+              onClose={() => setScan(null)}
+              onAttach={async (file) => {
+                const skipped = await attachments.add([file]);
+                if (skipped) setBanner("You can attach up to 5 files to one message.");
+              }}
+            />
+          ) : null}
           <Composer
+            onScan={(files) => setScan(files)}
             editing={editing}
             onClearEditing={() => setEditLast(false)}
             placeholder={imaging ? (editing || attachments.items.some((x) => x.mime.startsWith("image/")) ? "Describe what to change" : "Describe a picture to make") : deep && searchable ? "What to research?" : project && !chat ? `New chat in ${project.name}` : assistant && !chat ? `Message ${assistant.name}` : "Message Depeche"}
@@ -1245,6 +1262,7 @@ function Reply({
 }
 
 function Composer({
+  onScan,
   editing,
   onClearEditing,
   placeholder,
@@ -1297,9 +1315,13 @@ function Composer({
   onVoice: () => void;
   onDictated: (text: string) => void;
   onVoiceError: (msg: string) => void;
+  onScan: (photos: File[]) => void;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
+  const recordings = useRef<HTMLInputElement>(null);
+  const [menu, setMenu] = useState(false);
   const look = useLookTexts();
   // A look can reword the usual prompt; picture prompts stay as they are.
   const hint = placeholder === "Message Depeche" && look.placeholder ? look.placeholder : placeholder;
@@ -1349,15 +1371,75 @@ function Composer({
             if (files.length) onAttach(files);
           }}
         />
-        <button
-          type="button"
-          onClick={() => picker.current?.click()}
-          disabled={disabled}
-          aria-label="Attach photos or files"
-          className="press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
-        >
-          <PaperclipIcon />
-        </button>
+        {/* Scanning opens the camera straight away on a phone (a file picker on a computer). */}
+        <input
+          ref={camera}
+          type="file"
+          multiple
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          data-testid="scan-input"
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = "";
+            if (files.length) onScan(files);
+          }}
+        />
+        <input
+          ref={recordings}
+          type="file"
+          multiple
+          accept={AUDIO_ACCEPT}
+          className="hidden"
+          data-testid="audio-input"
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = "";
+            if (files.length) onAttach(files);
+          }}
+        />
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => setMenu(!menu)}
+            disabled={disabled}
+            aria-label="Attach"
+            aria-haspopup="menu"
+            aria-expanded={menu}
+            className="press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
+          >
+            <PaperclipIcon />
+          </button>
+          {menu ? (
+            <>
+              <button type="button" aria-label="Close" tabIndex={-1} className="fixed inset-0 z-20 cursor-default" onClick={() => setMenu(false)} />
+              <div role="menu" aria-label="Attach" onKeyDown={(e) => e.key === "Escape" && setMenu(false)} className="absolute bottom-12 left-0 z-30 w-64 overflow-hidden rounded-2xl border border-line bg-bg py-1 text-[16px] shadow-lg">
+                {(
+                  [
+                    ["Photos and files", PhotoIcon, picker],
+                    ["Scan pages", ScanIcon, camera],
+                    ["Voice note or recording", WaveIcon, recordings],
+                  ] as const
+                ).map(([label, Icon, input]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-soft"
+                    onClick={() => {
+                      setMenu(false);
+                      input.current?.click();
+                    }}
+                  >
+                    <Icon className="shrink-0 text-mute" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
         <button
           type="button"
           onClick={onToggleSearch}

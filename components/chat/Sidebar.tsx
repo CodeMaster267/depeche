@@ -14,6 +14,7 @@ import { ChatMenu } from "./ChatMenu";
 import { AccountMenu } from "./AccountMenu";
 import { ArchiveIcon, BackIcon, CloseIcon, FolderIcon, FolderPlusIcon, PlusIcon, SearchIcon } from "./icons";
 import { Shortcuts } from "@/components/design/Look";
+import { ConciergeButton } from "@/components/help/Concierge";
 
 /** Projects shown before "Show all". */
 const FEW_PROJECTS = 5;
@@ -296,6 +297,7 @@ export function Sidebar({
               <ArchiveIcon />
               <span>Archived chats</span>
             </button>
+            <ConciergeButton variant="row" isAdmin={isAdmin} />
           </>
         )}
       </div>
