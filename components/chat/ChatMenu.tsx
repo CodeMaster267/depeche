@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { GlassCode } from "@/components/Glass";
-import { archiveChat, deleteChat, pinChat, renameChat } from "@/app/c/actions";
+import { archiveChat, deleteChat, pinChat, renameChat, setCompaction } from "@/app/c/actions";
 import { moveChat } from "@/app/p/actions";
 import { cleanProjectName } from "@/lib/chat/projects";
 import { useProjects } from "./projects-context";
@@ -15,7 +15,7 @@ const ITEM = "flex w-full items-center px-4 py-3 text-left text-[16px] hover:bg-
 
 /**
  * The three dots on a chat (in the chat list and in an open chat's header): rename, share, pin, archive
- * or restore, download, and delete. The menu floats above everything (it is drawn at the end of the page),
+ * or restore, summaries on or off (open chat only), download, and delete. The menu floats above everything (it is drawn at the end of the page),
  * so the chat list's scrolling never cuts it off, and it opens upwards near the bottom of the screen.
  * Rename and delete open a small sheet of their own rather than the browser's prompt boxes.
  */
@@ -143,6 +143,21 @@ export function ChatMenu({
                 {projects ? (
                   <button type="button" role="menuitem" className={ITEM} onClick={pick(() => setSheet("move"))}>
                     {chat.project_id ? "Move to another project" : "Move to project"}
+                  </button>
+                ) : null}
+                {chat.compaction ? (
+                  // Only for the open chat (the list doesn't load this setting).
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={ITEM}
+                    onClick={pick(() => {
+                      const on = chat.compaction === "off";
+                      onChange({ ...chat, compaction: on ? "auto" : "off" });
+                      setCompaction(chat.id, on).catch(() => {});
+                    })}
+                  >
+                    {chat.compaction === "off" ? "Turn on summaries" : "Turn off summaries"}
                   </button>
                 ) : null}
                 <button

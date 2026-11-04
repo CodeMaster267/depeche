@@ -9,7 +9,9 @@ import type { RunContext } from "@/components/markdown/RunCode";
 import { MODELS, canSearch, findModel, type Model } from "@/lib/ai/models";
 import { latestLeaf, pathTo, titleFrom, versionsOf, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
-import { archiveChat, refreshChat, refreshShell, rememberModel } from "@/app/c/actions";
+import { archiveChat, discardSummary, refreshChat, refreshShell, rememberModel, setCompaction } from "@/app/c/actions";
+import { activeSummary, type SummaryRow } from "@/lib/chat/summary";
+import { SummaryLine, SummarySheet } from "./SummarySheet";
 import { createProject } from "@/app/p/actions";
 import type { ProjectDetail } from "@/lib/chat/projects";
 import type { AssistantRow } from "@/lib/chat/assistants";
@@ -82,6 +84,7 @@ export function ChatApp({
   project: initialProject = null,
   assistant = null,
   all: initialAll,
+  summaries: initialSummaries = [],
   focus,
   temporary: startTemporary = false,
 }: {
@@ -94,6 +97,7 @@ export function ChatApp({
   assistant?: AssistantRow | null;
   /** Every version of every message; the screen shows one path through them. */
   all?: MessageRow[];
+  summaries?: SummaryRow[];
   /** A message to scroll to and mark, when the chat was opened from a search result. */
   focus?: string | null;
   /** Start as a temporary chat (opened from /?temporary). */
@@ -132,6 +136,9 @@ export function ChatApp({
   // The saved assistant this chat is with, when it's still one you can see.
   const assistantId = chat ? (chat.assistant_id ?? null) : (assistant?.id ?? null);
   const withAssistant = shell.assistants.find((a) => a.id === assistantId) ?? assistant;
+  // Summaries of earlier messages (auto-compaction), and whether the open one is showing.
+  const [summaries, setSummaries] = useState<SummaryRow[]>(initialSummaries);
+  const [viewing, setViewing] = useState<string | null>(null);
   // Edits and regenerations sit beside the originals, so a chat is a tree. `leaf` is where the
   // conversation on screen ends; flipping a version moves it.
   const [tree, setTree] = useState<Live[]>(initialAll ?? initial);
@@ -254,6 +261,7 @@ export function ChatApp({
         setTree(all);
         // Stay on the version being read, picking up anything added below it; else the newest.
         setLeaf((l) => (l && all.some((m) => m.id === l) ? latestLeaf(all, l) : (found.messages.at(-1)?.id ?? null)));
+        setSummaries(found.summaries);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -485,7 +493,7 @@ export function ChatApp({
             | { type: "searching"; query?: string; where?: "chat" }
             | { type: "sources"; sources: Source[] }
             | { type: "making"; editing?: boolean }
-            | { type: "done" | "error"; message: MessageRow | null; error?: string };
+            | { type: "done" | "error"; message: MessageRow | null; error?: string; compact?: boolean; summary?: SummaryRow };
           if (ev.type === "start" && body.temporary) {
             // Nothing was saved: the question keeps its place on screen under its own id.
           } else if (ev.type === "start") {
@@ -553,6 +561,11 @@ export function ChatApp({
               // Code in a reply that just arrived may run by itself.
               setFresh((f) => new Set(f).add(saved.id));
               setShell((s) => ({ ...s, spent: s.spent + Number(saved.content.cost ?? 0) }));
+              // A summary made before this reply (the chat had grown well past the point).
+              const made = ev.summary;
+              if (made) setSummaries((list) => [...list.filter((s) => s.id !== made.id), made]);
+              // The chat is long enough to summarise: do it now, in the background.
+              if (ev.compact && chatId) summarise(chatId);
             } else patchReply((m) => ({ ...m, streaming: false, status: "failed", content: { ...m.content, error: ev.error } }));
           }
         }
@@ -586,6 +599,27 @@ export function ChatApp({
       }));
     }
   }
+
+  async function summarise(chatId: string, redo?: string): Promise<string | null> {
+    const res = await fetch("/api/chat/compact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chatId, ...(redo ? { redo } : {}) }),
+      keepalive: !redo,
+    }).catch(() => null);
+    const out = (await res?.json().catch(() => null)) as { summary?: SummaryRow; skipped?: string; error?: string } | null;
+    const made = out?.summary;
+    if (made) {
+      setSummaries((list) => [...list.filter((s) => s.id !== redo && s.id !== made.id), made]);
+      if (redo) setViewing(made.id);
+      return null;
+    }
+    return out?.error ?? (out?.skipped ? `Couldn't summarise: ${out.skipped}.` : "Couldn't summarise. Try again.");
+  }
+
+  // Where the model starts reading word for word: after the newest summary on the shown path.
+  const applied = chat?.compaction !== "off" ? activeSummary(messages, summaries) : null;
+  const shownSummary = viewing ? summaries.find((s) => s.id === viewing) : undefined;
 
   const send = () => {
     const text = draft.trim();
@@ -1020,7 +1054,7 @@ export function ChatApp({
                 {chat.created_at ? ` · started ${new Date(chat.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}` : ""}
               </p>
             ) : null}
-            {messages.map((m) =>
+            {messages.flatMap((m, i) => [
               m.role === "user" ? (
                 <div key={m.id} className="flex flex-col">
                   <UserMessage
@@ -1079,7 +1113,10 @@ export function ChatApp({
                 />
                 </CanvasMessage.Provider>
               ),
-            )}
+              applied && applied.index === i && i < messages.length - 1 ? (
+                <SummaryLine key={`summary-${applied.summary.id}`} onOpen={() => setViewing(applied.summary.id)} />
+              ) : null,
+            ].filter(Boolean))}
           </div>
           </CanvasOpener.Provider>
         </div>
@@ -1171,6 +1208,23 @@ export function ChatApp({
           onSend={(t) => sendText(t, true)}
           onStop={stopAll}
           onClose={() => setVoiceOpen(false)}
+        />
+      ) : null}
+      {shownSummary && chat ? (
+        <SummarySheet
+          summary={shownSummary}
+          onClose={() => setViewing(null)}
+          onRedo={() => summarise(chat.id, shownSummary.id)}
+          onDiscard={async () => {
+            await discardSummary(shownSummary.id);
+            setSummaries((list) => list.filter((s) => s.id !== shownSummary.id));
+            setViewing(null);
+          }}
+          onTurnOff={async () => {
+            await setCompaction(chat.id, false);
+            setChat({ ...chat, compaction: "off" });
+            setViewing(null);
+          }}
         />
       ) : null}
       {picking ? (

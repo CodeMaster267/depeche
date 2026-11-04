@@ -53,6 +53,11 @@ test("a suggested memory is kept with a tap, used later, and can be forgotten", 
     if (await remember.isVisible()) await remember.click();
     await expect(page.getByText("Remembered.")).toBeVisible({ timeout: 3_000 });
   }).toPass({ timeout: 15_000 });
+  // "Remembered." shows at once while the save is still on its way; leaving the page too soon
+  // can cancel it, so wait until it is stored.
+  await expect
+    .poll(async () => (await db.from("memories").select("status").eq("owner_id", user.user!.id).eq("status", "active")).data?.length)
+    .toBe(1);
 
   await page.goto("/memory");
   await expect(page.getByTestId("memories")).toContainText("Their favourite colour is black.");

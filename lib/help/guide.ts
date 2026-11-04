@@ -167,11 +167,25 @@ Voice works while the app is open; iPhones don't let websites listen in the back
     text: `
 - The side menu lists your chats: Pinned, Today, Yesterday, Previous 7 days, Earlier. The Search box there filters by title.
 - Each chat has three dots (in the list, and at the top right of an open chat) with: Rename, Pin (or Unpin), Archive
-  (or Restore), Download (the chat as a file) and Delete.
+  (or Restore), Download (the chat as a file) and Delete. In an open chat it also has "Turn off summaries" (or "Turn on").
 - "Archived chats" at the bottom of the list shows chats you put away. Writing in an archived chat brings it back.
 - Chats you haven't used for a month are deleted with their files, archived ones too. Pinned chats are always kept. To
   keep everything, turn on "Keep all my chats" in [Account → Old chats](/account#old-chats). When chats are about to be
   deleted, a line at the top of the chat screen says so, with "Keep" to save them.`,
+  },
+  {
+    id: "summaries",
+    title: "Long chats: summaries of earlier messages",
+    text: `
+- When a chat gets very long (roughly 35,000 words), Depeche has the cheapest model of the same AI company write a
+  summary of the older part, plus a list of exact details (numbers, dates, names, links, decisions). From then on the
+  model reads that summary and the recent messages instead of everything, so long chats stay cheap and fit.
+- Nothing is deleted: every message stays in the chat. A line "Earlier messages summarised" marks where the summary
+  ends; tap it to read the summary, its key facts and what it cost.
+- In that sheet: "Redo summary" writes it again from the original messages, "Don't use this summary" drops it, and
+  "Turn off for this chat" stops summaries for that chat (turn them back on from the chat's three dots).
+- The model can still look up the exact wording of anything earlier in the chat when it needs to.
+- Summaries count towards your monthly limit like replies, and usually cost a fraction of a cent.`,
   },
   {
     id: "temporary-and-sharing",
