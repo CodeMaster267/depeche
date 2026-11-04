@@ -25,7 +25,7 @@ export default defineConfig({
       { name: "safari-desktop", use: { ...devices["Desktop Safari"] } },
       { name: "safari-iphone", use: { ...devices["iPhone 15"] } },
       // Hasan reads on an iPad: replies (tables especially) are checked at that width too.
-      { name: "safari-ipad", use: { ...devices["iPad Pro 11 landscape"] }, testMatch: /chat\.spec\.ts/ },
+      { name: "safari-ipad", use: { ...devices["iPad Pro 11 landscape"] }, testMatch: /(chat|versions)\.spec\.ts/ },
     ].map((p) => ({ ...p, dependencies: ["setup"], testIgnore: /setup\.spec\.ts/ })),
   ],
   webServer: {
