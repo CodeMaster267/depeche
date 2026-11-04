@@ -943,6 +943,15 @@ This is well documented[^1].
 async function* fakeReply({ turns, signal, search, model, system, chatSearch, harder }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const last = turns.at(-1);
   const q = last?.text.slice(0, 80) ?? "";
+  // Asked to summarise a chat (auto-compaction): a short summary naming the first message, and facts.
+  if (system.startsWith("You summarise conversations for Depeche")) {
+    const first = /\[[^\]]+\]\n([^\n]{0,60})/.exec(last?.text ?? "")?.[1] ?? "";
+    const reply = `<summary>Earlier in this chat they talked about "${first}" and more.</summary>\n<facts>\n- The secret number is 4417.\n</facts>`;
+    await new Promise((r) => setTimeout(r, q.includes("slowly") ? 1500 : 30));
+    yield { type: "text", text: reply };
+    yield { type: "usage", input: Math.ceil((last?.text.length ?? 0) / 4), output: 60 };
+    return;
+  }
   // A gadget asking: answers "<model>: <question>", or a changed page when a gadget is being changed.
   if (system.startsWith("You are answering a request from a gadget")) {
     yield { type: "text", text: `${model.name} says: ${(last?.text ?? "").slice(0, 60)}` };
