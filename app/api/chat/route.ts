@@ -405,14 +405,11 @@ export async function POST(req: NextRequest) {
             ...(sources.length ? { sources } : {}),
             ...(searches ? { searches } : {}),
             ...(suggestions ? { suggestions } : {}),
-<<<<<<< HEAD
-            ...(compare ? { compare } : {}),
-=======
             ...(reasoning.trim() ? { reasoning, thoughtMs: clock.ms } : {}),
             ...(queries.length ? { queries } : {}),
             ...(lookups.length ? { lookups } : {}),
             ...(read.length ? { read } : {}),
->>>>>>> origin/main
+            ...(compare ? { compare } : {}),
             cost,
           },
           status,
