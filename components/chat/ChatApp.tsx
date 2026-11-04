@@ -29,7 +29,18 @@ const draftId = () => `local-${Math.random().toString(36).slice(2)}`;
  * The chat screen: your chats on the left (a drawer on phones), the conversation, and the box to
  * write in. Replies stream in from /api/chat as they're written.
  */
-export function ChatApp({ shell: initialShell, chat: initialChat, messages: initial }: { shell: Shell; chat: ChatRow | null; messages: MessageRow[] }) {
+export function ChatApp({
+  shell: initialShell,
+  chat: initialChat,
+  messages: initial,
+  focus,
+}: {
+  shell: Shell;
+  chat: ChatRow | null;
+  messages: MessageRow[];
+  /** A message to scroll to and mark, when the chat was opened from a search result. */
+  focus?: string | null;
+}) {
   const router = useRouter();
   const [shell, setShell] = useState(initialShell);
   const [chat, setChat] = useState<ChatRow | null>(initialChat);
@@ -84,6 +95,23 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     const el = scroller.current;
     if (el && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  // Opened from a search result: show that message instead of the end of the chat, marked for a
+  // moment. A message on another branch (an edited question's old reply) isn't on screen, so the
+  // chat simply opens as usual.
+  const [found, setFound] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (!focus) return;
+    const el = scroller.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(focus)}"]`);
+    if (!el) return;
+    pinnedToBottom.current = false;
+    el.scrollIntoView({ block: "center" });
+    setFound(focus);
+    const t = setTimeout(() => setFound(null), 2600);
+    // Don't jump again on a reload.
+    window.history.replaceState(window.history.state, "", window.location.pathname);
+    return () => clearTimeout(t);
+  }, [focus]);
 
   // Another device may have added chats or replies: catch up whenever the app comes back.
   const sync = useCallback(async () => {
@@ -359,12 +387,13 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             ) : null}
             {messages.map((m) =>
               m.role === "user" ? (
-                <div key={m.id} className="flex flex-col items-end gap-2">
+                <div key={m.id} data-message-id={m.id} className="flex flex-col items-end gap-2">
                   {m.content.files?.length ? <MessageFiles files={m.content.files} /> : null}
                   {m.content.text ? (
                     <div
                       data-testid="user-message"
-                      className="max-w-[85%] whitespace-pre-wrap break-words rounded-[22px] bg-inv px-5 py-3 text-[17px] leading-relaxed text-on-inv"
+                      data-found={found === m.id || undefined}
+                      className="found-mark max-w-[85%] whitespace-pre-wrap break-words rounded-[22px] bg-inv px-5 py-3 text-[17px] leading-relaxed text-on-inv"
                     >
                       {m.content.text}
                     </div>
@@ -374,6 +403,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
                 <Reply
                   key={m.id}
                   message={m}
+                  found={found === m.id}
                   canRegenerate={!busy && !!lastUser && m.parent_id === lastUser.id}
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
                 />
@@ -435,13 +465,29 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   );
 }
 
-function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; canRegenerate: boolean; onRegenerate: () => void }) {
+function Reply({
+  message: m,
+  found,
+  canRegenerate,
+  onRegenerate,
+}: {
+  message: Live;
+  found?: boolean;
+  canRegenerate: boolean;
+  onRegenerate: () => void;
+}) {
   const [copied, setCopied] = useState(false);
   const info = findModel(m.model);
   const text = m.content.text ?? "";
   const cost = m.content.cost;
   return (
-    <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
+    <article
+      data-testid="reply"
+      data-message-id={m.id}
+      data-found={found || undefined}
+      aria-busy={m.streaming || undefined}
+      className="found-mark flex flex-col gap-3"
+    >
       {text ? <Markdown text={text} streaming={m.streaming} /> : null}
       {m.streaming && m.searchingNow ? <Searching queries={m.queries ?? []} where={m.searchingWhere} /> : null}
       {m.streaming && !m.searchingNow ? (

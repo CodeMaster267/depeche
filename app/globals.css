@@ -574,3 +574,15 @@ body {
   .voice-orb { transition: opacity 200ms ease; transform: none !important; }
   .voice-orb-speaking, .voice-orb-busy, .voice-dots { animation: none; }
 }
+
+/* A message opened from a search result: a ring that fades, in the text colour (no accent). */
+.found-mark {
+  border-radius: 22px;
+  outline: 2px solid transparent;
+  outline-offset: 8px;
+  transition: outline-color 0.6s ease;
+}
+.found-mark[data-found] {
+  outline-color: var(--fg);
+  transition: none;
+}
