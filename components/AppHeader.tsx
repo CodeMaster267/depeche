@@ -5,7 +5,7 @@ import { PersonalLook } from "@/components/design/PersonalLook";
 import { Shortcuts } from "@/components/design/Look";
 
 /** Three links fit beside the wordmark on a phone with slightly narrower pills. */
-const PILL = "max-sm:px-3!";
+const PILL = "max-sm:px-2.5!";
 
 /** Top bar for signed-in pages. The wordmark stays clean here; the glitch is for the title card. */
 export function AppHeader({ isAdmin }: { isAdmin: boolean }) {
@@ -19,9 +19,10 @@ export function AppHeader({ isAdmin }: { isAdmin: boolean }) {
       <Link href="/" className="press text-[20px]" aria-label="Depeche home">
         <Wordmark />
       </Link>
-      <nav className="flex min-w-0 items-center gap-1.5 text-[15px] sm:gap-2">
+      <nav className="flex min-w-0 items-center gap-1 text-[14px] sm:gap-2 sm:text-[15px]">
         <Shortcuts place="header" isAdmin={isAdmin} className="max-sm:hidden" />
         {isAdmin ? <NavLink href="/family" className={PILL}>Family</NavLink> : null}
+        {isAdmin ? <NavLink href="/health" className={PILL}>Health</NavLink> : null}
         <NavLink href="/memory" className={PILL}>Memory</NavLink>
         <NavLink href="/account" className={PILL}>Account</NavLink>
       </nav>

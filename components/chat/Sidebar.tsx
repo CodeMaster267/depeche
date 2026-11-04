@@ -191,6 +191,7 @@ export function Sidebar({
             <span className="block truncate text-[16px]">{name}</span>
             <span className="mt-1 flex flex-wrap gap-2 whitespace-nowrap text-[14px]">
               {isAdmin ? <NavLink href="/family">Family</NavLink> : null}
+              {isAdmin ? <NavLink href="/health">Health</NavLink> : null}
               <NavLink href="/memory">Memory</NavLink>
               <NavLink href="/account">Account</NavLink>
               <NavLink href="/design">My look</NavLink>
