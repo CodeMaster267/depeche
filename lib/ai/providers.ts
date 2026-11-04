@@ -1,7 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { FunctionCallingConfigMode, GoogleGenAI, type Part } from "@google/genai";
+import { FunctionCallingConfigMode, GoogleGenAI, ThinkingLevel, type Part } from "@google/genai";
 import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canLookUp, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
 import { MAX_OUTPUT } from "@/lib/ai/budget";
 import { CHAT_SEARCH_TOOL, MAX_CHAT_SEARCHES, type ChatSearch } from "@/lib/chat/search";
@@ -58,6 +58,8 @@ export type ReplyRequest = {
   chatSearch?: ChatSearch;
   /** Ask for the model's reasoning. Turned off for a model that turns out not to offer it. */
   think?: boolean;
+  /** "Think harder": ask for the model's highest usual reasoning effort, where it takes one. */
+  harder?: boolean;
   /**
    * Turns on prompt caching where Depeche has to ask for it (Claude), and keeps each chat's cached
    * prompt together and apart from other people's where the provider allows (OpenAI's and xAI's
@@ -234,7 +236,7 @@ const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-
 /** Long searches can pause a Claude turn; it is continued this many times at most. */
 const MAX_CONTINUES = 3;
 
-async function* anthropicReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* anthropicReply({ model, apiKey, system, turns, signal, search, think, harder, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new Anthropic({ apiKey, maxRetries: 1, baseURL: testUrl("DEPECHE_ANTHROPIC_URL") });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
@@ -285,7 +287,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, t
         // this chat, and each round of searching within this reply, reads it back at a tenth of the
         // price or less. The cache lasts 5 minutes from its last use.
         ...(cacheKey ? { cache_control: { type: "ephemeral" as const } } : {}),
-        output_config: { effort: "medium" },
+        output_config: { effort: harder ? "high" : "medium" },
         // Claude decides when to think; a summary of it is shown collapsed above the reply.
         ...(think ? { thinking: { type: "adaptive" as const, display: "summarized" as const } } : {}),
         ...(tools.length ? { tools: tools as never } : {}),
@@ -391,7 +393,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, t
   yield { type: "usage", input, output, cacheRead, cacheWrite };
 }
 
-async function* openaiReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* openaiReply({ model, apiKey, system, turns, signal, search, think, harder, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new OpenAI({ apiKey, maxRetries: 1, baseURL: testUrl("DEPECHE_OPENAI_URL") });
   const input: unknown[] = turns.map((t) =>
     t.role === "user" && t.files?.length
@@ -442,7 +444,10 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, thin
         ...(tools.length ? { tools: tools as never } : {}),
         ...(search ? { max_tool_calls: MAX_SEARCHES } : {}),
         // OpenAI shares a summary of its reasoning, not the reasoning itself.
-        ...(think ? { reasoning: { summary: "auto" as const } } : {}),
+        // "Think harder" raises its reasoning effort.
+        ...(think || harder
+          ? { reasoning: { ...(think ? { summary: "auto" as const } : {}), ...(harder ? { effort: "high" as const } : {}) } }
+          : {}),
         // Nothing is stored at OpenAI, so the model's reasoning comes back encrypted to be handed
         // back after a lookup.
         ...(chatSearch
@@ -512,7 +517,7 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, thin
   yield { type: "usage", input: inputTokens, output: outputTokens, cacheRead, cacheWrite };
 }
 
-async function* googleReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* googleReply({ model, apiKey, system, turns, signal, search, think, harder, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const base = testUrl("DEPECHE_GOOGLE_URL");
   const ai = new GoogleGenAI({ apiKey, ...(base ? { httpOptions: { baseUrl: base } } : {}) });
   type Content = { role: "user" | "model"; parts: Part[] };
@@ -554,7 +559,10 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, thin
         maxOutputTokens: left,
         abortSignal: signal,
         // Gemini shares summaries of its thoughts when asked.
-        ...(think ? { thinkingConfig: { includeThoughts: true } } : {}),
+        // "Think harder" raises its thinking level.
+        ...(think || harder
+          ? { thinkingConfig: { ...(think ? { includeThoughts: true } : {}), ...(harder ? { thinkingLevel: ThinkingLevel.HIGH } : {}) } }
+          : {}),
         ...(tools.length ? { tools } : {}),
         ...(chatSearch && lookups >= MAX_CHAT_SEARCHES
           ? { toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.NONE } } }
@@ -790,6 +798,68 @@ Flights,240
 
 `.replaceAll("\\`", "`");
 
+const FAKE_TIP_WIDGET = String.raw`\`\`\`widget:Tip-calculator
+<!doctype html>
+<html><head><style>
+  label { display: block; margin: 8px 0 4px; color: var(--depeche-mute); }
+  input { width: 100%; padding: 8px 12px; border: 1px solid var(--depeche-line); border-radius: 12px; background: transparent; }
+  output { display: block; font-size: 28px; font-weight: 700; margin: 12px 0; }
+  button { padding: 8px 16px; border-radius: 999px; border: 0; background: var(--depeche-fg); color: var(--depeche-bg); }
+</style></head><body>
+  <label for="bill">Bill</label><input id="bill" type="number" value="40">
+  <label for="tip">Tip <span id="pct">15</span>%</label><input id="tip" type="range" min="0" max="30" value="15">
+  <output id="out">Each pays £46.00</output>
+  <button id="share">Share with the chat</button>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const total = () => (Number($("bill").value) * (1 + Number($("tip").value) / 100)).toFixed(2);
+    const show = () => { $("pct").textContent = $("tip").value; $("out").textContent = "Each pays £" + total(); };
+    $("bill").addEventListener("input", show);
+    $("tip").addEventListener("input", show);
+    $("share").addEventListener("click", () => depeche.send("The total with tip is £" + total()));
+    show();
+  </script>
+</body></html>
+\`\`\``.replaceAll("\\`", "`");
+
+const FAKE_GAME_WIDGET = String.raw`\`\`\`widget:Word-game
+<button id="ask">Your move, AI</button>
+<button id="remember">Remember the score</button>
+<p>AI: <span id="answer">waiting</span></p>
+<p>AIs: <span id="models">…</span></p>
+<p>Remembered: <span id="loaded">…</span></p>
+<script>
+  const $ = (id) => document.getElementById(id);
+  $("ask").onclick = async () => {
+    try { $("answer").textContent = await depeche.ask("What is your move?", { system: "Answer with one word." }); }
+    catch (e) { $("answer").textContent = "error: " + e.message; }
+  };
+  $("remember").onclick = async () => { await depeche.save({ score: 3 }); $("loaded").textContent = "saved"; };
+  depeche.models().then((m) => { $("models").textContent = m.map((x) => x.name).join(", "); });
+  depeche.load().then((d) => { $("loaded").textContent = d === null ? "nothing" : d; });
+</script>
+\`\`\``.replaceAll("\\`", "`");
+
+const FAKE_ESCAPE_WIDGET = String.raw`\`\`\`widget:Escape-test
+<ul id="out"></ul>
+<img id="pic" src="https://picsum.photos/20" alt="">
+<script>
+  const out = document.getElementById("out");
+  const note = (name, ok) => { const li = document.createElement("li"); li.textContent = name + ": " + (ok ? "blocked" : "OPEN"); li.dataset.check = name; out.append(li); };
+  const tryIt = (name, fn) => { try { fn(); note(name, false); } catch { note(name, true); } };
+  tryIt("parent page", () => parent.document.body.innerHTML);
+  tryIt("storage", () => localStorage.getItem("x"));
+  // Chrome refuses to read cookies here; Safari reads none. Either way the app's are out of reach.
+  tryIt("cookies", () => { document.cookie = "probe=1"; if (document.cookie) return; throw new Error("none"); });
+  tryIt("pop-up", () => { if (!window.open("https://example.com")) throw new Error("no"); });
+  fetch("/api/design/build").then(() => note("app api", false), () => note("app api", true));
+  fetch("https://example.com/").then(() => note("internet", false), () => note("internet", true));
+  const pic = document.getElementById("pic");
+  pic.onerror = () => note("outside picture", true);
+  pic.onload = () => note("outside picture", false);
+</script>
+\`\`\``.replaceAll("\\`", "`");
+
 const FAKE_CHARTS = String.raw`Here's a chart.
 
 \`\`\`chart
@@ -870,9 +940,33 @@ This is well documented[^1].
 [^1]: [Quadratic formula](https://en.wikipedia.org/wiki/Quadratic_formula), Wikipedia.
 `.replaceAll("\\`", "`");
 
-async function* fakeReply({ turns, signal, search, model, system, chatSearch }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
+async function* fakeReply({ turns, signal, search, model, system, chatSearch, harder }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const last = turns.at(-1);
   const q = last?.text.slice(0, 80) ?? "";
+  // Asked to summarise a chat (auto-compaction): a short summary naming the first message, and facts.
+  if (system.startsWith("You summarise conversations for Depeche")) {
+    const first = /\[[^\]]+\]\n([^\n]{0,60})/.exec(last?.text ?? "")?.[1] ?? "";
+    const reply = `<summary>Earlier in this chat they talked about "${first}" and more.</summary>\n<facts>\n- The secret number is 4417.\n</facts>`;
+    await new Promise((r) => setTimeout(r, q.includes("slowly") ? 1500 : 30));
+    yield { type: "text", text: reply };
+    yield { type: "usage", input: Math.ceil((last?.text.length ?? 0) / 4), output: 60 };
+    return;
+  }
+  // A gadget asking: answers "<model>: <question>", or a changed page when a gadget is being changed.
+  if (system.startsWith("You are answering a request from a gadget")) {
+    yield { type: "text", text: `${model.name} says: ${(last?.text ?? "").slice(0, 60)}` };
+    yield { type: "usage", input: 400, output: 12 };
+    return;
+  }
+  if (system.startsWith("You are changing a gadget")) {
+    const page = /The gadget's page now:\n(`{3,})widget:[^\n]*\n([\s\S]*?)\n\1/.exec(system)?.[2] ?? "<p>Gadget</p>";
+    const text = q.includes("refuse-test")
+      ? "I can't make that change."
+      : `I've made that change.\n\n\`\`\`widget:Changed\n${page}\n<p id="changed">Changed: ${q.replace(/[<>&]/g, "")}</p>\n\`\`\``;
+    yield { type: "text", text };
+    yield { type: "usage", input: 2000, output: 900 };
+    return;
+  }
   // "what did I say about X" looks X up in this chat, to test the search-this-chat tool.
   const recall = chatSearch ? /what did i say about (.+?)\??$/i.exec(last?.text ?? "") : null;
   if (chatSearch && recall) {
@@ -953,6 +1047,20 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     (q.includes("make files") ? FAKE_FILES : "") +
     (q.includes("draw charts") ? FAKE_CHARTS : "") +
     (q.includes("analyse") ? FAKE_ANALYSIS.replace("{file}", seen.find((n) => /\.(csv|txt)$/i.test(n)) ?? "data.csv") : "");
+  // "tip calculator" builds an interactive tool, and "escape test" one that tries to get out of
+  // its sealed frame, to test interactive tools.
+  // "game gadget" builds one that asks an AI, lists the AIs and remembers, to test saved gadgets.
+  if (q.includes("tip calculator") || q.includes("escape test") || q.includes("game gadget")) {
+    const tool = q.includes("escape test") ? FAKE_ESCAPE_WIDGET : q.includes("game gadget") ? FAKE_GAME_WIDGET : FAKE_TIP_WIDGET;
+    const reply = `Here you go.\n\n${tool}\n\nTry it out.`;
+    for (let i = 0; i < reply.length; i += 80) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      await new Promise((r) => setTimeout(r, 5));
+      yield { type: "text", text: reply.slice(i, i + 80) };
+    }
+    yield { type: "usage", input: 1200, output: 600 };
+    return;
+  }
   // "redesign" makes it write a design brief for a new look, to test personal designs.
   if (q.includes("redesign") && system.includes("```design")) {
     const brief = `Here's the brief for your new look.\n\n\`\`\`design\n${(last?.text ?? "").replace(/^.*?redesign:?\s*/i, "").slice(0, 300) || "A playful look"}\n\`\`\`\n\nTap Build to try it.`;
@@ -985,7 +1093,8 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   }
   // "my first message" makes it repeat the conversation's first message, to test what history it got.
   const first = q.includes("my first message") ? `Your first message was: "${turns[0]?.text.split("\n")[0].slice(0, 80)}" (${turns.length} turns).\n\n` : "";
-  const reply = first + asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + skilled + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
+  // Says when it was asked to think harder, to test the switch reaches the model.
+  const reply = (harder ? "I thought harder about this.\n\n" : "") + first + asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + skilled + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

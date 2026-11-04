@@ -594,6 +594,24 @@ body {
   .voice-orb-speaking, .voice-orb-busy, .voice-dots { animation: none; }
 }
 
+/*
+ * The letterflip ripple behind the sign-in page and an empty new chat (components/RippleField.tsx).
+ * It follows the mouse on computers and drifts on its own on touch screens.
+ * It fades in once its letters are measured; it never takes the pointer.
+ */
+.ripple-field {
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+}
+.ripple-field[data-ripple="ready"],
+.ripple-field[data-ripple="moving"],
+.ripple-field[data-ripple="drifting"],
+.ripple-field[data-ripple="still"] {
+  opacity: 1;
+}
+
 /* A message opened from a search result: a ring that fades, in the text colour (no accent). */
 .found-mark {
   border-radius: 22px;

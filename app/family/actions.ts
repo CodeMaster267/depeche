@@ -67,6 +67,13 @@ export async function revokeInvite(inviteId: string): Promise<void> {
 export async function setCap(memberId: string, _: ActionState, form: FormData): Promise<ActionState> {
   await refuseDemo();
   const me = await requireMe();
+  const unlimited = form.get("nolimit") === "on";
+  const { error: limitError } = await supabaseAdmin().rpc("set_member_no_limit", { p_actor: me.userId, p_member: memberId, p_on: unlimited });
+  if (limitError) return { error: friendly(limitError) };
+  if (unlimited) {
+    revalidatePath("/family");
+    return { ok: "Saved. No limit." };
+  }
   const cap = Number(String(form.get("cap") ?? "").replace(/[$,\s]/g, ""));
   if (!Number.isFinite(cap) || cap < 0 || cap > 100000) return { error: "Enter an amount in dollars." };
   const { error } = await supabaseAdmin().rpc("set_member_cap", {
