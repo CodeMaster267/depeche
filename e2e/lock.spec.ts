@@ -72,7 +72,8 @@ test("a PIN locks Depeche on the server, and unlocks it again", async ({ page })
   await expect(page).toHaveURL(/\/account$/);
   await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
   expect((await page.request.post("/api/chat", { data: {} })).status()).not.toBe(423);
-  expect(errors).toEqual([]);
+  // Safari logs prefetches a navigation cancels (see helpers); that is not a fault here.
+  expect(errors.filter((e) => !/_rsc=.*access control checks/is.test(e))).toEqual([]);
 });
 
 test("the page locks itself when left, keeps what was typed, and the lock can be turned off", async ({ page }) => {
