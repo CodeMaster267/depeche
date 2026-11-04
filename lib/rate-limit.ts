@@ -41,6 +41,9 @@ export const LIMITS = {
   importBatches: { limit: 300, seconds: 60 * 60 },
   /** Bug reports, per person. */
   bugReportsPerDay: { limit: 5, seconds: 24 * 60 * 60 },
+  /** Wrong demo keys from one internet address, and from everyone together (they are plain words). */
+  demoKeyPerIp: { limit: 5, seconds: 60 * 60 },
+  demoKeyAll: { limit: 30, seconds: 60 * 60 },
   /** Skills made or changed, per person (each is written and checked by a model). */
   skillWritesPerDay: { limit: 30, seconds: 24 * 60 * 60 },
 } as const;

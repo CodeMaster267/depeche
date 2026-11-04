@@ -8,6 +8,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { supabaseServer } from "@/lib/supabase/server";
 import { cleanEmail } from "@/lib/validate";
 import { TOO_MANY, allow, blocked, clientIp, failed } from "@/lib/rate-limit";
+import { demoKeyHash, markDemoSession, normalDemoKey, sessionClaims } from "@/lib/auth/demo";
 
 export type FormState = { error?: string; sentTo?: string } | undefined;
 
@@ -90,6 +91,47 @@ export async function verifyEmailCode(_: FormState, form: FormData): Promise<For
     return { error: "That code didn't work. Check it, or send a new one.", sentTo: email };
   }
   if ((await finishSignIn(supabase, data.user)) !== "ok") redirect("/sign-in?error=not-invited");
+  redirect("/");
+}
+
+/**
+ * A one-time demo key the app owner handed out: signs into the owner's account in a demo session,
+ * which can't open the family's API keys, members, the account page or Health, and ends after 12
+ * hours. The key is burned the moment it works. Wrong keys are rate limited per device and overall.
+ */
+export async function signInWithDemoKey(_: FormState, form: FormData): Promise<FormState> {
+  if (!isConfigured()) return { error: NOT_READY };
+  const word = normalDemoKey(form.get("demoKey"));
+  if (!word) return { error: "Enter your demo key." };
+  const tries: [["demoKeyPerIp", string], ["demoKeyAll", string]] = [["demoKeyPerIp", await clientIp()], ["demoKeyAll", "all"]];
+  if (await blocked(...tries)) return { error: TOO_MANY };
+
+  const admin = supabaseAdmin();
+  const { data: ok } = await admin.rpc("use_demo_key", { p_hash: demoKeyHash(word) });
+  if (ok !== true) {
+    await failed(...tries);
+    return { error: "That demo key isn't right, or it was already used." };
+  }
+  const unavailable = { error: "The demo isn't available right now." };
+  const { data: owner } = await admin.from("profiles").select("id").eq("is_app_owner", true).maybeSingle<{ id: string }>();
+  if (!owner) return unavailable;
+  const { data: found } = await admin.auth.admin.getUserById(owner.id);
+  const email = found.user?.email;
+  if (!email) return unavailable;
+  const { data: link, error } = await admin.auth.admin.generateLink({ type: "magiclink", email });
+  const tokenHash = link?.properties?.hashed_token;
+  if (error || !tokenHash) return unavailable;
+
+  const supabase = await supabaseServer();
+  const { data, error: verifyError } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: "magiclink" });
+  const sessionId = sessionClaims(data.session?.access_token)?.sessionId;
+  if (verifyError || !data.user || !sessionId) return unavailable;
+  try {
+    await markDemoSession(data.user.id, sessionId);
+  } catch {
+    await supabase.auth.signOut();
+    return unavailable;
+  }
   redirect("/");
 }
 

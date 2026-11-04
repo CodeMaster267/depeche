@@ -10,6 +10,7 @@ import { TOO_MANY, allow } from "@/lib/rate-limit";
 import { encryptSecret, toBytea } from "@/lib/crypto";
 import { listKeyModels } from "@/lib/ai/providers";
 import type { Provider } from "@/lib/ai/models";
+import { refuseDemo } from "@/lib/auth/demo";
 
 export type ActionState = { error?: string; ok?: string; link?: string; password?: string } | undefined;
 
@@ -31,6 +32,7 @@ async function makeInvite(actor: string, family: string, name: string, email: st
 }
 
 export async function inviteMember(_: ActionState, form: FormData): Promise<ActionState> {
+  await refuseDemo();
   const me = await requireMe();
   const name = cleanName(form.get("name"));
   const email = cleanEmail(form.get("email"));
@@ -41,6 +43,7 @@ export async function inviteMember(_: ActionState, form: FormData): Promise<Acti
 }
 
 export async function createFamily(_: ActionState, form: FormData): Promise<ActionState> {
+  await refuseDemo();
   const me = await requireMe();
   const family = cleanName(form.get("family"), 80);
   const name = cleanName(form.get("name"));
@@ -55,12 +58,14 @@ export async function createFamily(_: ActionState, form: FormData): Promise<Acti
 }
 
 export async function revokeInvite(inviteId: string): Promise<void> {
+  await refuseDemo();
   const me = await requireMe();
   await supabaseAdmin().rpc("revoke_invite", { p_actor: me.userId, p_invite: inviteId });
   revalidatePath("/family");
 }
 
 export async function setCap(memberId: string, _: ActionState, form: FormData): Promise<ActionState> {
+  await refuseDemo();
   const me = await requireMe();
   const cap = Number(String(form.get("cap") ?? "").replace(/[$,\s]/g, ""));
   if (!Number.isFinite(cap) || cap < 0 || cap > 100000) return { error: "Enter an amount in dollars." };
@@ -80,6 +85,7 @@ export async function setCap(memberId: string, _: ActionState, form: FormData): 
  * sign in. The temporary password is shown to the admin once and never stored by Depeche.
  */
 export async function resetPassword(memberId: string): Promise<ActionState> {
+  await refuseDemo();
   const me = await requireMe();
   if (!(await allow(["adminActions", me.userId]))) return { error: TOO_MANY };
   const admin = supabaseAdmin();
@@ -97,6 +103,7 @@ export async function resetPassword(memberId: string): Promise<ActionState> {
 
 /** Signs a member out on every device. */
 export async function signOutMember(memberId: string): Promise<ActionState> {
+  await refuseDemo();
   const me = await requireMe();
   if (!(await allow(["adminActions", me.userId]))) return { error: TOO_MANY };
   const { error } = await supabaseAdmin().rpc("sign_out_everywhere", { p_actor: me.userId, p_person: memberId });
@@ -107,6 +114,7 @@ export async function signOutMember(memberId: string): Promise<ActionState> {
 
 /** Makes a member the family's backup admin, or removes an admin. */
 export async function setAdmin(memberId: string, makeAdmin: boolean): Promise<ActionState> {
+  await refuseDemo();
   const me = await requireMe();
   const { error } = await supabaseAdmin().rpc("set_admin", { p_actor: me.userId, p_member: memberId, p_admin: makeAdmin });
   if (error) return { error: friendly(error) };
@@ -123,6 +131,7 @@ const PROVIDER_IDS = ["anthropic", "openai", "google", "deepseek", "xai"] as con
  * back to any browser; admins see only its last four characters.
  */
 export async function saveProviderKey(provider: string, _: ActionState, form: FormData): Promise<ActionState> {
+  await refuseDemo();
   const me = await requireMe();
   if (!PROVIDER_IDS.includes(provider as Provider)) return { error: "Unknown provider." };
   if (me.profile.role !== "admin") return { error: "Only a family admin can add keys." };
@@ -147,6 +156,7 @@ export async function saveProviderKey(provider: string, _: ActionState, form: Fo
 }
 
 export async function removeProviderKey(provider: string): Promise<void> {
+  await refuseDemo();
   const me = await requireMe();
   await supabaseAdmin().rpc("remove_provider_key", { p_actor: me.userId, p_provider: provider });
   revalidatePath("/family");
