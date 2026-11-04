@@ -15,20 +15,18 @@ import { ACCEPT, AttachmentTray, MessageFiles, useAttachments, type Pending } fr
 import { ModelPicker } from "./ModelPicker";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
-import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
-import { SearchSuggestions, Searching, Sources } from "./Sources";
+import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
+import { SearchSuggestions } from "./Sources";
+import { Activity, ViewSource, type LiveActivity } from "./Activity";
 import { EditingChip, MakingPicture, ReplyPictures, isPicture } from "./Pictures";
 import type { Source } from "@/lib/chat/thread";
 
-type Live = MessageRow & {
-  streaming?: boolean;
-  queries?: string[];
-  searchingNow?: boolean;
-  searchingWhere?: "web" | "chat";
-  /** A picture model is drawing (editing one, if `editing`). */
-  making?: boolean;
-  editing?: boolean;
-};
+type Live = MessageRow &
+  LiveActivity & {
+    /** A picture model is drawing (editing one, if `editing`). */
+    making?: boolean;
+    editing?: boolean;
+  };
 
 const SEARCH_PREF = "depeche:web-search";
 
@@ -190,12 +188,16 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
       let buffer = "";
       let pending = "";
+      let pendingThought = "";
       let frame = 0;
       const flush = () => {
         frame = 0;
         const add = pending;
+        const thought = pendingThought;
         pending = "";
-        if (add) patchReply((m) => ({ ...m, searchingNow: false, content: { ...m.content, text: (m.content.text ?? "") + add } }));
+        pendingThought = "";
+        if (thought) patchReply((m) => ({ ...m, content: { ...m.content, reasoning: (m.content.reasoning ?? "") + thought } }));
+        if (add) patchReply((m) => ({ ...stopThinking(m), searchingNow: false, content: { ...m.content, text: (m.content.text ?? "") + add } }));
       };
       for (;;) {
         const { value, done } = await reader.read();
@@ -208,6 +210,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
           const ev = JSON.parse(line) as
             | { type: "start"; chatId: string; userMessage: MessageRow }
             | { type: "text"; text: string }
+            | { type: "thinking"; text: string }
             | { type: "notice"; text: string }
             | { type: "searching"; query?: string; where?: "chat" }
             | { type: "sources"; sources: Source[] }
@@ -232,17 +235,23 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
           } else if (ev.type === "text") {
             pending += ev.text;
             if (!frame) frame = requestAnimationFrame(flush);
+          } else if (ev.type === "thinking") {
+            pendingThought += ev.text;
+            patchReply((m) => (m.thinkingNow ? m : { ...m, thinkingNow: true, searchingNow: false, thinkingSince: Date.now() }));
+            if (!frame) frame = requestAnimationFrame(flush);
           } else if (ev.type === "searching") {
             if (frame) cancelAnimationFrame(frame);
             flush();
             const q = ev.query;
             const where = ev.where === "chat" ? "chat" : "web";
             patchReply((m) => ({
-              ...m,
+              ...stopThinking(m),
               searchingNow: true,
               searchingWhere: where,
-              // A new kind of search starts its own list, so the line never names the wrong one.
-              queries: [...(m.searchingWhere === where ? (m.queries ?? []) : []), ...(q ? [q] : [])],
+              // Web searches and lookups in this chat are listed apart, so a line never names the wrong one.
+              ...(where === "chat"
+                ? { lookupQueries: q ? [...(m.lookupQueries ?? []), q] : (m.lookupQueries ?? []) }
+                : { queries: q ? [...(m.queries ?? []), q] : (m.queries ?? []) }),
             }));
           } else if (ev.type === "sources") {
             const sources = ev.sources;
@@ -483,6 +492,12 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   );
 }
 
+/** The reply stopped thinking (it started writing or searching): bank the time it spent. */
+function stopThinking(m: Live): Live {
+  if (!m.thinkingNow) return m;
+  return { ...m, thinkingNow: false, thinkingSince: undefined, thoughtSoFar: (m.thoughtSoFar ?? 0) + (m.thinkingSince ? Date.now() - m.thinkingSince : 0) };
+}
+
 function Reply({
   message: m,
   canRegenerate,
@@ -495,21 +510,21 @@ function Reply({
   onEdit?: (f: FileRef) => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [source, setSource] = useState(false);
   const info = findModel(m.model);
   const text = m.content.text ?? "";
   const cost = m.content.cost;
   return (
     <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
+      <Activity message={m} />
       {m.content.files?.length ? <ReplyPictures files={m.content.files} onEdit={onEdit} /> : null}
       {text ? <Markdown text={text} streaming={m.streaming} /> : null}
       {m.streaming && m.making ? <MakingPicture editing={m.editing} /> : null}
-      {m.streaming && m.searchingNow ? <Searching queries={m.queries ?? []} where={m.searchingWhere} /> : null}
-      {m.streaming && !m.searchingNow && !m.making ? (
+      {m.streaming && !m.searchingNow && !m.thinkingNow && !m.making ? (
         <span aria-label="Writing" className="block h-6">
           <span className="stream-cursor" />
         </span>
       ) : null}
-      {!m.streaming && m.content.sources?.length ? <Sources sources={m.content.sources} searches={m.content.searches} /> : null}
       {!m.streaming && m.content.suggestions ? <SearchSuggestions html={m.content.suggestions} /> : null}
       {m.content.notice ? <p className="text-[14px] text-mute">{m.content.notice}</p> : null}
       {!m.streaming && m.memory ? <MemorySuggestion key={m.memory.id} memory={m.memory} /> : null}
@@ -542,6 +557,18 @@ function Reply({
               </button>
             ) : null}
             {text ? <ReadAloudButton text={text} /> : null}
+            {text ? (
+              <button
+                type="button"
+                className="rounded-lg p-2 hover:text-fg"
+                aria-label={source ? "Hide Markdown source" : "View Markdown source"}
+                title="View source"
+                aria-pressed={source}
+                onClick={() => setSource(!source)}
+              >
+                <CodeIcon />
+              </button>
+            ) : null}
             {copied ? <span className="text-[13px]">Copied</span> : null}
           </span>
           <span className="font-mono text-[12px]">
@@ -550,6 +577,7 @@ function Reply({
           </span>
         </div>
       ) : null}
+      {source && !m.streaming && text ? <ViewSource text={text} /> : null}
     </article>
   );
 }

@@ -107,7 +107,7 @@ describe("providers list", () => {
 });
 
 describe("DeepSeek", () => {
-  it("streams the reply, leaves out the thinking, and counts thinking as output", async () => {
+  it("streams the reply, keeps the thinking apart from it, and counts thinking as output", async () => {
     handler = () => ({
       sse: [
         { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "Let me think" } }] },
@@ -118,6 +118,8 @@ describe("DeepSeek", () => {
     });
     const events = await run("deepseek-v4-pro", [{ role: "user", text: "Hi" }]);
     expect(text(events)).toBe("Hello there.");
+    // The thinking is passed on separately, to show collapsed above the reply.
+    expect(events.filter((e) => e.type === "thinking")).toEqual([{ type: "thinking", text: "Let me think" }]);
     expect(events.at(-1)).toEqual({ type: "usage", input: 50, output: 30 });
     const req = seen[0];
     expect(req.path).toBe("/chat/completions");
