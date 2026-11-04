@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ChatApp } from "@/components/chat/ChatApp";
 import { requireMe } from "@/lib/auth/session";
 import { loadChat, loadShell } from "@/lib/chat/load";
+import { PersonalLook } from "@/components/design/PersonalLook";
 
 export const metadata: Metadata = { title: "Depeche" };
 
@@ -19,5 +20,9 @@ export default async function ChatPage({
   const me = await requireMe();
   const [shell, found] = await Promise.all([loadShell(me), loadChat(me, id)]);
   if (!found) notFound();
-  return <ChatApp key={`${id}:${focus ?? ""}`} shell={shell} chat={found.chat} messages={found.messages} all={found.all} focus={focus} />;
+  return (
+    <PersonalLook>
+      <ChatApp key={`${id}:${focus ?? ""}`} shell={shell} chat={found.chat} messages={found.messages} all={found.all} focus={focus} />
+    </PersonalLook>
+  );
 }

@@ -144,6 +144,7 @@ test.describe("invites and families", () => {
     await guest.goto(invite);
     let sentAt = Date.now() - 1000;
     await guest.getByRole("button", { name: "Email me a link to join" }).click();
+    await expect(guest.getByTestId("check-spam")).toHaveText(/spam or junk folder/);
     await guest.getByLabel("Code from the email").fill((await latestEmail(email, sentAt)).code);
     await guest.getByRole("button", { name: "Continue" }).click();
     await expect(guest.getByRole("heading", { name: "Hi, Zain." })).toBeVisible();
@@ -154,6 +155,7 @@ test.describe("invites and families", () => {
     await guest.getByLabel("Email address").fill(email);
     sentAt = Date.now() - 1000;
     await guest.getByRole("button", { name: "Send me a sign-in link" }).click();
+    await expect(guest.getByTestId("check-spam")).toBeVisible();
     await guest.getByLabel("Code from the email").fill("000000");
     await guest.getByRole("button", { name: "Continue" }).click();
     await expect(guest.locator("p[role=alert]")).toHaveText(/didn't work/);

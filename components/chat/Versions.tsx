@@ -3,6 +3,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { MessageRow } from "@/lib/chat/thread";
 import { MessageFiles } from "./Attachments";
+import { QuoteLine } from "./Extras";
 import { ChevronLeftIcon, ChevronRightIcon, CopyIcon, EditIcon } from "./icons";
 
 /** "‹ 2 / 3 ›": flip between versions of a message (its edits, or a reply's regenerations). */
@@ -74,7 +75,8 @@ export function UserMessage({
   const local = m.id.startsWith("local-");
 
   return (
-    <div data-message-id={m.id} className="msg-row flex flex-col items-end gap-1.5">
+    <div data-part="user-row" data-message-id={m.id} className="msg-row flex flex-col items-end gap-1.5">
+      {m.content.quote ? <QuoteLine quote={m.content.quote} /> : null}
       {m.content.files?.length ? <MessageFiles files={m.content.files} /> : null}
       {editing ? (
         <EditBox
@@ -90,6 +92,7 @@ export function UserMessage({
       ) : text ? (
         <div
           data-testid="user-message"
+          data-part="user-message"
           data-found={found || undefined}
           className="found-mark max-w-[85%] whitespace-pre-wrap break-words rounded-[22px] bg-inv px-5 py-3 text-[17px] leading-relaxed text-on-inv"
         >

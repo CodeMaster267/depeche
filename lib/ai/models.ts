@@ -17,9 +17,36 @@ export type Model = {
   /**
    * Dollars per million tokens. `long` is a dearer rate some providers charge for every token of a
    * request once its input reaches `from` tokens.
+   *
+   * `cache` prices input the provider served from, or wrote to, its prompt cache, as multiples of
+   * the input rate (long-context rate included). Without it, cached input is charged in full.
    */
-  price: { input: number; output: number; long?: { from: number; input: number; output: number } };
+  price: { input: number; output: number; long?: { from: number; input: number; output: number }; cache?: CachePrice };
+  /**
+   * Set for models that make and edit pictures instead of writing replies. Each message to one is
+   * a description of the picture wanted; pictures attached to it are edited. `price` above is then
+   * per million tokens of the prompt text (input) and of the picture made (output).
+   */
+  image?: ImagePricing;
 };
+
+/**
+ * Picture models are billed per picture (xAI) or by tokens counted per picture (OpenAI, Google).
+ * `hold` is the most one picture could cost at the size and quality Depeche asks for, reserved
+ * against the monthly limit before it is made; `perInput` is the most each attached picture adds.
+ * `imageInput` and `textOutput` are per million tokens, for providers that report tokens.
+ */
+export type ImagePricing = { hold: number; perInput: number; imageInput?: number; textOutput?: number; flat?: number };
+
+/**
+ * Prompt cache prices, as multiples of the input rate: `read` for input served from the cache,
+ * `write` for input stored in it (charged by Anthropic and by OpenAI's GPT-6 models; 1 when there
+ * is no write fee).
+ */
+export type CachePrice = { read: number; write: number };
+
+/** Input tokens of one request that the provider read from, or wrote to, its prompt cache. */
+export type CacheUse = { read?: number; write?: number };
 
 export const PROVIDERS: { id: Provider; name: string; keyUrl: string; keyHint: string }[] = [
   {
@@ -50,18 +77,27 @@ export const PROVIDERS: { id: Provider; name: string; keyUrl: string; keyHint: s
   },
 ];
 
+/*
+ * Prompt cache prices checked 4 Nov 2026. Anthropic (Depeche marks each Claude chat for caching)
+ * charges 1.25x input to write the cache for 5 minutes and reads at 0.1x (0.05x on Opus 5.5, 0.025x
+ * on Fable 5.1). OpenAI's GPT-6 models cache by themselves: writes 1.25x for 30 minutes, reads 0.1x
+ * (0.05x on Sol and Terra). Gemini, DeepSeek and Grok cache by themselves with no write fee; their
+ * reads are the listed cached-input prices divided by the input price. Groq's are left at full
+ * price (it's for testing only), which errs high.
+ */
 export const MODELS: Model[] = [
-  { id: "claude-sonnet-5-5", provider: "anthropic", name: "Claude Sonnet 5.5", short: "Sonnet 5.5", tags: ["Fast", "Smart"], price: { input: 2, output: 10 } },
-  { id: "claude-opus-5-5", provider: "anthropic", name: "Claude Opus 5.5", short: "Opus 5.5", tags: ["Deep reasoning"], price: { input: 4, output: 20 } },
-  { id: "claude-fable-5-1", provider: "anthropic", name: "Claude Fable 5.1", short: "Fable 5.1", tags: ["Most capable"], price: { input: 10, output: 50 } },
-  { id: "claude-haiku-5-5", provider: "anthropic", name: "Claude Haiku 5.5", short: "Haiku 5.5", tags: ["Fastest"], price: { input: 0.1, output: 0.5 } },
-  { id: "gpt-6.1-sol", provider: "openai", name: "GPT-6.1 Sol", short: "GPT-6.1 Sol", tags: ["Smart"], price: { input: 2, output: 10 } },
-  { id: "gpt-6-astra", provider: "openai", name: "GPT-6 Astra", short: "GPT-6 Astra", tags: ["Most capable"], price: { input: 10, output: 50 } },
-  { id: "gpt-6.1-terra", provider: "openai", name: "GPT-6.1 Terra", short: "GPT-6.1 Terra", tags: ["Fast"], price: { input: 1, output: 5 } },
-  { id: "gpt-6-luna", provider: "openai", name: "GPT-6 Luna", short: "GPT-6 Luna", tags: ["Fastest"], price: { input: 0.1, output: 0.5 } },
-  { id: "gemini-4-argon", provider: "google", name: "Gemini 4 Argon", short: "Gemini 4 Argon", tags: ["Most capable", "Long context"], price: { input: 4, output: 20 } },
-  { id: "gemini-3.8-flash", provider: "google", name: "Gemini 3.8 Flash", short: "Gemini 3.8 Flash", tags: ["Fast"], price: { input: 1.5, output: 7.5 } },
-  { id: "gemini-3.5-flash-lite", provider: "google", name: "Gemini 3.5 Flash-Lite", short: "Flash-Lite", tags: ["Fastest"], price: { input: 0.3, output: 2.5 } },
+  // Haiku 5.5's prices rise to $0.50 / $2.50 for requests with over 100,000 input tokens.
+  { id: "claude-sonnet-5-5", provider: "anthropic", name: "Claude Sonnet 5.5", short: "Sonnet 5.5", tags: ["Fast", "Smart"], price: { input: 2, output: 10, cache: { read: 0.1, write: 1.25 } } },
+  { id: "claude-opus-5-5", provider: "anthropic", name: "Claude Opus 5.5", short: "Opus 5.5", tags: ["Deep reasoning"], price: { input: 4, output: 20, cache: { read: 0.05, write: 1.25 } } },
+  { id: "claude-fable-5-1", provider: "anthropic", name: "Claude Fable 5.1", short: "Fable 5.1", tags: ["Most capable"], price: { input: 10, output: 50, cache: { read: 0.025, write: 1.25 } } },
+  { id: "claude-haiku-5-5", provider: "anthropic", name: "Claude Haiku 5.5", short: "Haiku 5.5", tags: ["Fastest"], price: { input: 0.1, output: 0.5, long: { from: 100_000, input: 0.5, output: 2.5 }, cache: { read: 0.1, write: 1.25 } } },
+  { id: "gpt-6.1-sol", provider: "openai", name: "GPT-6.1 Sol", short: "GPT-6.1 Sol", tags: ["Smart"], price: { input: 2, output: 10, cache: { read: 0.05, write: 1.25 } } },
+  { id: "gpt-6-astra", provider: "openai", name: "GPT-6 Astra", short: "GPT-6 Astra", tags: ["Most capable"], price: { input: 10, output: 50, cache: { read: 0.1, write: 1.25 } } },
+  { id: "gpt-6.1-terra", provider: "openai", name: "GPT-6.1 Terra", short: "GPT-6.1 Terra", tags: ["Fast"], price: { input: 1, output: 5, cache: { read: 0.05, write: 1.25 } } },
+  { id: "gpt-6-luna", provider: "openai", name: "GPT-6 Luna", short: "GPT-6 Luna", tags: ["Fastest"], price: { input: 0.1, output: 0.5, cache: { read: 0.1, write: 1.25 } } },
+  { id: "gemini-4-argon", provider: "google", name: "Gemini 4 Argon", short: "Gemini 4 Argon", tags: ["Most capable", "Long context"], price: { input: 4, output: 20, cache: { read: 0.05, write: 1 } } },
+  { id: "gemini-3.8-flash", provider: "google", name: "Gemini 3.8 Flash", short: "Gemini 3.8 Flash", tags: ["Fast"], price: { input: 1.5, output: 7.5, cache: { read: 0.1, write: 1 } } },
+  { id: "gemini-3.5-flash-lite", provider: "google", name: "Gemini 3.5 Flash-Lite", short: "Flash-Lite", tags: ["Fastest"], price: { input: 0.3, output: 2.5, cache: { read: 0.1, write: 1 } } },
   // Groq's free tier costs nothing but is rate-limited. Depeche can't tell a free key from a paid
   // one, so its paid prices are used and limits err high, as with free Gemini keys.
   { id: "openai/gpt-oss-120b", provider: "groq", name: "GPT-OSS 120B (Groq)", short: "GPT-OSS 120B", tags: ["Smart", "Free tier"], price: { input: 0.15, output: 0.6 } },
@@ -69,12 +105,27 @@ export const MODELS: Model[] = [
   { id: "qwen/qwen3.8-27b", provider: "groq", name: "Qwen 3.8 27B (Groq)", short: "Qwen 3.8 27B", tags: ["Preview", "Free tier"], price: { input: 0.8, output: 4 } },
   // DeepSeek charges double at busy times (weekday mornings UTC); the busy-time price is used so
   // limits err high. Flash sees pictures; Pro doesn't, so Flash answers messages with pictures.
-  { id: "deepseek-v4-pro", provider: "deepseek", name: "DeepSeek V4 Pro", short: "DeepSeek V4 Pro", tags: ["Smart", "Long context"], price: { input: 1.32, output: 3.96 } },
-  { id: "deepseek-flash", provider: "deepseek", name: "DeepSeek V4.1 Flash", short: "DeepSeek Flash", tags: ["Fast", "Long context"], price: { input: 0.3, output: 1.2 } },
+  { id: "deepseek-v4-pro", provider: "deepseek", name: "DeepSeek V4 Pro", short: "DeepSeek V4 Pro", tags: ["Smart", "Long context"], price: { input: 1.32, output: 3.96, cache: { read: 1 / 30, write: 1 } } },
+  { id: "deepseek-flash", provider: "deepseek", name: "DeepSeek V4.1 Flash", short: "DeepSeek Flash", tags: ["Fast", "Long context"], price: { input: 0.3, output: 1.2, cache: { read: 0.02, write: 1 } } },
   // xAI doubles every token's price once a request's input reaches 200,000 tokens.
-  { id: "grok-4.7", provider: "xai", name: "Grok 4.7", short: "Grok 4.7", tags: ["Most capable"], price: { input: 2, output: 6, long: { from: 200_000, input: 4, output: 12 } } },
-  { id: "grok-4.3", provider: "xai", name: "Grok 4.3", short: "Grok 4.3", tags: ["Fast", "Long context"], price: { input: 1.25, output: 2.5, long: { from: 200_000, input: 2.5, output: 5 } } },
+  { id: "grok-4.7", provider: "xai", name: "Grok 4.7", short: "Grok 4.7", tags: ["Most capable"], price: { input: 2, output: 6, long: { from: 200_000, input: 4, output: 12 }, cache: { read: 0.25, write: 1 } } },
+  { id: "grok-4.3", provider: "xai", name: "Grok 4.3", short: "Grok 4.3", tags: ["Fast", "Long context"], price: { input: 1.25, output: 2.5, long: { from: 200_000, input: 2.5, output: 5 }, cache: { read: 0.16, write: 1 } } },
+
+  // Picture models (prices checked 4 Nov 2026). OpenAI's GPT Image 2.5: text $5, pictures in $8,
+  // pictures out $30 per million tokens; a 1024px picture at the highest quality is about $0.21.
+  // Flare is asked for medium quality (quick), Sunburst for high quality (best at precise edits).
+  { id: "gpt-image-2.5-flare", provider: "openai", name: "GPT Image 2.5 Flare", short: "GPT Image Flare", tags: ["Images", "Fast"], price: { input: 5, output: 30 }, image: { hold: 0.12, perInput: 0.06, imageInput: 8, textOutput: 30 } },
+  { id: "gpt-image-2.5-sunburst", provider: "openai", name: "GPT Image 2.5 Sunburst", short: "GPT Image Sunburst", tags: ["Images", "Best edits"], price: { input: 5, output: 30 }, image: { hold: 0.3, perInput: 0.06, imageInput: 8, textOutput: 30 } },
+  // Google's picture models think before drawing, billed as text output. A 1K picture is $0.0336 on
+  // Nano Banana 2.1 and $0.134 on Nano Banana Pro. Neither works on a free key.
+  { id: "gemini-nano-banana-2.1", provider: "google", name: "Nano Banana 2.1", short: "Nano Banana 2.1", tags: ["Images", "Fast"], price: { input: 1.5, output: 30 }, image: { hold: 0.1, perInput: 0.01, imageInput: 1.5, textOutput: 12 } },
+  { id: "gemini-3-pro-image", provider: "google", name: "Nano Banana Pro", short: "Nano Banana Pro", tags: ["Images", "Most capable"], price: { input: 2, output: 120 }, image: { hold: 0.3, perInput: 0.01, imageInput: 2, textOutput: 12 } },
+  // xAI charges $0.04 a picture; for edits it also bills the picture sent, at a rate it doesn't
+  // publish, so $0.02 is assumed.
+  { id: "grok-imagine-image-2.0", provider: "xai", name: "Grok Imagine 2.0", short: "Grok Imagine", tags: ["Images"], price: { input: 0, output: 0 }, image: { hold: 0.06, perInput: 0.02, flat: 0.04 } },
 ];
+
+export const isImageModel = (m: Pick<Model, "image"> | undefined | null): boolean => !!m?.image;
 
 /** What a new person starts with, if their family has the provider. */
 export const PREFERRED_DEFAULTS = ["claude-sonnet-5-5", "gpt-6.1-sol", "gemini-3.8-flash", "openai/gpt-oss-120b", "grok-4.7", "deepseek-v4-pro"];
@@ -95,14 +146,27 @@ export function modelsFor(keys: readonly { provider: string; models?: readonly s
 
 /** Price band shown in the picker: $ to $$$$. */
 export function priceBand(m: Model): string {
+  if (m.image) return m.image.hold < 0.08 ? "$" : m.image.hold < 0.2 ? "$$" : "$$$";
   const blended = m.price.input + m.price.output * 3;
   return blended < 10 ? "$" : blended < 40 ? "$$" : blended < 100 ? "$$$" : "$$$$";
 }
 
-/** Estimated cost of one reply, in dollars. */
-export function estimateCost(m: Model, inputTokens: number, outputTokens: number): number {
+/**
+ * Estimated cost of one reply, in dollars. `inputTokens` is all the input, cached or not; `cache`
+ * says how much of it was read from or written to the provider's prompt cache.
+ */
+export function estimateCost(m: Model, inputTokens: number, outputTokens: number, cache: CacheUse = {}): number {
   const p = priceFor(m, inputTokens);
-  return (inputTokens * p.input + outputTokens * p.output) / 1_000_000;
+  const read = Math.min(Math.max(0, cache.read ?? 0), inputTokens);
+  const write = Math.min(Math.max(0, cache.write ?? 0), inputTokens - read);
+  const rate = m.price.cache ?? { read: 1, write: 1 };
+  const input = (inputTokens - read - write) * p.input + read * p.input * rate.read + write * p.input * rate.write;
+  return (input + outputTokens * p.output) / 1_000_000;
+}
+
+/** The most one input token can cost: a cache write where that costs more than plain input. */
+export function worstInputRate(m: Model): number {
+  return Math.max(1, m.price.cache?.write ?? 1);
 }
 
 /** The price of a request with this much input: the long-context rate once it applies. */
@@ -113,8 +177,9 @@ export function priceFor(m: Model, inputTokens: number): { input: number; output
 
 export function chooseDefault(available: Model[], last?: string | null): Model | undefined {
   return (
-    available.find((m) => m.id === last) ??
+    available.find((m) => m.id === last && !m.image) ??
     PREFERRED_DEFAULTS.map((id) => available.find((m) => m.id === id)).find(Boolean) ??
+    available.find((m) => !m.image) ??
     available[0]
   );
 }
@@ -133,9 +198,9 @@ export const SEARCH_PRICE: Record<Provider, number> = { anthropic: 0.01, openai:
  * counted so limits err high). Groq retired its Compound search models in October 2026. DeepSeek's
  * API has no web search. xAI's Grok searches with its web_search tool at $5 per 1,000 searches.
  */
-export function canSearch(model: Pick<Model, "id" | "provider"> | undefined): boolean {
+export function canSearch(model: Pick<Model, "id" | "provider" | "image"> | undefined): boolean {
   if (!model) return true;
-  if (model.provider === "deepseek") return false;
+  if (model.provider === "deepseek" || isImageModel(model)) return false;
   return model.provider !== "groq" || model.id.startsWith("openai/gpt-oss");
 }
 
