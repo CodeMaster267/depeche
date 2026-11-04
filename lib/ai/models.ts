@@ -22,6 +22,8 @@ export type Model = {
    * the input rate (long-context rate included). Without it, cached input is charged in full.
    */
   price: { input: number; output: number; long?: { from: number; input: number; output: number }; cache?: CachePrice };
+  /** The model's context window in tokens, when known (auto-compaction keeps chats well inside it). */
+  context?: number;
   /**
    * Set for models that make and edit pictures instead of writing replies. Each message to one is
    * a description of the picture wanted; pictures attached to it are edited. `price` above is then
@@ -203,4 +205,14 @@ export const MAX_SEARCHES = 5;
 
 export function searchCost(provider: Provider, searches: number): number {
   return Math.max(0, searches) * SEARCH_PRICE[provider];
+}
+
+/**
+ * Whether the "think harder" switch is offered: the provider lets Depeche ask for more reasoning.
+ * Claude, GPT and Gemini take an effort or thinking level. DeepSeek always thinks at its own
+ * level, and Grok takes no setting.
+ */
+export function canThinkHarder(model: Pick<Model, "id" | "provider"> | undefined): boolean {
+  if (!model) return false;
+  return model.provider === "anthropic" || model.provider === "openai" || model.provider === "google";
 }

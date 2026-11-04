@@ -3,7 +3,7 @@
 import { useActionState, useOptimistic, useState, useTransition } from "react";
 import { Button, Field, Kept, Notice, keepOnError } from "@/components/ui";
 import { MIN_PASSWORD } from "@/lib/validate";
-import { changePassword, deleteEverything, saveProfile, setKeepChats, setShareTitles } from "./actions";
+import { addDemoKey, changePassword, deleteEverything, saveProfile, setKeepChats, setShareTitles } from "./actions";
 
 export function ProfileForm({ name, username }: { name: string; username: string }) {
   const [state, action, pending] = useActionState(keepOnError(saveProfile), undefined);
@@ -106,5 +106,26 @@ export function KeepChatsToggle({ keep: initial }: { keep: boolean }) {
         />
       </button>
     </div>
+  );
+}
+
+/** The app owner adds one-time demo keys, which sign someone into this account once, in a limited demo. */
+export function DemoKeyForm() {
+  const [state, action, pending] = useActionState(addDemoKey, undefined);
+  return (
+    <form action={action} className="flex flex-col gap-3" data-testid="add-demo-key">
+      <Field
+        label="New demo key"
+        name="demoKey"
+        autoComplete="off"
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        hint="A word or two. Only a scrambled copy is kept, so write it down."
+        required
+      />
+      {state?.error ? <Notice tone="error">{state.error}</Notice> : state?.ok ? <Notice>{state.ok}</Notice> : null}
+      <Button variant="secondary" disabled={pending}>Add demo key</Button>
+    </form>
   );
 }

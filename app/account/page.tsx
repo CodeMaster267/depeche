@@ -4,6 +4,7 @@ import { AppHeader, Page, Section } from "@/components/AppHeader";
 import { Button } from "@/components/ui";
 import { requireMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 import { describeLog, when, type LogRow } from "@/lib/family/log";
 import { signOut } from "@/app/sign-in/actions";
 import { signOutEverywhere } from "./actions";
@@ -13,7 +14,7 @@ import { ExportButton } from "@/components/ExportButton";
 import { vapidKeys } from "@/lib/push/server";
 import { NotificationsToggle } from "./Notifications";
 import { ImportChats } from "@/components/ImportChats";
-import { DeleteEverythingForm, KeepChatsToggle, PasswordForm, ProfileForm, ShareTitlesToggle } from "./forms";
+import { DemoKeyForm, DeleteEverythingForm, KeepChatsToggle, PasswordForm, ProfileForm, ShareTitlesToggle } from "./forms";
 
 export const metadata: Metadata = { title: "Account · Depeche" };
 
@@ -39,6 +40,13 @@ export default async function Account() {
     .select("id, label, created_at, last_used_at")
     .order("created_at")
     .returns<{ id: string; label: string; created_at: string; last_used_at: string | null }[]>();
+  const { data: demoKeys } = me.profile.is_app_owner
+    ? await supabaseAdmin()
+        .from("demo_keys")
+        .select("id, added_at, used_at")
+        .order("added_at")
+        .returns<{ id: string; added_at: string; used_at: string | null }[]>()
+    : { data: null };
   const names = new Map((people ?? []).map((p) => [p.id, p.display_name]));
 
   return (
@@ -99,6 +107,25 @@ export default async function Account() {
             <Button variant="secondary">Sign out everywhere</Button>
           </form>
         </Section>
+        {me.profile.is_app_owner ? (
+          <Section title="Demo keys">
+            <p className="text-[15px] text-mute">
+              Someone who isn&apos;t signed in can type a demo key under &ldquo;Have a demo key?&rdquo; to use your account
+              until they close the tab (12 hours at most). Each key works once on each device; they aren&apos;t told that. They can&apos;t open this page, your family&apos;s API keys or members, or Health. To
+              end a demo early, use Sign out everywhere.
+            </p>
+            {(demoKeys ?? []).length ? (
+              <ul className="flex flex-col gap-1 text-[15px]" data-testid="demo-keys">
+                {(demoKeys ?? []).map((k, i) => (
+                  <li key={k.id}>
+                    Key {i + 1}: {k.used_at ? `first used ${when(k.used_at)}` : "not used yet"}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <DemoKeyForm />
+          </Section>
+        ) : null}
         {(log ?? []).length ? (
           <Section title="Changes made to your account">
             <ul className="flex flex-col gap-2 text-[15px]" data-testid="my-log">

@@ -40,6 +40,8 @@ export type MessageRow = {
     lookups?: string[];
     /** Files the reply read (those sent with the question). */
     read?: string[];
+    /** The person asked the model to think harder for this reply. */
+    harder?: boolean;
     /** Skills from the person's list that the reply used (lib/skills/match.ts). */
     skills?: { id: string; name: string }[];
     /** Set when two or three models answered the same question side by side (see lib/chat/compare.ts). */
@@ -58,8 +60,14 @@ export type ChatRow = {
   model: string | null;
   pinned: boolean;
   updated_at: string;
+  /** Auto-compaction for this chat ("auto" unless turned off). Only loaded for the open chat. */
+  compaction?: "auto" | "off";
   /** Set while the chat is archived: out of the list until restored or written in. */
   archived_at?: string | null;
+  /** The project (folder) the chat is kept in, if any. */
+  project_id?: string | null;
+  /** The saved assistant the chat was started with, if any. */
+  assistant_id?: string | null;
   /** Set on chats brought in from another app's export. */
   imported_from?: "chatgpt" | "claude" | "gemini" | null;
   created_at?: string;

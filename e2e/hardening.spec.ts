@@ -85,18 +85,24 @@ test.describe("spending caps are hard", () => {
   test("a reply is cut to fit what's left, and the next one is refused at the limit", async ({ page, browser, contextOptions }) => {
     await signInOwner(page);
     await ensureGoogleKey(page);
-    const mina = await person(await ownerFamily(), "Mina", { cap: 0.01 });
+    // The limit leaves room for one reply whatever the size of the system prompt (which grows as
+    // features are added), then earlier spending is recorded so less than any useful reply is left.
+    const mina = await person(await ownerFamily(), "Mina", { cap: 0.05 });
     const member = await signIn(browser, contextOptions, mina);
 
     const first = await chat(member, { text: "What is a quadratic?" });
     expect(first.status).toBe(200);
     expect(first.text).toContain('"type":"done"');
-    // The fake reply costs about half a cent, so less than the cheapest useful reply is left.
+    const spent = async () => {
+      const { data } = await admin().from("usage_events").select("cost_usd").eq("owner_id", mina.id);
+      return data!.reduce((n, r) => n + Number(r.cost_usd), 0);
+    };
+    const earlier = Math.max(0, Number((0.0495 - (await spent())).toFixed(6)));
+    await admin().from("usage_events").insert({ owner_id: mina.id, provider: "google", model: "gemini-3.8-flash", input_tokens: 0, output_tokens: 0, cost_usd: earlier });
     const second = await chat(member, { text: "And another" });
     expect(second.status).toBe(402);
-    expect(second.text).toMatch(/reached your \$0\.01 limit/);
-    const { data } = await admin().from("usage_events").select("cost_usd").eq("owner_id", mina.id);
-    expect(data!.reduce((n, r) => n + Number(r.cost_usd), 0)).toBeLessThanOrEqual(0.01);
+    expect(second.text).toMatch(/reached your \$0\.05 limit/);
+    expect(await spent()).toBeLessThanOrEqual(0.05);
   });
 
   test("replies running at the same time can't add up past the limit", async ({ page, browser, contextOptions }) => {

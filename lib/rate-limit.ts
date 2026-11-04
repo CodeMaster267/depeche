@@ -29,6 +29,8 @@ export const LIMITS = {
   /** Messages to the AI, per person. */
   messagesPerMinute: { limit: 12, seconds: 60 },
   messagesPerDay: { limit: 400, seconds: 24 * 60 * 60 },
+  /** Chat summaries (auto-compaction and "Redo summary"), per person. */
+  summariesPerHour: { limit: 30, seconds: 60 * 60 },
   /** Deep research reports started, per person (each runs many searches). */
   researchPerDay: { limit: 20, seconds: 24 * 60 * 60 },
   /** Pictures made or edited, per person (they fill the free storage fastest). */
@@ -41,6 +43,9 @@ export const LIMITS = {
   importBatches: { limit: 300, seconds: 60 * 60 },
   /** Bug reports, per person. */
   bugReportsPerDay: { limit: 5, seconds: 24 * 60 * 60 },
+  /** Wrong demo keys from one internet address, and from everyone together (they are plain words). */
+  demoKeyPerIp: { limit: 5, seconds: 60 * 60 },
+  demoKeyAll: { limit: 30, seconds: 60 * 60 },
   /** Skills made or changed, per person (each is written and checked by a model). */
   skillWritesPerDay: { limit: 30, seconds: 24 * 60 * 60 },
 } as const;

@@ -48,7 +48,7 @@ export async function listArchived(): Promise<ChatRow[]> {
   const me = await requireMe();
   const { data } = await (await supabaseServer())
     .from("chats")
-    .select("id, title, model, pinned, updated_at, archived_at")
+    .select("id, title, model, pinned, updated_at, archived_at, project_id, assistant_id")
     .eq("owner_id", me.userId)
     .not("archived_at", "is", null)
     .order("archived_at", { ascending: false })
@@ -79,6 +79,23 @@ export async function deleteChat(chatId: string) {
   const paths = (withFiles ?? []).flatMap((m) => (m.content.files ?? []).map((f) => f.path));
   if (paths.length) await db.storage.from(UPLOAD_BUCKET).remove(paths);
   await db.from("chats").delete().eq("id", chatId).eq("owner_id", me.userId);
+}
+
+/** Stop using one of your chat summaries; the next message reads the original messages again. */
+export async function discardSummary(summaryId: string) {
+  await requireMe();
+  const { error } = await (await supabaseServer()).rpc("discard_chat_summary", { p_id: summaryId });
+  if (error) throw new Error("Couldn't change that summary.");
+}
+
+/** Turn auto-compaction on or off for one of your chats. */
+export async function setCompaction(chatId: string, on: boolean) {
+  const me = await requireMe();
+  await (await supabaseServer())
+    .from("chats")
+    .update({ compaction: on ? "auto" : "off" })
+    .eq("id", chatId)
+    .eq("owner_id", me.userId);
 }
 
 export async function rememberModel(modelId: string) {

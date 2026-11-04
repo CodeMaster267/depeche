@@ -28,6 +28,39 @@ export type Topic = {
 
 export const TOPICS: Topic[] = [
   {
+    id: "projects",
+    title: "Projects (folders of chats)",
+    routes: ["/p/[id]"],
+    text: `
+Projects are your own folders of chats, each with its own instructions and files. Only you can see your projects; not
+your family admin, not Hasan.
+- Make one: in the side menu, under Projects, tap "New project" and give it a name. Its page opens.
+- On a project's page: under Instructions, tap Add (or Edit) to tell the AI how to answer in every chat in this project, and "Add files"
+  to give it reference material (photos, PDFs, Word, Excel, PowerPoint and text files) it reads in every chat there.
+  Files kept in a project are not cleaned up after 3 days. Rename project and Delete project are on the same page.
+- Start a chat in the project: type in the box on the project's page ("New chat in …"). Its chats are listed there.
+- Move a chat in or out: tap the three dots next to a chat (in the side menu, or at the top of an open chat) and pick
+  "Move to project". Pick a project, "Take out of project", or "New project" to make one and move it there.
+- Chats in a project are not shown in the main chat list (search still finds them). Deleting a project keeps its chats:
+  they go back to the main list. Project chats still auto-delete after a month unused, like any chat.`,
+  },
+  {
+    id: "assistants",
+    title: "Saved assistants",
+    routes: ["/assistants", "/assistants/[id]"],
+    text: `
+A saved assistant is a helper you set up once, like "Homework helper": a name, a line saying what it's for, instructions,
+an optional model it starts with, and files it reads in every chat.
+- Find them: tap your name at the bottom of the side menu, then Assistants ([Assistants](/assistants)). The page lists
+  yours and any your family shared. "New assistant" makes one; files can be added once it's created.
+- Chat with one: tap "Chat" next to it, or "Chat with …" on its page. The home screen also shows your assistants under
+  "Start with an assistant".
+- Share with my family: tick it on the assistant's page and everyone in your family can see its name, instructions and
+  file names, and chat with it. Only you can change it, and their chats with it stay private to them. Someone else's
+  shared assistant opens read-only, under "Shared by your family", so you can see what it has been told.
+- Deleting an assistant keeps the chats already made with it.`,
+  },
+  {
     id: "about",
     title: "What Depeche is",
     routes: ["/"],
@@ -40,7 +73,7 @@ another family. Each message goes only to the AI company whose model you picked.
 
 The home screen is a new chat. On a phone, tap the menu button (three lines, top left) to open the side menu with your
 chats; on a computer the side menu is always on the left. At the bottom of the side menu, tap your name to open the
-account menu: Memory, Skills, My look, Gadgets, Account, Family and Health (admins only), Report a bug, and a bar showing what you
+account menu: Memory, Assistants, Skills, My look, Gadgets, Account, Family and Health (admins only), Report a bug, and a bar showing what you
 have spent this month against your limit. On settings pages the top bar links the same pages (on a phone, tap the pill
 naming the page you're on to switch). "Ask Concierge", under your chats, opens this helper.`,
   },
@@ -66,9 +99,9 @@ naming the page you're on to switch). "Ask Concierge", under your chats, opens t
   },
   {
     id: "composer",
-    title: "Attaching files, web search, deep research",
+    title: "Attaching files, web search, deep research, saved prompts, think harder",
     text: `
-The buttons next to the message box:
+The buttons in the row under the message box:
 - Paperclip ("Attach"): opens a menu with three choices.
   - "Photos and files": photos, PDFs, Word, Excel, PowerPoint, and text or code files. Up to 5 files a message and
     10 MB each. You can also paste or drag files in. Word, Excel and PowerPoint files are read by Depeche and sent as
@@ -83,7 +116,21 @@ The buttons next to the message box:
   has a small fee. DeepSeek models can't search, so the globe is greyed out for them.
 - Deep research (the magnifier with lines): for this one message, the model runs several web searches and writes a long
   report with sources. It takes a few minutes and costs more than a normal reply; progress shows in the chat.
-- Microphone: see Voice.`,
+- Light bulb ("Think harder"): asks Claude, GPT or Gemini to reason longer and more carefully before answering. Slower
+  and a little dearer; the reply says "thought harder" next to the model's name. It stays on until you turn it off or
+  leave the page. Greyed out for DeepSeek and Grok, which can't be asked.
+- Bookmark ("Saved prompts"): messages you use often. Tap "New prompt", or "Save what I typed" to keep what's in the box.
+  Put a word in double curly brackets, like {{language}}, and you're asked to fill it in each time you use the prompt;
+  then it goes into the message box for you to check and send. Tap Edit on a prompt to change or delete it. Only you
+  can see your saved prompts.
+- Microphone: see Voice.
+
+While a reply is being written you can keep typing. Tap the outlined arrow ("Send after this reply"), or press Enter on
+a computer, and your message waits above the box and is sent as soon as the reply finishes (up to 5 can wait). Tap ×
+to take one back. If you stop a reply, waiting messages stay until you tap "Send now".
+
+Anything you type but don't send is kept as a draft for that chat on this device, so it's still there when you come
+back. Drafts are cleared when you sign out.`,
   },
   {
     id: "files-out",
@@ -134,11 +181,25 @@ Voice works while the app is open; iPhones don't let websites listen in the back
     text: `
 - The side menu lists your chats: Pinned, Today, Yesterday, Previous 7 days, Earlier. The Search box there filters by title.
 - Each chat has three dots (in the list, and at the top right of an open chat) with: Rename, Pin (or Unpin), Archive
-  (or Restore), Download (the chat as a file) and Delete.
+  (or Restore), Download (the chat as a file) and Delete. In an open chat it also has "Turn off summaries" (or "Turn on").
 - "Archived chats" at the bottom of the list shows chats you put away. Writing in an archived chat brings it back.
 - Chats you haven't used for a month are deleted with their files, archived ones too. Pinned chats are always kept. To
   keep everything, turn on "Keep all my chats" in [Account → Old chats](/account#old-chats). When chats are about to be
   deleted, a line at the top of the chat screen says so, with "Keep" to save them.`,
+  },
+  {
+    id: "summaries",
+    title: "Long chats: summaries of earlier messages",
+    text: `
+- When a chat gets very long (roughly 35,000 words), Depeche has the cheapest model of the same AI company write a
+  summary of the older part, plus a list of exact details (numbers, dates, names, links, decisions). From then on the
+  model reads that summary and the recent messages instead of everything, so long chats stay cheap and fit.
+- Nothing is deleted: every message stays in the chat. A line "Earlier messages summarised" marks where the summary
+  ends; tap it to read the summary, its key facts and what it cost.
+- In that sheet: "Redo summary" writes it again from the original messages, "Don't use this summary" drops it, and
+  "Turn off for this chat" stops summaries for that chat (turn them back on from the chat's three dots).
+- The model can still look up the exact wording of anything earlier in the chat when it needs to.
+- Summaries count towards your monthly limit like replies, and usually cost a fraction of a cent.`,
   },
   {
     id: "temporary-and-sharing",
@@ -219,6 +280,7 @@ Replies sometimes suggest something to remember; nothing is kept unless you tap 
 - Changes made to your account: anything an admin changed for you.
 - Your data: download a zip of all your chats, memories, files, spending and settings.
 - Bring in old chats: import your ChatGPT, Claude or Gemini export (see Importing).
+- Demo keys (Hasan only, as the app's owner): add a demo key (a word or two) for someone to try Depeche (see Demo keys).
 - Delete: permanently delete all your chats, memories and instructions (type delete to confirm).
 - Something broken?: link to Report a bug.`,
   },
@@ -242,6 +304,18 @@ layout, buttons and shortcuts. Describe the look you want and tap the button to 
 has designs it. You see a preview and choose Keep or Undo. Only you see it. Earlier looks are listed so you can go back
 to any of them for free. You get a set number of builds a month (your admin sets it); a failed build doesn't count.
 If a look ever makes Depeche hard to use, Safe mode (on the My look page) shows standard Depeche again.`,
+  },
+  {
+    id: "ripple",
+    title: "The moving letters behind sign-in, chats and loading",
+    text: `
+Behind the sign-in page, an empty new chat and the loading screen there is a faint wall of the word "depeche". On a
+computer, move the mouse over it and a ripple spreads out: letters flicker and brighten, then settle in a few seconds.
+On a phone or iPad it drifts on its own in slow waves; nothing follows your finger, and taps go straight through to
+the page. It never covers what you read: the sign-in form and the greeting stay clear. Inside a chat, a much
+softer wave washes through when you open it and, fainter, when an answer arrives, then everything goes still. It is switched off if your
+device asks for reduced motion (iPhone: Settings → Accessibility → Motion → Reduce Motion), and on devices too slow to
+animate it smoothly it stays still.`,
   },
   {
     id: "gadgets",
@@ -342,6 +416,11 @@ Depeche is invite-only: there is no sign-up. Your family admin sends you an invi
 ([sign-in page](/sign-in)) use your email (Depeche emails you a link and a 6-digit code; type the code if the link opens
 in the wrong browser, which is common in the iPhone home-screen app), your username or email with a password if you set
 one, or Google. You can be signed in on several devices. Hasan set up Depeche once at /setup.
+
+Demo keys: on the sign-in page, "Have a demo key?" takes a demo key from Hasan and opens his account for a demo. The demo
+ends when you close the Depeche tab; to come back you need another demo key. A demo can't open Account, Family (API keys
+and members) or Health. Hasan adds keys in [Account → Demo keys](/account#demo-keys) (only a scrambled copy is kept, so he
+writes the word down) and ends a demo early with "Sign out everywhere".
 
 Install it like an app: on iPhone or iPad, open Depeche in Safari, tap Share, then "Add to Home Screen". On Android,
 Chrome's menu → "Add to Home screen" or "Install app".`,

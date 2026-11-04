@@ -1,15 +1,36 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { Button, Field, GoogleMark, Kept, Notice, keepOnError } from "@/components/ui";
 import { EmailCodeForm } from "@/components/EmailCodeForm";
-import { sendEmailLink, signInWithGoogle, signInWithPassword } from "./actions";
+import { sendEmailLink, signInWithDemoKey, signInWithGoogle, signInWithPassword } from "./actions";
+import { clearDrafts } from "@/lib/chat/composer";
+import { DEMO_DEVICE_KEY, DEMO_TAB_KEY } from "@/lib/auth/demo-meta";
+
+/** A random id this browser keeps, so each demo key works once here. */
+function demoDevice(): string {
+  try {
+    let id = localStorage.getItem(DEMO_DEVICE_KEY);
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem(DEMO_DEVICE_KEY, id);
+    }
+    return id;
+  } catch {
+    return "";
+  }
+}
 
 /** Email link first, Google second, username and password one tap away (as in the approved design). */
 export function SignInForms() {
+  // Signed out: unsent drafts from the last person on this device go too.
+  useEffect(() => clearDrafts(), []);
   const [mode, setMode] = useState<"email" | "password">("email");
   const [emailState, emailAction, emailPending] = useActionState(keepOnError(sendEmailLink), undefined);
   const [pwState, pwAction, pwPending] = useActionState(keepOnError(signInWithPassword), undefined);
+  const [demo, setDemo] = useState(false);
+  const [device, setDevice] = useState("");
+  const [demoState, demoAction, demoPending] = useActionState(signInWithDemoKey, undefined);
 
   const sentTo = emailState?.sentTo;
 
@@ -61,6 +82,39 @@ export function SignInForms() {
       <Button type="button" variant="quiet" className="mt-2" onClick={() => setMode(mode === "email" ? "password" : "email")}>
         {mode === "email" ? "Use a username and password" : "Email me a sign-in link instead"}
       </Button>
+
+      {demo ? (
+        <form
+          action={demoAction}
+          className="mt-2 flex flex-col gap-3"
+          data-testid="demo-key-form"
+          onSubmit={() => {
+            try {
+              sessionStorage.setItem(DEMO_TAB_KEY, "1");
+            } catch {}
+          }}
+        >
+          <input type="hidden" name="device" value={device} readOnly />
+          <Field
+            label="Demo key"
+            name="demoKey"
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            required
+          />
+          {demoState?.error ? <Notice tone="error">{demoState.error}</Notice> : null}
+          <Button variant="secondary" disabled={demoPending}>{demoPending ? "Opening…" : "Open the demo"}</Button>
+        </form>
+      ) : (
+        <Button type="button" variant="quiet" onClick={() => {
+            setDevice(demoDevice());
+            setDemo(true);
+          }}>
+          Have a demo key?
+        </Button>
+      )}
     </div>
   );
 }

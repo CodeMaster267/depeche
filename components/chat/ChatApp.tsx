@@ -6,10 +6,18 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
 import type { RunContext } from "@/components/markdown/RunCode";
-import { MODELS, canSearch, findModel, type Model } from "@/lib/ai/models";
+import { MODELS, canSearch, canThinkHarder, findModel, type Model } from "@/lib/ai/models";
+import { MAX_QUEUED, draftKey, nextQueued, readDraft, writeDraft, type Queued } from "@/lib/chat/composer";
 import { latestLeaf, pathTo, titleFrom, versionsOf, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
-import { archiveChat, refreshChat, refreshShell, rememberModel } from "@/app/c/actions";
+import { archiveChat, discardSummary, refreshChat, refreshShell, rememberModel, setCompaction } from "@/app/c/actions";
+import { activeSummary, type SummaryRow } from "@/lib/chat/summary";
+import { SummaryLine, SummarySheet } from "./SummarySheet";
+import { createProject } from "@/app/p/actions";
+import type { ProjectDetail } from "@/lib/chat/projects";
+import type { AssistantRow } from "@/lib/chat/assistants";
+import { ProjectsContext, type ProjectsValue } from "./projects-context";
+import { ProjectPanel } from "./Projects";
 import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
@@ -23,13 +31,15 @@ import { supabaseBrowser } from "@/lib/supabase/browser";
 import { UPLOAD_BUCKET } from "@/lib/chat/files";
 import { comparedWith } from "@/lib/chat/compare";
 import { MemorySuggestion } from "./MemorySuggestion";
+import { SavedPrompts } from "./SavedPrompts";
+import { LaterIcon, PromptsIcon, ThinkIcon } from "./ComposerIcons";
 import { Sidebar } from "./Sidebar";
 import { Waiting } from "./Waiting";
 import { CanvasIcon, CanvasMessage, CanvasOpener, CanvasPane, useCanvas } from "./Canvas";
 import { ChatMenu } from "./ChatMenu";
 import { DeletionNotice } from "./DeletionNotice";
 import { UserMessage, VersionSwitch } from "./Versions";
-import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, PhotoIcon, RetryIcon, ScanIcon, StopIcon, WaveIcon } from "./icons";
+import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, FolderIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, PhotoIcon, RetryIcon, ScanIcon, SparkIcon, StopIcon, WaveIcon } from "./icons";
 import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
 import { ResearchCard, ResearchIcon, runFor, useResearch } from "./Research";
@@ -39,6 +49,7 @@ import { EditingChip, MakingPicture, ReplyPictures, isPicture } from "./Pictures
 // Loaded only when someone scans, so the chat itself stays quick to open.
 const ScanSheet = dynamic(() => import("./ScanSheet"), { ssr: false });
 import type { Source } from "@/lib/chat/thread";
+import { ChatRipple, RippleField } from "@/components/RippleField";
 import { SOURCE_NAMES } from "@/lib/import/types";
 import { LOOK_ACTION, Shortcuts, useLookTexts, type LookAction } from "@/components/design/Look";
 
@@ -73,15 +84,23 @@ export function ChatApp({
   shell: initialShell,
   chat: initialChat,
   messages: initial,
+  project: initialProject = null,
+  assistant = null,
   all: initialAll,
+  summaries: initialSummaries = [],
   focus,
   temporary: startTemporary = false,
 }: {
   shell: Shell;
   chat: ChatRow | null;
   messages: MessageRow[];
+  /** On a project's own screen: new chats start inside it. */
+  project?: ProjectDetail | null;
+  /** Starting a chat with a saved assistant. */
+  assistant?: AssistantRow | null;
   /** Every version of every message; the screen shows one path through them. */
   all?: MessageRow[];
+  summaries?: SummaryRow[];
   /** A message to scroll to and mark, when the chat was opened from a search result. */
   focus?: string | null;
   /** Start as a temporary chat (opened from /?temporary). */
@@ -105,6 +124,24 @@ export function ChatApp({
   }, []);
   const [shell, setShell] = useState(initialShell);
   const [chat, setChat] = useState<ChatRow | null>(initialChat);
+  const [project, setProject] = useState<ProjectDetail | null>(initialProject);
+  const projectsValue: ProjectsValue = {
+    projects: shell.projects,
+    create: async (name) => {
+      const made = await createProject(name);
+      if (made) setShell((s) => ({ ...s, projects: [made, ...s.projects.filter((p) => p.id !== made.id)] }));
+      return made;
+    },
+  };
+  // The project this screen is in: the one open, or the open chat's.
+  const projectId = chat ? (chat.project_id ?? null) : (project?.id ?? null);
+  const projectName = shell.projects.find((p) => p.id === projectId)?.name ?? project?.name ?? null;
+  // The saved assistant this chat is with, when it's still one you can see.
+  const assistantId = chat ? (chat.assistant_id ?? null) : (assistant?.id ?? null);
+  const withAssistant = shell.assistants.find((a) => a.id === assistantId) ?? assistant;
+  // Summaries of earlier messages (auto-compaction), and whether the open one is showing.
+  const [summaries, setSummaries] = useState<SummaryRow[]>(initialSummaries);
+  const [viewing, setViewing] = useState<string | null>(null);
   // Edits and regenerations sit beside the originals, so a chat is a tree. `leaf` is where the
   // conversation on screen ends; flipping a version moves it.
   const [tree, setTree] = useState<Live[]>(initialAll ?? initial);
@@ -116,7 +153,11 @@ export function ChatApp({
   );
   const messages = useMemo(() => pathTo(tree, leaf), [tree, leaf]);
   const [modelId, setModelId] = useState<string | null>(
-    initialChat?.model && initialShell.modelIds.includes(initialChat.model) ? initialChat.model : initialShell.defaultModel,
+    initialChat?.model && initialShell.modelIds.includes(initialChat.model)
+      ? initialChat.model
+      : assistant?.model && initialShell.modelIds.includes(assistant.model)
+        ? assistant.model
+        : initialShell.defaultModel,
   );
   const [picking, setPicking] = useState(false);
   const [fresh, setFresh] = useState<Set<string>>(() => new Set());
@@ -125,7 +166,28 @@ export function ChatApp({
   const [banner, setBanner] = useState<string | null>(null);
   /** The scanner, open with the photos it was started with. */
   const [scan, setScan] = useState<File[] | null>(null);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraftState] = useState("");
+  // Unsent text is kept on this device per chat, so it's still there when you come back.
+  const draftChat = useRef(initialChat?.id ?? null);
+  const setDraft = useCallback(
+    (next: string | ((d: string) => string)) =>
+      setDraftState((d) => {
+        const v = typeof next === "function" ? next(d) : next;
+        writeDraft(draftKey(initialShell.userId, draftChat.current), v);
+        return v;
+      }),
+    [initialShell.userId],
+  );
+  useEffect(() => {
+    const saved = readDraft(draftKey(initialShell.userId, initialChat?.id ?? null));
+    if (saved) setDraftState((d) => d || saved);
+  }, [initialShell.userId, initialChat?.id]);
+  // Messages typed while a reply is still being written, sent one by one once it's done.
+  const [queue, setQueue] = useState<Queued[]>([]);
+  const ended = useRef<"completed" | "stopped" | "failed">("completed");
+  // "Think harder" is for the next messages in this visit only, as it costs more.
+  const [think, setThink] = useState(false);
+  const [promptsOpen, setPromptsOpen] = useState(false);
   // The part of an answer the next message asks about, picked by selecting it.
   const [quote, setQuote] = useState<string | null>(null);
   // Web search is on unless this person turned it off on this device.
@@ -165,6 +227,8 @@ export function ChatApp({
   const pinnedToBottom = useRef(true);
   const streamingReply = messages.find((m) => m.streaming);
   const lastReply = messages.at(-1)?.role === "assistant" ? messages.at(-1) : undefined;
+  // Finished answers: each new one sends a faint ripple behind the chat.
+  const answers = messages.filter((m) => m.role === "assistant" && !m.streaming).length;
   const hasCanvas = messages.some((m) => m.role === "assistant" && (m.content.text ?? "").includes("canvas:"));
   const canvas = useCanvas(chat?.id ?? null, streamingReply ? (streamingReply.content.text ?? "") : null, lastReply?.content.text ?? null, hasCanvas);
 
@@ -172,6 +236,7 @@ export function ChatApp({
   const selected = model;
   // DeepSeek can't search the web, so the globe is shown off and greyed out while one is picked.
   const searchable = canSearch(model);
+  const thinkable = canThinkHarder(model);
   // Picture models make or edit a picture from each message.
   const imaging = !!model?.image;
   const pictureModels = MODELS.filter((m) => m.image && shell.modelIds.includes(m.id));
@@ -223,6 +288,7 @@ export function ChatApp({
         setTree(all);
         // Stay on the version being read, picking up anything added below it; else the newest.
         setLeaf((l) => (l && all.some((m) => m.id === l) ? latestLeaf(all, l) : (found.messages.at(-1)?.id ?? null)));
+        setSummaries(found.summaries);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -364,6 +430,7 @@ export function ChatApp({
     const model = opts.model ?? selected;
     if (!model) return;
     const follow = opts.follow ?? true;
+    if (follow) ended.current = "failed";
     const before = leaf;
     if (follow) setBanner(null);
     setBusy(true);
@@ -395,7 +462,17 @@ export function ChatApp({
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chatId, model: model.id, clientRequestId, search: search && canSearch(model), ...open, ...body }),
+        body: JSON.stringify({
+          chatId,
+          model: model.id,
+          clientRequestId,
+          search: search && canSearch(model),
+          ...(!chatId && project ? { projectId: project.id } : {}),
+          ...(!chatId && assistant ? { assistantId: assistant.id } : {}),
+          ...(think && canThinkHarder(model) ? { harder: true } : {}),
+          ...open,
+          ...body,
+        }),
         signal: abort.signal,
       });
       if (!res.ok || !res.body) {
@@ -408,7 +485,7 @@ export function ChatApp({
         // Nothing was sent: take the message back off the screen and return it to the box.
         setTree((list) => list.filter((m) => m.id !== replyId && !optimistic.some((o) => o.id === m.id)));
         setLeaf(before);
-        if (body.text) setDraft(body.text);
+        if (body.text) setDraft((d) => (d.trim() ? d : (body.text ?? "")));
         if (body.quote) setQuote(body.quote);
         setBanner(error ?? "Couldn't send that. Try again.");
         if (res.status === 409) sync();
@@ -445,7 +522,7 @@ export function ChatApp({
             | { type: "searching"; query?: string; where?: "chat" }
             | { type: "sources"; sources: Source[] }
             | { type: "making"; editing?: boolean }
-            | { type: "done" | "error"; message: MessageRow | null; error?: string };
+            | { type: "done" | "error"; message: MessageRow | null; error?: string; compact?: boolean; summary?: SummaryRow };
           if (ev.type === "start" && body.temporary) {
             // Nothing was saved: the question keeps its place on screen under its own id.
           } else if (ev.type === "start") {
@@ -457,10 +534,16 @@ export function ChatApp({
                 model: model.id,
                 pinned: false,
                 updated_at: new Date().toISOString(),
+                project_id: project?.id ?? null,
+                assistant_id: assistant?.id ?? null,
               };
               setChat(created);
               setShell((s) => ({ ...s, chats: [created, ...s.chats] }));
               window.history.replaceState(null, "", `/c/${ev.chatId}`);
+              // Anything typed meanwhile is now this chat's draft.
+              writeDraft(draftKey(shell.userId, null), "");
+              draftChat.current = ev.chatId;
+              setDraftState((d) => (writeDraft(draftKey(shell.userId, ev.chatId), d), d));
             }
             const local = optimistic[0]?.id;
             if (local) {
@@ -505,12 +588,18 @@ export function ChatApp({
             // A temporary chat's reply hangs under the question as it is on screen.
             const saved = ev.message && body.temporary ? { ...ev.message, parent_id: placeholder.parent_id } : ev.message;
             if (saved) {
+              if (follow) ended.current = saved.status === "completed" ? "completed" : "failed";
               setTree((list) => list.map((m) => (m.id === replyId ? saved : m)));
               if (follow) setLeaf(saved.id);
               else setLeaf((l) => (l === replyId ? saved.id : l));
               // Code in a reply that just arrived may run by itself.
               setFresh((f) => new Set(f).add(saved.id));
               setShell((s) => ({ ...s, spent: s.spent + Number(saved.content.cost ?? 0) }));
+              // A summary made before this reply (the chat had grown well past the point).
+              const made = ev.summary;
+              if (made) setSummaries((list) => [...list.filter((s) => s.id !== made.id), made]);
+              // The chat is long enough to summarise: do it now, in the background.
+              if (ev.compact && chatId) summarise(chatId);
             } else patchReply((m) => ({ ...m, streaming: false, status: "failed", content: { ...m.content, error: ev.error } }));
           }
         }
@@ -522,6 +611,7 @@ export function ChatApp({
         patchReply((m) => ({ ...m, streaming: false, making: false, content: { ...m.content, notice: "Still making the picture. It will appear here when it's ready." } }));
         for (const wait of [15_000, 45_000, 100_000]) setTimeout(() => sync(), wait);
       } else if (abort.signal.aborted) {
+        if (follow) ended.current = "stopped";
         patchReply((m) => ({ ...m, streaming: false, status: "stopped" }));
         // The server saves what was written; pick up its copy once it has.
         setTimeout(() => sync(), 1500);
@@ -545,9 +635,42 @@ export function ChatApp({
     }
   }
 
+  async function summarise(chatId: string, redo?: string): Promise<string | null> {
+    const res = await fetch("/api/chat/compact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chatId, ...(redo ? { redo } : {}) }),
+      keepalive: !redo,
+    }).catch(() => null);
+    const out = (await res?.json().catch(() => null)) as { summary?: SummaryRow; skipped?: string; error?: string } | null;
+    const made = out?.summary;
+    if (made) {
+      setSummaries((list) => [...list.filter((s) => s.id !== redo && s.id !== made.id), made]);
+      if (redo) setViewing(made.id);
+      return null;
+    }
+    return out?.error ?? (out?.skipped ? `Couldn't summarise: ${out.skipped}.` : "Couldn't summarise. Try again.");
+  }
+
+  // Where the model starts reading word for word: after the newest summary on the shown path.
+  const applied = chat?.compaction !== "off" ? activeSummary(messages, summaries) : null;
+  const shownSummary = viewing ? summaries.find((s) => s.id === viewing) : undefined;
+
   const send = () => {
     const text = draft.trim();
-    if ((!text && !attachments.ready) || attachments.uploading || busy || research.running || !model) return;
+    if ((!text && !attachments.ready) || attachments.uploading || research.running || !model) return;
+    if (busy) {
+      // Still answering: this one goes next. (Pictures and deep research start on their own.)
+      if (imaging || (deep && searchable)) return;
+      if (queue.length >= MAX_QUEUED) {
+        setBanner(`You can line up ${MAX_QUEUED} messages at a time.`);
+        return;
+      }
+      setDraft("");
+      setQuote(null);
+      setQueue((q) => [...q, { id: draftId(), text, files: attachments.take(), ...(quote ? { extras: { quote } } : {}) }]);
+      return;
+    }
     if (deep && searchable && !imaging) {
       if (temporary) return setBanner("Deep research isn't available in a temporary chat.");
       if (attachments.items.length) return setBanner("Deep research works from your message only. Remove the attached files first.");
@@ -563,6 +686,23 @@ export function ChatApp({
     setQuote(null);
     const files = attachments.take();
     sendText(text, false, editing ? [editing, ...files].slice(0, 5) : files, quote ?? undefined);
+  };
+
+  // Once a reply has finished, the next queued message goes. After a stop or an error they wait.
+  useEffect(() => {
+    if (busy || research.running) return;
+    const next = nextQueued(queue, ended.current);
+    if (!next) return;
+    setQueue((q) => q.filter((x) => x.id !== next.id));
+    sendQueued(next);
+    // sendQueued is recreated each render; the queue and busy are what matter here.
+  }, [busy, queue]);
+
+  const sendQueued = (item: Queued) => sendText(item.text, false, item.files, typeof item.extras?.quote === "string" ? item.extras.quote : undefined);
+  const sendQueuedNow = (item: Queued) => {
+    if (busy) return;
+    setQueue((q) => q.filter((x) => x.id !== item.id));
+    sendQueued(item);
   };
 
   // The message a new one follows: the end of the conversation on screen.
@@ -687,11 +827,38 @@ export function ChatApp({
   // it gets a fresh key (?new=…) to start over; a reply still being written finishes on the server.
   const startNew = () => {
     setDrawer(false);
-    router.push(initialChat ? "/" : `/?new=${Date.now().toString(36)}`);
+    router.push(initialChat || initialProject ? "/" : `/?new=${Date.now().toString(36)}`);
+  };
+  // The header's new chat button stays in the project the screen is in.
+  const startNewHere = () => {
+    if (!projectId) return startNew();
+    setDrawer(false);
+    router.push(initialChat || initialProject?.id !== projectId ? `/p/${projectId}` : `/p/${projectId}?new=${Date.now().toString(36)}`);
   };
   useEffect(() => {
-    if (!initialChat && window.location.search.includes("new=")) window.history.replaceState(null, "", "/");
+    if (!initialChat && window.location.search.includes("new=")) window.history.replaceState(null, "", window.location.pathname);
   }, [initialChat]);
+  // Opening a project. A chat begun on that project's screen is still that page as far as the
+  // router knows, so it gets a fresh key (?new=…) to show the project again.
+  const openProject = (id: string) => {
+    setDrawer(false);
+    router.push(initialProject?.id === id && !initialChat ? `/p/${id}?new=${Date.now().toString(36)}` : `/p/${id}`);
+  };
+  // A project's screen can come from the browser's page cache, so check its chats are current.
+  useEffect(() => {
+    if (initialProject) refreshShell().then(setShell, () => {});
+  }, [initialProject]);
+  // A project renamed or deleted on its screen.
+  const changeProject = (next: ProjectDetail | null) => {
+    const id = project?.id;
+    setProject(next);
+    setShell((s) => ({
+      ...s,
+      projects: next ? s.projects.map((p) => (p.id === next.id ? { ...p, name: next.name } : p)) : s.projects.filter((p) => p.id !== id),
+      chats: next ? s.chats : s.chats.map((c) => (c.project_id === id ? { ...c, project_id: null } : c)),
+    }));
+  };
+
   const look = useLookTexts();
 
   // Buttons a person's design adds (components/design/Look.tsx) ask for these.
@@ -727,6 +894,7 @@ export function ChatApp({
   };
 
   return (
+    <ProjectsContext.Provider value={projectsValue}>
     <div data-part="app" className="flex h-dvh overflow-hidden">
       {/* Chats: always visible on wide screens, a drawer on phones. */}
       <aside data-part="sidebar-desktop" className={`hidden w-[300px] shrink-0 border-r border-line ${canvas.isOpen ? "2xl:block" : "md:block"}`}>
@@ -734,6 +902,8 @@ export function ChatApp({
           {...shell}
           chats={shell.chats}
           activeId={chat?.id ?? null}
+              activeProjectId={projectId}
+              onOpenProject={openProject}
           onNavigate={() => {}}
           onNewChat={startNew}
           onChatChange={changeChat}
@@ -747,6 +917,8 @@ export function ChatApp({
             <Sidebar
               {...shell}
               activeId={chat?.id ?? null}
+              activeProjectId={projectId}
+              onOpenProject={openProject}
               onNavigate={() => setDrawer(false)}
               onNewChat={startNew}
               onClose={() => setDrawer(false)}
@@ -767,7 +939,37 @@ export function ChatApp({
             <MenuIcon />
           </button>
           <div className="flex min-w-0 flex-1 flex-col items-center md:flex-row md:items-center md:gap-4">
-            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">{chat?.title ?? (temporary ? "Temporary chat" : "New chat")}</h1>
+            {chat && projectId && projectName ? (
+              <Link
+                href={`/p/${projectId}`}
+                prefetch={false}
+                onClick={(e) => {
+                  e.preventDefault();
+                  openProject(projectId);
+                }}
+                className="flex max-w-full items-center gap-1 text-[13px] text-mute hover:text-fg md:-mr-2 md:max-w-[30%] md:text-[15px]"
+                aria-label={`Project: ${projectName}`}
+              >
+                <FolderIcon className="h-4 w-4 shrink-0" />
+                <span className="truncate">{projectName}</span>
+                <span aria-hidden className="hidden md:inline">/</span>
+              </Link>
+            ) : null}
+            {chat && withAssistant ? (
+              <Link
+                href={`/assistants/${withAssistant.id}`}
+                prefetch={false}
+                className="flex max-w-full items-center gap-1 text-[13px] text-mute hover:text-fg md:-mr-2 md:max-w-[30%] md:text-[15px]"
+                aria-label={`Assistant: ${withAssistant.name}`}
+              >
+                <SparkIcon className="h-4 w-4 shrink-0" />
+                <span className="truncate">{withAssistant.name}</span>
+                <span aria-hidden className="hidden md:inline">/</span>
+              </Link>
+            ) : null}
+            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">
+              {chat?.title ?? (project ? project.name : assistant ? assistant.name : temporary ? "Temporary chat" : "New chat")}
+            </h1>
             {model ? (
               <button
                 type="button"
@@ -788,10 +990,10 @@ export function ChatApp({
           {chat ? <ChatMenu chat={chat} userId={shell.userId} onChange={changeChat} onDeleted={() => chatDeleted(chat.id)} /> : null}
           {chat || messages.length ? (
             <Link
-              href="/"
+              href={projectId ? `/p/${projectId}` : "/"}
               onClick={(e) => {
                 e.preventDefault();
-                startNew();
+                startNewHere();
               }}
               className="press glass flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
               aria-label="New chat"
@@ -830,18 +1032,47 @@ export function ChatApp({
           </div>
         ) : null}
 
+        {/* The letterflip field sits behind the conversation, outside the scroller so it stays put:
+            an empty new chat gets the full field (clear of the greeting); an open chat gets a soft
+            ripple that fades when the chat opens and again, fainter, when an answer arrives. */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+        {messages.length === 0 ? (
+          <RippleField clear="[data-ripple-clear] > *" />
+        ) : (
+          <ChatRipple key={chat?.id ?? "new"} pulseKey={answers} />
+        )}
         <div
           ref={scroller}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
           onScroll={(e) => {
             const el = e.currentTarget;
             pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           }}
         >
           <CanvasOpener.Provider value={canvas.open}>
-          <div data-part="thread" className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
-            {messages.length === 0 ? (
-              <div className="flex flex-col gap-2 pt-[12vh]">
+          <div data-part="thread" className="relative mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
+            {messages.length === 0 && project && !chat ? (
+              <ProjectPanel
+                userId={shell.userId}
+                project={project}
+                chats={shell.chats.filter((c) => c.project_id === project.id)}
+                onChange={changeProject}
+                onChatChange={changeChat}
+                onChatDeleted={chatDeleted}
+              />
+            ) : messages.length === 0 && assistant && !chat ? (
+              <div className="flex flex-col gap-2 pt-[12vh]" data-testid="assistant-start">
+                <span className="flex items-center gap-1.5 text-[13px] font-semibold uppercase tracking-[0.1em] text-mute">
+                  <SparkIcon className="h-4 w-4" /> Assistant{assistant.mine ? "" : " shared by your family"}
+                </span>
+                <h2 className="break-words text-[34px] font-semibold leading-tight tracking-tight">{assistant.name}</h2>
+                {assistant.description ? <p className="text-[17px] text-mute">{assistant.description}</p> : null}
+                <Link href={`/assistants/${assistant.id}`} className="self-start text-[15px] text-mute underline underline-offset-4">
+                  {assistant.mine ? "Edit" : "What it's been told"}
+                </Link>
+              </div>
+            ) : messages.length === 0 ? (
+              <div data-ripple-clear className="flex flex-col gap-2 pt-[12vh]">
                 <h2 data-part="greeting" className="text-[34px] font-semibold tracking-tight">{temporary ? "Temporary chat" : look.greeting(shell.name)}</h2>
                 {temporary && !noModels ? (
                   <p data-testid="temporary-note" className="max-w-[460px] text-[17px] text-mute">
@@ -865,6 +1096,27 @@ export function ChatApp({
                 ) : (
                   <p data-part="greeting-line" className="text-[17px] text-mute">{look.subtitle ?? "What's on your mind?"}</p>
                 )}
+                {!noModels && shell.assistants.length ? (
+                  <ul className="mt-5 flex flex-wrap gap-2" aria-label="Start with an assistant">
+                    {shell.assistants.slice(0, 6).map((a) => (
+                      <li key={a.id}>
+                        <Link
+                          href={`/?assistant=${a.id}`}
+                          prefetch={false}
+                          className="press flex items-center gap-1.5 rounded-full border border-line px-3.5 py-2 text-[15px]"
+                        >
+                          <SparkIcon className="h-4 w-4 text-mute" />
+                          {a.name}
+                        </Link>
+                      </li>
+                    ))}
+                    <li>
+                      <Link href="/assistants" className="press flex items-center rounded-full px-3.5 py-2 text-[15px] text-mute">
+                        All assistants
+                      </Link>
+                    </li>
+                  </ul>
+                ) : null}
               </div>
             ) : null}
             {chat?.imported_from ? (
@@ -873,7 +1125,7 @@ export function ChatApp({
                 {chat.created_at ? ` · started ${new Date(chat.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}` : ""}
               </p>
             ) : null}
-            {messages.map((m) =>
+            {messages.flatMap((m, i) => [
               m.role === "user" ? (
                 <div key={m.id} className="flex flex-col">
                   <UserMessage
@@ -932,9 +1184,13 @@ export function ChatApp({
                 />
                 </CanvasMessage.Provider>
               ),
-            )}
+              applied && applied.index === i && i < messages.length - 1 ? (
+                <SummaryLine key={`summary-${applied.summary.id}`} onOpen={() => setViewing(applied.summary.id)} />
+              ) : null,
+            ].filter(Boolean))}
           </div>
           </CanvasOpener.Provider>
+        </div>
         </div>
 
         <div data-part="composer-wrap" className="mx-auto w-full max-w-[760px] px-3 md:px-8" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
@@ -966,11 +1222,49 @@ export function ChatApp({
               }}
             />
           ) : null}
+          {queue.length ? (
+            <ul aria-label="Queued messages" className="mb-2 flex flex-col gap-1.5">
+              {queue.map((q, i) => (
+                <li key={q.id} data-testid="queued" className="flex items-center gap-2 rounded-2xl border border-line py-1 pl-3 pr-1 text-[15px]">
+                  <LaterIcon className="shrink-0 text-mute" />
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="sr-only">Queued: </span>
+                    {q.text || q.files.map((f) => f.name).join(", ")}
+                  </span>
+                  {!busy && i === 0 ? (
+                    <button type="button" className="press shrink-0 rounded-full px-3 py-1.5 text-[14px] underline underline-offset-4" onClick={() => sendQueuedNow(q)}>
+                      Send now
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    aria-label="Remove from queue"
+                    className="shrink-0 rounded-full p-2 text-mute hover:text-fg"
+                    onClick={() => setQueue((list) => list.filter((x) => x.id !== q.id))}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+                      <path d="M6 6l12 12M18 6L6 18" />
+                    </svg>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <Composer
             onScan={(files) => setScan(files)}
+            think={think && thinkable}
+            thinkable={thinkable}
+            onToggleThink={() => {
+              setHint(think ? "Think harder off" : "Think harder on: slower, more careful answers that cost a little more");
+              clearTimeout(hintTimer.current);
+              hintTimer.current = setTimeout(() => setHint(null), 2500);
+              setThink(!think);
+            }}
+            onPrompts={() => setPromptsOpen(true)}
+            queueing={busy && !research.running && !imaging && !(deep && searchable)}
             editing={editing}
             onClearEditing={() => setEditLast(false)}
-            placeholder={imaging ? (editing || attachments.items.some((x) => x.mime.startsWith("image/")) ? "Describe what to change" : "Describe a picture to make") : deep && searchable ? "What to research?" : "Message Depeche"}
+            placeholder={imaging ? (editing || attachments.items.some((x) => x.mime.startsWith("image/")) ? "Describe what to change" : "Describe a picture to make") : deep && searchable ? "What to research?" : project && !chat ? `New chat in ${project.name}` : assistant && !chat ? `Message ${assistant.name}` : "Message Depeche"}
             quote={quote}
             onClearQuote={() => setQuote(null)}
             attachments={attachments.items}
@@ -1002,7 +1296,9 @@ export function ChatApp({
               {hint}
             </p>
           ) : (
-            <p data-part="keyboard-hint" className="mt-2 hidden text-center text-[12px] text-mute md:block">Enter to send · Shift + Enter for a new line</p>
+            <p data-part="keyboard-hint" className="mt-2 hidden text-center text-[12px] text-mute md:block">
+              {busy ? "Enter to send after this reply" : "Enter to send"} · Shift + Enter for a new line
+            </p>
           )}
         </div>
       </div>
@@ -1026,6 +1322,33 @@ export function ChatApp({
           onClose={() => setVoiceOpen(false)}
         />
       ) : null}
+      {promptsOpen ? (
+        <SavedPrompts
+          draft={draft}
+          onClose={() => setPromptsOpen(false)}
+          onUse={(text) => {
+            setPromptsOpen(false);
+            setDraft((d) => (d.trim() ? `${d.trimEnd()}\n\n${text}` : text));
+          }}
+        />
+      ) : null}
+      {shownSummary && chat ? (
+        <SummarySheet
+          summary={shownSummary}
+          onClose={() => setViewing(null)}
+          onRedo={() => summarise(chat.id, shownSummary.id)}
+          onDiscard={async () => {
+            await discardSummary(shownSummary.id);
+            setSummaries((list) => list.filter((s) => s.id !== shownSummary.id));
+            setViewing(null);
+          }}
+          onTurnOff={async () => {
+            await setCompaction(chat.id, false);
+            setChat({ ...chat, compaction: "off" });
+            setViewing(null);
+          }}
+        />
+      ) : null}
       {picking ? (
         <ModelPicker
           available={shell.modelIds}
@@ -1040,6 +1363,7 @@ export function ChatApp({
         />
       ) : null}
     </div>
+    </ProjectsContext.Provider>
   );
 }
 
@@ -1166,6 +1490,7 @@ function Reply({
           </span>
           <span data-part="reply-model" className="flex items-center gap-1 font-mono text-[12px]">
             {info?.short ?? m.model}
+            {m.content.harder ? " · thought harder" : ""}
             {typeof m.content.cost === "number" && (m.content.cost > 0 || m.content.usage) ? (
               <>
                 <span aria-hidden>{" · "}</span>
@@ -1203,6 +1528,11 @@ function Composer({
   deep,
   onToggleDeep,
   deepable,
+  think,
+  thinkable,
+  onToggleThink,
+  onPrompts,
+  queueing,
   voice,
   onVoice,
   onDictated,
@@ -1220,6 +1550,12 @@ function Composer({
   onToggleDeep: () => void;
   /** Whether this model can do deep research (it must search the web, and not be a picture model). */
   deepable: boolean;
+  think: boolean;
+  thinkable: boolean;
+  onToggleThink: () => void;
+  onPrompts: () => void;
+  /** A reply is being written: what's sent now goes after it. */
+  queueing: boolean;
   attachments: Pending[];
   onAttach: (files: File[]) => void;
   onRemoveAttachment: (id: string) => void;
@@ -1276,7 +1612,31 @@ function Composer({
       {editing ? <EditingChip file={editing} onClear={onClearEditing} /> : null}
       {quote ? <QuoteChip quote={quote} onClear={onClearQuote} /> : null}
       <AttachmentTray items={attachments} onRemove={onRemoveAttachment} />
-      <div className="flex items-end gap-1">
+      <textarea
+        ref={box}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onPaste={(e) => {
+          const files = [...e.clipboardData.files];
+          if (!files.length) return;
+          e.preventDefault();
+          onAttach(files);
+        }}
+        onKeyDown={(e) => {
+          // On a keyboard, Enter sends (or lines the message up while a reply is being written).
+          // On phones, Enter is a new line and the button sends.
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+            e.preventDefault();
+            onSend();
+          }
+        }}
+        rows={1}
+        placeholder={queueing && hint === "Message Depeche" ? "Write your next message" : hint}
+        aria-label="Message Depeche"
+        disabled={disabled}
+        className="composer-input block max-h-[220px] min-h-[44px] w-full resize-none bg-transparent px-3 pb-1 pt-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
+      />
+      <div className="flex items-center gap-0.5">
         <input
           ref={picker}
           type="file"
@@ -1381,30 +1741,38 @@ function Composer({
         >
           <ResearchIcon />
         </button>
-        <textarea
-          ref={box}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onPaste={(e) => {
-            const files = [...e.clipboardData.files];
-            if (!files.length) return;
-            e.preventDefault();
-            onAttach(files);
-          }}
-          onKeyDown={(e) => {
-            // On a keyboard, Enter sends. On phones, Enter is a new line and the button sends.
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
-              e.preventDefault();
-              onSend();
-            }
-          }}
-          rows={1}
-          placeholder={hint}
-          aria-label="Message Depeche"
+        <button
+          type="button"
+          onClick={onToggleThink}
+          disabled={!thinkable || disabled}
+          aria-pressed={think}
+          aria-label="Think harder"
+          title={!thinkable ? "This model can't be asked to think harder" : think ? "Think harder on" : "Think harder off"}
+          className={`press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${think ? "text-fg" : "text-faint hover:text-fg"}`}
+        >
+          <ThinkIcon on={think} />
+        </button>
+        <button
+          type="button"
+          onClick={onPrompts}
           disabled={disabled}
-          className="composer-input max-h-[220px] min-h-[44px] min-w-0 flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
-        />
+          aria-label="Saved prompts"
+          className="press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
+        >
+          <PromptsIcon />
+        </button>
+        <span className="min-w-0 flex-1" />
         {voice ? <DictateButton onText={onDictated} onError={onVoiceError} disabled={disabled} /> : null}
+        {queueing && canSend ? (
+          <button
+            type="submit"
+            aria-label="Send after this reply"
+            title="Send after this reply"
+            className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line"
+          >
+            <ArrowUpIcon />
+          </button>
+        ) : null}
         {busy ? (
           <button type="button" onClick={onStop} aria-label="Stop" className="press glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full">
             <StopIcon />
