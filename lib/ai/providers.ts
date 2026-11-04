@@ -53,7 +53,7 @@ export type ReplyRequest = {
   maxOutput?: number;
   /**
    * Lets the model look up the exact wording of earlier messages in this chat ("search this
-   * chat"), offered when some of them are summarised or left out. Not on Groq (test-only).
+   * chat"), offered when some of them are summarised or left out.
    */
   chatSearch?: ChatSearch;
   /** Ask for the model's reasoning. Turned off for a model that turns out not to offer it. */
