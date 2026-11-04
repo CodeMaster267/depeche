@@ -12,6 +12,7 @@ export type Profile = {
   display_name: string;
   username: string | null;
   monthly_cap_usd: string;
+  no_spend_limit: boolean;
   share_titles: boolean;
   /** Signed in with a temporary password from their admin, so must choose their own first. */
   must_change_password: boolean;
@@ -26,7 +27,7 @@ export const getMe = cache(async (): Promise<Me | null> => {
   if (!data.user) return null;
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, family_id, role, is_app_owner, display_name, username, monthly_cap_usd, share_titles, must_change_password")
+    .select("id, family_id, role, is_app_owner, display_name, username, monthly_cap_usd, no_spend_limit, share_titles, must_change_password")
     .eq("id", data.user.id)
     .maybeSingle<Profile>();
   if (!profile) return null;

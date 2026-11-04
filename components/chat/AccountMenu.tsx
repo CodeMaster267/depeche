@@ -38,6 +38,7 @@ export function AccountMenu({
   isAdmin,
   spent,
   cap,
+  noLimit = false,
   reportFrom,
   onNavigate,
 }: {
@@ -45,6 +46,8 @@ export function AccountMenu({
   isAdmin: boolean;
   spent: number;
   cap: number;
+  /** Their family admin took the monthly limit away. */
+  noLimit?: boolean;
   /** The page Report a bug comes back to. */
   reportFrom: string;
   onNavigate: () => void;
@@ -53,7 +56,7 @@ export function AccountMenu({
   const wrap = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panelId = useId();
-  const share = cap > 0 ? Math.min(1, spent / cap) : 1;
+  const share = noLimit ? 0 : cap > 0 ? Math.min(1, spent / cap) : 1;
 
   useEffect(() => {
     if (!open) return;
@@ -96,6 +99,9 @@ export function AccountMenu({
             <Item href="/design" icon={<BrushIcon />} onGo={go}>
               My look
             </Item>
+            <Item href="/gadgets" icon={<GadgetIcon />} onGo={go}>
+              Gadgets
+            </Item>
             <Item href="/account" icon={<PersonIcon />} onGo={go}>
               Account
             </Item>
@@ -123,7 +129,7 @@ export function AccountMenu({
             </div>
             <div className="mt-1.5 flex justify-between font-mono text-[12px] text-mute">
               <span>${spent.toFixed(2)} this month</span>
-              <span>limit ${cap.toFixed(0)}</span>
+              <span>{noLimit ? "no limit" : `limit $${cap.toFixed(0)}`}</span>
             </div>
           </div>
         </div>
@@ -143,7 +149,7 @@ export function AccountMenu({
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[15px] font-medium leading-tight">{name}</span>
           <span className="mt-0.5 block font-mono text-[12px] leading-tight text-mute">
-            ${spent.toFixed(2)} of ${cap.toFixed(0)} this month
+            {noLimit ? `$${spent.toFixed(2)} this month · no limit` : `$${spent.toFixed(2)} of $${cap.toFixed(0)} this month`}
           </span>
         </span>
         <span className="text-mute">
@@ -153,3 +159,13 @@ export function AccountMenu({
     </div>
   );
 }
+
+/** Gadgets: a small grid of four squares, one rounded (an app). */
+const GadgetIcon = ({ className = "h-[18px] w-[18px]" }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
+    <rect x="4" y="4" width="7" height="7" rx="1.5" />
+    <rect x="13" y="4" width="7" height="7" rx="3.5" />
+    <rect x="4" y="13" width="7" height="7" rx="1.5" />
+    <rect x="13" y="13" width="7" height="7" rx="1.5" />
+  </svg>
+);

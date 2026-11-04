@@ -21,6 +21,7 @@ import { saveReplyCanvases } from "@/lib/chat/canvas";
 import { pictureReply } from "./picture";
 import { MAX_COMPARE } from "@/lib/chat/compare";
 import { DESIGN_INSTRUCTIONS } from "@/lib/design/instructions";
+import { WIDGET_INSTRUCTIONS } from "@/lib/widgets/instructions";
 import { chooseSkills, skillsPrompt } from "@/lib/skills/match";
 import { mySkills, skillsUsedEarlier } from "@/lib/skills/load";
 
@@ -656,7 +657,6 @@ const CODE_INSTRUCTIONS = [
   "Results appear under the block when it runs, and the person can send them back to you: don't state numbers the code will work out; say briefly what it does. Use plain ```python (without run) for code that is only to read or copy.",
 ].join(" ");
 
-
 type OpenCanvas = { title: string; content: string; byPerson: boolean };
 
 /** The canvas the model should work on: the one open beside the chat, or the chat's newest. */
@@ -707,6 +707,7 @@ function systemPrompt(name: string, voice: boolean, memories: RememberedFact[], 
     voice ? "" : FILE_INSTRUCTIONS,
     voice ? "" : CHART_INSTRUCTIONS,
     voice ? "" : CODE_INSTRUCTIONS,
+    voice ? "" : WIDGET_INSTRUCTIONS,
     voice ? "" : DESIGN_INSTRUCTIONS,
     voice || temporary ? "" : CANVAS_INSTRUCTIONS(name),
     voice ? "" : followUpInstructions(name),

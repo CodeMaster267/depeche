@@ -27,6 +27,10 @@ export function describeLog(row: LogRow, names: Map<string, string>, me: string)
       return `${actor} cancelled the invite for ${invitee}`;
     case "cap_changed":
       return `${actor} changed ${whose} monthly limit from ${money(d.from)} to ${money(d.to)}`;
+    case "limit_removed":
+      return `${actor} took away ${whose} monthly limit`;
+    case "limit_restored":
+      return `${actor} put ${whose} monthly limit back`;
     case "password_reset":
       return `${actor} gave ${whom} a temporary password`;
     case "signed_out":
