@@ -4,6 +4,7 @@ import { NavLink } from "@/components/Press";
 import { PagesMenu } from "@/components/PagesMenu";
 import { PersonalLook } from "@/components/design/PersonalLook";
 import { Shortcuts } from "@/components/design/Look";
+import { ConciergeButton } from "@/components/help/Concierge";
 
 
 /** Top bar for signed-in pages. The wordmark stays clean here; the glitch is for the title card. */
@@ -34,6 +35,7 @@ export function AppHeader({ isAdmin }: { isAdmin: boolean }) {
           ))}
         </span>
         <PagesMenu pages={pages} />
+        <ConciergeButton variant="icon" isAdmin={isAdmin} />
       </nav>
     </header>
     </PersonalLook>

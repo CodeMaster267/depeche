@@ -78,6 +78,17 @@ under reduced motion. Mockups: `/mnt/project-files/depeche/screens/` in the proj
   (`scripts/bugs/policy.ts`): Hasan's reports may touch most of the app, everyone else's only the chat
   screen. Never edit `from-*` labels; only the mirror's count.
 
+## Concierge (help assistant)
+
+- Concierge answers "how do I…" questions from `lib/help/guide.ts`, personalised with the person's role, their
+  family's keys and spending (never chats or memories). Claude Haiku first, then cheap models the family has
+  (`CONCIERGE_MODELS`). Cost counts toward the person's monthly limit; nothing else is saved.
+- **Every feature people can see must be in the guide.** When you add, rename or move a screen, button or setting,
+  update the right topic in `lib/help/guide.ts` in the same PR. `tests/help/guide.test.ts` fails if a page, settings
+  section, side-menu link or chat-menu item is missing, and CI's "Concierge guide" check fails if a PR adds files under
+  `app/` or `components/` without touching the guide (write "Guide: no change" in the PR description if nothing
+  visible is new). Models and providers are listed from `lib/ai/models.ts` automatically.
+
 ## Working here
 
 - `npm test` runs the database privacy suite against an in-memory Postgres (PGlite) set up like
