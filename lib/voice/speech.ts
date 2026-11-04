@@ -1,6 +1,6 @@
 import "server-only";
 import OpenAI, { toFile } from "openai";
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI, Modality, ThinkingLevel } from "@google/genai";
 import { fakeAi } from "@/lib/ai/providers";
 import type { Provider } from "@/lib/ai/models";
 
@@ -27,11 +27,69 @@ export const VOICE = {
     google: { model: "gemini-3.5-flash-lite", fallback: "gemini-3.8-flash", perMillionIn: 3, perMillionOut: 7.5 },
   },
   speak: {
-    google: { model: "gemini-3.8-flash-tts", voice: "Kore", perMillionIn: 1, perMillionAudio: 18, audioTokensPerSecond: 25 },
+    // Voice chat asks for the faster Flash-Lite voice first; "Read aloud" uses Flash. Flash-Lite is
+    // priced as Flash here, to err high.
+    google: { model: "gemini-3.8-flash-tts", fast: "gemini-3.8-flash-lite-tts", voice: "Kore", perMillionIn: 1, perMillionAudio: 18, audioTokensPerSecond: 25 },
     // Leaves the API on 6 Jan 2027; the browser voice takes over if it stops working.
     openai: { model: "gpt-4o-mini-tts", voice: "marin", perMinute: 0.015 },
   },
+  /**
+   * Live listening for voice chat: the browser streams the microphone straight to Google's live
+   * transcription model with a one-time pass from the server, and words appear as they're said.
+   * $0.54 an audio hour on paid keys (free tier on free keys).
+   */
+  live: { model: "gemini-3.5-transcribe-live", perMinute: 0.54 / 60, maxSeconds: 240 },
 } as const;
+
+/**
+ * A one-time pass for one live listening session, made with the family's Google key, which never
+ * leaves the server. It is locked to the transcription model and these settings, must be used
+ * within a minute, and stops working after `VOICE.live.maxSeconds`.
+ */
+export async function liveToken(apiKey: string, languages: string[]): Promise<{ token: string; model: string; expiresAt: string }> {
+  const { model, maxSeconds } = VOICE.live;
+  const now = Date.now();
+  const expiresAt = new Date(now + maxSeconds * 1000).toISOString();
+  if (fakeAi()) return { token: "fake", model, expiresAt };
+  const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: "v1alpha" } });
+  const token = await ai.authTokens.create({
+    config: {
+      uses: 1,
+      expireTime: expiresAt,
+      newSessionExpireTime: new Date(now + 60_000).toISOString(),
+      liveConnectConstraints: { model, config: liveConfig(languages) },
+      lockAdditionalFields: [],
+    },
+  });
+  if (!token.name) throw new Error("Google didn't hand out a live pass.");
+  return { token: token.name, model, expiresAt };
+}
+
+/** The live session's settings; the browser connects with exactly these. */
+export function liveConfig(languages: string[]) {
+  return {
+    responseModalities: [Modality.TEXT],
+    inputAudioTranscription: { ...(languages.length ? { languageCodes: languages } : {}) },
+  };
+}
+
+/** The languages the person speaks, main one first, as a hint ("en-GB,ur" becomes ["en", "ur"]). */
+export function requestLanguages(req: Request): string[] {
+  return [
+    ...new Set(
+      (req.headers.get("x-languages") ?? req.headers.get("x-language") ?? "")
+        .split(",")
+        .map((l) => l.trim().slice(0, 2).toLowerCase())
+        .filter((l) => /^[a-z]{2}$/.test(l)),
+    ),
+  ].slice(0, 4);
+}
+
+/** Seconds of live listening to charge: what the browser reports, kept within what the pass allowed. */
+export function liveSeconds(reported: unknown): number {
+  const n = typeof reported === "number" && Number.isFinite(reported) ? reported : VOICE.live.maxSeconds;
+  return Math.min(VOICE.live.maxSeconds, Math.max(1, Math.ceil(n)));
+}
 
 /** Which provider listens and which speaks, given the providers a family has keys for. */
 /**
@@ -198,7 +256,7 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
 export type Speech = { pcm: Uint8Array; rate: number; model: string; cost: number; input: number; output: number };
 
 /** Spoken audio for some text, as 16-bit mono PCM. */
-export async function speak(provider: Provider, apiKey: string, text: string, signal: AbortSignal): Promise<Speech> {
+export async function speak(provider: Provider, apiKey: string, text: string, signal: AbortSignal, fast = false): Promise<Speech> {
   if (fakeAi()) {
     // Tests: a quarter second of quiet tone per 40 characters, so playback can be followed.
     const rate = 24_000;
@@ -210,8 +268,8 @@ export async function speak(provider: Provider, apiKey: string, text: string, si
   if (provider === "google") {
     const g = VOICE.speak.google;
     const ai = new GoogleGenAI({ apiKey });
-    const res = await ai.models.generateContent({
-      model: g.model,
+    const ask = (model: string) => ai.models.generateContent({
+      model,
       // Only the words to say: any instruction placed here gets read out as well.
       contents: [{ role: "user", parts: [{ text }] }],
       config: {
@@ -220,6 +278,16 @@ export async function speak(provider: Provider, apiKey: string, text: string, si
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: g.voice } } },
       },
     });
+    let model: string = fast ? g.fast : g.model;
+    let res;
+    try {
+      res = await ask(model);
+    } catch (e) {
+      // The faster voice may not be available on every key; the usual one is.
+      if (!fast || signal.aborted) throw e;
+      model = g.model;
+      res = await ask(model);
+    }
     const part = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
     if (!part?.inlineData?.data) throw new Error("No audio came back.");
     const bytes = new Uint8Array(Buffer.from(part.inlineData.data, "base64"));
@@ -227,7 +295,7 @@ export async function speak(provider: Provider, apiKey: string, text: string, si
     const seconds = pcm.length / 2 / rate;
     const input = res.usageMetadata?.promptTokenCount ?? Math.ceil(text.length / 4);
     const output = res.usageMetadata?.candidatesTokenCount ?? Math.ceil(seconds * g.audioTokensPerSecond);
-    return { pcm, rate, model: g.model, cost: (input * g.perMillionIn + output * g.perMillionAudio) / 1_000_000, input, output };
+    return { pcm, rate, model, cost: (input * g.perMillionIn + output * g.perMillionAudio) / 1_000_000, input, output };
   }
   if (provider === "openai") {
     const o = VOICE.speak.openai;
