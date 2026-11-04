@@ -467,7 +467,7 @@ export function ChatApp({
               </button>
             ) : null}
           </div>
-          {chat ? <ChatMenu chat={chat} onChange={changeChat} onDeleted={() => chatDeleted(chat.id)} /> : null}
+          {chat ? <ChatMenu chat={chat} userId={shell.userId} onChange={changeChat} onDeleted={() => chatDeleted(chat.id)} /> : null}
           {chat || messages.length ? (
             <Link
               href={projectId ? `/p/${projectId}` : "/"}

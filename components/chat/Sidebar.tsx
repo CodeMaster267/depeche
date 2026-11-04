@@ -36,6 +36,7 @@ function group(chats: ChatRow[]) {
 
 /** Your chats, newest first, plus the way to your account and (for admins) family settings. */
 export function Sidebar({
+  userId,
   chats,
   projects,
   activeId,
@@ -51,6 +52,7 @@ export function Sidebar({
   onChatChange,
   onChatDeleted,
 }: {
+  userId: string;
   chats: ChatRow[];
   projects: ProjectRow[];
   activeId: string | null;
@@ -206,6 +208,7 @@ export function Sidebar({
                   <span className="absolute inset-y-0 right-0.5 flex items-center">
                     <ChatMenu
                       chat={c}
+                      userId={userId}
                       label={`Options for ${c.title}`}
                       className="chat-more rounded-full p-2 text-mute transition-opacity hover:text-fg"
                       onChange={change}
@@ -222,7 +225,7 @@ export function Sidebar({
         ))}
         {showArchived ? (
           archived && !archived.length ? (
-            <p className="px-3 pt-2 text-[15px] text-mute">No archived chats. Archive a chat from its three dots to put it away here; it&apos;s kept until you restore or delete it.</p>
+            <p className="px-3 pt-2 text-[15px] text-mute">No archived chats. Archive a chat from its three dots to put it away here; chats you haven&apos;t used for a month are still deleted, unless you keep all your chats in Account.</p>
           ) : !archived ? (
             <p className="px-3 pt-2 text-[15px] text-mute">Loading…</p>
           ) : null
