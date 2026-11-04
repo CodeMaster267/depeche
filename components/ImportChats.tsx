@@ -101,8 +101,9 @@ export function ImportChats() {
     <div className="flex flex-col gap-3" data-testid="import-chats">
       <p className="text-[15px] text-mute">
         Bring your old chats from ChatGPT, Claude or Gemini into Depeche. They stay private to you, keep their dates,
-        and show up in search. Only the text comes across, not pictures or files. Imported chats aren&apos;t deleted
-        after a month; each person can bring in up to {mb(IMPORT_TEXT_LIMIT)} of text.
+        and show up in search. Only the text comes across, not pictures or files. Like any chat, an imported one is
+        deleted after a month unused, counted from the day you import it; pin it or turn on Keep all my chats to keep
+        it. Each person can bring in up to {mb(IMPORT_TEXT_LIMIT)} of text.
       </p>
       <details className="text-[15px]">
         <summary className="press cursor-pointer select-none underline underline-offset-4">How to get your export</summary>
