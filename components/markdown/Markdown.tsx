@@ -10,6 +10,8 @@ import "katex/dist/katex.min.css";
 import { Mermaid } from "./Mermaid";
 import { FileCard } from "./FileCard";
 import { fileFromLang } from "@/lib/docs/kinds";
+import { canvasFromLang } from "@/lib/canvas";
+import { CanvasCard } from "@/components/chat/Canvas";
 import { normaliseMaths } from "@/lib/markdown";
 
 /**
@@ -40,6 +42,9 @@ function CodeBlock({ node, children }: { node?: HastNode; children?: ReactNode }
   // A file the model made, written as ```file:Name.ext.
   const file = fileFromLang(lang);
   if (file) return <FileCard name={file.name} kind={file.kind} content={raw} streaming={streaming} />;
+  // A canvas the model wrote or changed, written as ```canvas:Title; it opens beside the chat.
+  const canvas = canvasFromLang(lang);
+  if (canvas) return <CanvasCard title={canvas} content={raw} streaming={streaming} />;
 
   return (
     <div className="md-code">

@@ -15,6 +15,7 @@ import { ACCEPT, AttachmentTray, MessageFiles, useAttachments, type Pending } fr
 import { ModelPicker } from "./ModelPicker";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
+import { CanvasIcon, CanvasMessage, CanvasOpener, CanvasPane, useCanvas } from "./Canvas";
 import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions, Searching, Sources } from "./Sources";
 import type { Source } from "@/lib/chat/thread";
@@ -71,6 +72,9 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   const abortRef = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
+  const writing = messages.find((m) => m.streaming);
+  const lastReply = messages.at(-1)?.role === "assistant" ? messages.at(-1) : undefined;
+  const canvas = useCanvas(chat?.id ?? null, writing ? (writing.content.text ?? "") : null, lastReply?.content.text ?? null);
 
   const model = findModel(modelId);
   // DeepSeek and some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
@@ -90,6 +94,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     if (abortRef.current) return;
     const next = await refreshShell().catch(() => null);
     if (next) setShell(next);
+    canvas.refresh();
     if (chat) {
       const found = await refreshChat(chat.id).catch(() => null);
       if (found && !abortRef.current) {
@@ -97,6 +102,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
         setMessages(found.messages);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat]);
   useEffect(() => {
     const onVisible = () => document.visibilityState === "visible" && sync();
@@ -138,10 +144,12 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
 
     let chatId = chat?.id ?? null;
     try {
+      // The person's canvas edits are saved first, so the AI works on what they see.
+      const open = await canvas.beforeSend();
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chatId, model: model.id, clientRequestId: crypto.randomUUID(), search: search && canSearch(model), ...body }),
+        body: JSON.stringify({ chatId, model: model.id, clientRequestId: crypto.randomUUID(), search: search && canSearch(model), ...open, ...body }),
         signal: abort.signal,
       });
       if (!res.ok || !res.body) {
@@ -282,7 +290,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   return (
     <div className="flex h-dvh overflow-hidden">
       {/* Chats: always visible on wide screens, a drawer on phones. */}
-      <aside className="hidden w-[300px] shrink-0 border-r border-line md:block">
+      <aside className={`hidden w-[300px] shrink-0 border-r border-line ${canvas.isOpen ? "2xl:block" : "md:block"}`}>
         <Sidebar {...shell} chats={shell.chats} activeId={chat?.id ?? null} onNavigate={() => {}} />
       </aside>
       {drawer ? (
@@ -320,6 +328,11 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
               </button>
             ) : null}
           </div>
+          {canvas.canvases.length && !canvas.isOpen ? (
+            <button type="button" className="p-2 text-mute hover:text-fg" aria-label="Open canvas" onClick={() => canvas.open(canvas.canvases[0].title)}>
+              <CanvasIcon />
+            </button>
+          ) : null}
           {chat ? <ChatMenu chat={chat} userId={shell.userId} onChange={(c) => { setChat(c); setShell((s) => ({ ...s, chats: s.chats.map((x) => (x.id === c.id ? c : x)) })); }} onDeleted={() => router.push("/")} /> : null}
           <Link href="/" className="p-2 md:hidden" aria-label="New chat">
             <NewChatIcon />
@@ -334,6 +347,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           }}
         >
+          <CanvasOpener.Provider value={canvas.open}>
           <div className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
             {messages.length === 0 ? (
               <div className="flex flex-col gap-2 pt-[12vh]">
@@ -371,15 +385,17 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
                   ) : null}
                 </div>
               ) : (
-                <Reply
-                  key={m.id}
-                  message={m}
-                  canRegenerate={!busy && !!lastUser && m.parent_id === lastUser.id}
-                  onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
-                />
+                <CanvasMessage.Provider key={m.id} value={m.id.startsWith("local-") ? null : m.id}>
+                  <Reply
+                    message={m}
+                    canRegenerate={!busy && !!lastUser && m.parent_id === lastUser.id}
+                    onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
+                  />
+                </CanvasMessage.Provider>
               ),
             )}
           </div>
+          </CanvasOpener.Provider>
         </div>
 
         <div className="mx-auto w-full max-w-[760px] px-3 md:px-8" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
@@ -419,6 +435,8 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
           )}
         </div>
       </div>
+
+      <CanvasPane state={canvas} />
 
       {voiceOpen ? (
         <VoiceMode

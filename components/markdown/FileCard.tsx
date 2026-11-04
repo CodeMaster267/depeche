@@ -12,8 +12,9 @@ import { sizeLabel } from "@/lib/chat/files";
  */
 const load = () => import("@/lib/docs/write");
 
-async function save(built: Built, name: string) {
-  const file = new File([built.blob], name, { type: built.blob.type.split(";")[0] });
+/** Saves a file: the share sheet on phones and tablets, a download elsewhere. */
+export async function saveFile(blob: Blob, name: string) {
+  const file = new File([blob], name, { type: blob.type.split(";")[0] });
   // Phones and tablets get the share sheet: Save to Files, AirDrop, Mail, open in Word and so on.
   if (matchMedia("(pointer: coarse)").matches && navigator.canShare?.({ files: [file] })) {
     try {
@@ -64,7 +65,7 @@ export function FileCard({ name, kind, content, streaming }: { name: string; kin
     setBusy(as);
     try {
       const b = made.current[as] ?? (made.current[as] = await (await load()).buildFile(as, content, withKind(name, as)));
-      await save(b, as === kind ? name : withKind(name, as));
+      await saveFile(b.blob, as === kind ? name : withKind(name, as));
     } catch {
       setFailed(true);
     } finally {
