@@ -5,6 +5,7 @@
  * never changed: a summary says "this covers the chat up to message X" and only applies to a reply
  * whose path passes through X.
  */
+import { cleanQuote, withQuote } from "./followups";
 import type { Model } from "@/lib/ai/models";
 import type { MessageRow } from "@/lib/chat/thread";
 
@@ -138,6 +139,8 @@ export function transcriptLine(m: MessageRow, name: string, fileText?: Map<strin
   const who = m.role === "user" ? name : "Assistant";
   let text = (m.content.text ?? "").trim();
   if (m.role === "user") {
+    // A question about a selected part of an earlier answer carries that part as a quote.
+    text = withQuote(text, cleanQuote(m.content.quote)).trim();
     for (const f of m.content.files ?? []) {
       const body = fileText?.get(f.path);
       text += body ? `\n<file name="${f.name.replace(/"/g, "'")}">\n${body}\n</file>` : `\n[Attached ${f.mime.startsWith("image/") ? "picture" : "file"}: ${f.name}]`;
