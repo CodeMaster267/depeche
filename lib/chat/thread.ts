@@ -40,6 +40,8 @@ export type MessageRow = {
     lookups?: string[];
     /** Files the reply read (those sent with the question). */
     read?: string[];
+    /** Skills from the person's list that the reply used (lib/skills/match.ts). */
+    skills?: { id: string; name: string }[];
     /** Set when two or three models answered the same question side by side (see lib/chat/compare.ts). */
     compare?: { id: string; slot: number };
   };
