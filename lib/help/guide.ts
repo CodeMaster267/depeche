@@ -40,7 +40,7 @@ another family. Each message goes only to the AI company whose model you picked.
 
 The home screen is a new chat. On a phone, tap the menu button (three lines, top left) to open the side menu with your
 chats; on a computer the side menu is always on the left. At the bottom of the side menu, tap your name to open the
-account menu: Memory, Skills, My look, Account, Family and Health (admins only), Report a bug, and a bar showing what you
+account menu: Memory, Skills, My look, Gadgets, Account, Family and Health (admins only), Report a bug, and a bar showing what you
 have spent this month against your limit. On settings pages the top bar links the same pages (on a phone, tap the pill
 naming the page you're on to switch). "Ask Concierge", under your chats, opens this helper.`,
   },
@@ -69,9 +69,16 @@ naming the page you're on to switch). "Ask Concierge", under your chats, opens t
     title: "Attaching files, web search, deep research",
     text: `
 The buttons next to the message box:
-- Paperclip ("Attach photos or files"): photos, PDFs, Word, Excel, PowerPoint, and text or code files. Up to 5 files a
-  message and 10 MB each. You can also paste or drag files in. Word, Excel and PowerPoint files are read by Depeche and
-  sent as text; photos and PDFs go to the model as they are. Uploaded files are deleted after 3 days without use.
+- Paperclip ("Attach"): opens a menu with three choices.
+  - "Photos and files": photos, PDFs, Word, Excel, PowerPoint, and text or code files. Up to 5 files a message and
+    10 MB each. You can also paste or drag files in. Word, Excel and PowerPoint files are read by Depeche and sent as
+    text; photos and PDFs go to the model as they are. Uploaded files are deleted after 3 days without use.
+  - "Scan pages": opens the camera (a file picker on a computer). Depeche finds the page's edges; drag the round corners
+    if they're off, then pick Clean, B&W or Original and tap Keep. Add more pages with "Add page", tap a page to crop,
+    rotate, move or delete it, name the PDF, then tap Attach (or Save PDF to keep it). It all happens on your device.
+  - "Voice note or recording": pick a recording (iPhone voice memos, WhatsApp voice notes, mp3 and others, up to 30
+    minutes and 25 MB). Depeche writes it out with your family's OpenAI or Google key and attaches the words as
+    "<name> transcript.txt"; the recording itself is deleted straight away.
 - Globe ("Search the web"): when it's on, the model searches the web when it needs to and shows its sources. Each search
   has a small fee. DeepSeek models can't search, so the globe is greyed out for them.
 - Deep research (the magnifier with lines): for this one message, the model runs several web searches and writes a long
@@ -251,12 +258,30 @@ to any of them for free. You get a set number of builds a month (your admin sets
 If a look ever makes Depeche hard to use, Safe mode (on the My look page) shows standard Depeche again.`,
   },
   {
+    id: "gadgets",
+    title: "Gadgets (little apps the AI builds for you)",
+    routes: ["/gadgets", "/gadgets/[id]"],
+    text: `
+A gadget is a small app a chat builds for you: a calculator, a quiz, flashcards, a game, even chess against an AI you
+choose. Just ask in any chat, for example "make me a chess gadget where I play against Claude". It appears in the reply
+and works right there. Tap "Save to My gadgets" to keep it; your saved gadgets are in [Gadgets](/gadgets) (your name at
+the bottom of the side menu → Gadgets).
+On a gadget's own page you can use it full width, change it by typing what you want ("make the board bigger") and tapping
+"Change it", go back to an earlier version, pick which AI it asks, rename or delete it, and "Share a copy" with one person
+or the whole family (the family shelf on the Gadgets page, where anyone can tap "Add to mine").
+Gadgets run sealed off: they can't see your chats, memories or account and can't reach the internet. A gadget that asks an
+AI uses your family's keys, shows what each answer cost under it, and that counts toward your monthly spending. Saved
+gadgets can remember things (a game in progress, scores); copies you share never include that.
+The Gadgets page has three parts: Saved (yours), Shared with you (copies people sent you) and Family shelf. A gadget's page
+has Change it, Settings (its AI, rename, delete), Share and Earlier versions ("Go back to this").`,
+  },
+  {
     id: "spending",
     title: "Spending and limits",
     text: `
 Each person has a monthly spending limit in dollars, set by their family admin. The account menu (tap your name at the bottom of the side
 menu) shows what you've spent this month and your limit. Tap the cost under any reply to see its tokens. When you reach the
-limit, Depeche stops sending until next month or until your admin raises it. Costs are estimates from token counts;
+limit, Depeche stops sending until next month or until your admin raises it. An admin can also choose No limit for someone; their spending is still counted and shown. Costs are estimates from token counts;
 each AI company's own bill is the final word. Cheaper models (marked $ in the picker) make your limit last longer.`,
   },
   {
@@ -280,7 +305,7 @@ each AI company's own bill is the final word. Cheaper models (marked $ in the pi
   row), create a key, copy it, paste it into the row, and tap "Save key". Depeche checks it, encrypts it, and shows only
   its last 4 characters from then on; it lists which models that key can use. "Replace" swaps it for a new key, "Remove"
   deletes it. Everyone in the family then sees those models in the picker.
-- Members: tap a person to set their monthly limit (then "Save limit"), see the chat titles they chose to share, give
+- Members: tap a person to set their monthly limit or tick No limit (then "Save limit"), see the chat titles they chose to share, give
   them a temporary password, sign them out everywhere, or make them backup admin ("Make backup admin"; a family can
   have two admins). You can also step down as admin.
 - Designs: "Manage designs" sets how many look builds each person gets a month and can switch designs off.

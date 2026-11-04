@@ -15,12 +15,15 @@ import { DesignBrief } from "@/components/design/DesignBrief";
 import { fileFromLang } from "@/lib/docs/kinds";
 import { canvasFromLang } from "@/lib/canvas";
 import { CanvasCard } from "@/components/chat/Canvas";
+import { Widget } from "./Widget";
+import { widgetFromLang } from "@/lib/widgets/frame";
 import { normaliseMaths } from "@/lib/markdown";
 
 /**
  * Renders a model's reply: GitHub-flavoured Markdown (tables, task lists, footnotes as sources),
  * LaTeX maths in every common delimiter, highlighted code with Copy, Mermaid diagrams, charts
- * (```chart), Python that runs in a sandbox (```python) and images.
+ * (```chart), Python that runs in a sandbox (```python), interactive tools in a sealed frame
+ * (```widget:Title) and images.
  *
  * Raw HTML in a reply is shown as text, never run: react-markdown escapes it and drops unsafe
  * link schemes. If anything in a reply can't be rendered, the plain text is shown instead.
@@ -70,6 +73,9 @@ function CodeBlock({ node, children }: { node?: HastNode; children?: ReactNode }
   if (file) return <FileCard name={file.name} kind={file.kind} content={raw} streaming={streaming} />;
   // A brief for a new look of Depeche, written as ```design (see lib/design/instructions.ts).
   if (lang === "design") return <DesignBrief brief={raw} streaming={streaming} />;
+  // A small interactive tool the model built, written as ```widget:Title; it runs sealed off.
+  const widget = widgetFromLang(lang);
+  if (widget) return <Widget title={widget} html={raw} streaming={streaming} />;
   // A canvas the model wrote or changed, written as ```canvas:Title; it opens beside the chat.
   const canvas = canvasFromLang(lang);
   if (canvas) return <CanvasCard title={canvas} content={raw} streaming={streaming} />;

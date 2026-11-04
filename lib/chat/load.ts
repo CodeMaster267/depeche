@@ -17,6 +17,7 @@ export type Shell = {
   defaultModel: string | null;
   spent: number;
   cap: number;
+  noLimit: boolean;
   /** Your chats the daily clean-up deletes in the next three days, soonest first. */
   expiring: Expiring[];
 };
@@ -55,6 +56,7 @@ export async function loadShell(me: Me): Promise<Shell> {
     defaultModel: chooseDefault(models, last?.last_model)?.id ?? null,
     spent: Number(spent ?? 0),
     cap: Number(me.profile.monthly_cap_usd),
+    noLimit: !!me.profile.no_spend_limit,
     expiring: (expiring as Expiring[] | null) ?? [],
   };
 }

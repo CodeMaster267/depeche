@@ -790,6 +790,68 @@ Flights,240
 
 `.replaceAll("\\`", "`");
 
+const FAKE_TIP_WIDGET = String.raw`\`\`\`widget:Tip-calculator
+<!doctype html>
+<html><head><style>
+  label { display: block; margin: 8px 0 4px; color: var(--depeche-mute); }
+  input { width: 100%; padding: 8px 12px; border: 1px solid var(--depeche-line); border-radius: 12px; background: transparent; }
+  output { display: block; font-size: 28px; font-weight: 700; margin: 12px 0; }
+  button { padding: 8px 16px; border-radius: 999px; border: 0; background: var(--depeche-fg); color: var(--depeche-bg); }
+</style></head><body>
+  <label for="bill">Bill</label><input id="bill" type="number" value="40">
+  <label for="tip">Tip <span id="pct">15</span>%</label><input id="tip" type="range" min="0" max="30" value="15">
+  <output id="out">Each pays £46.00</output>
+  <button id="share">Share with the chat</button>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const total = () => (Number($("bill").value) * (1 + Number($("tip").value) / 100)).toFixed(2);
+    const show = () => { $("pct").textContent = $("tip").value; $("out").textContent = "Each pays £" + total(); };
+    $("bill").addEventListener("input", show);
+    $("tip").addEventListener("input", show);
+    $("share").addEventListener("click", () => depeche.send("The total with tip is £" + total()));
+    show();
+  </script>
+</body></html>
+\`\`\``.replaceAll("\\`", "`");
+
+const FAKE_GAME_WIDGET = String.raw`\`\`\`widget:Word-game
+<button id="ask">Your move, AI</button>
+<button id="remember">Remember the score</button>
+<p>AI: <span id="answer">waiting</span></p>
+<p>AIs: <span id="models">…</span></p>
+<p>Remembered: <span id="loaded">…</span></p>
+<script>
+  const $ = (id) => document.getElementById(id);
+  $("ask").onclick = async () => {
+    try { $("answer").textContent = await depeche.ask("What is your move?", { system: "Answer with one word." }); }
+    catch (e) { $("answer").textContent = "error: " + e.message; }
+  };
+  $("remember").onclick = async () => { await depeche.save({ score: 3 }); $("loaded").textContent = "saved"; };
+  depeche.models().then((m) => { $("models").textContent = m.map((x) => x.name).join(", "); });
+  depeche.load().then((d) => { $("loaded").textContent = d === null ? "nothing" : d; });
+</script>
+\`\`\``.replaceAll("\\`", "`");
+
+const FAKE_ESCAPE_WIDGET = String.raw`\`\`\`widget:Escape-test
+<ul id="out"></ul>
+<img id="pic" src="https://picsum.photos/20" alt="">
+<script>
+  const out = document.getElementById("out");
+  const note = (name, ok) => { const li = document.createElement("li"); li.textContent = name + ": " + (ok ? "blocked" : "OPEN"); li.dataset.check = name; out.append(li); };
+  const tryIt = (name, fn) => { try { fn(); note(name, false); } catch { note(name, true); } };
+  tryIt("parent page", () => parent.document.body.innerHTML);
+  tryIt("storage", () => localStorage.getItem("x"));
+  // Chrome refuses to read cookies here; Safari reads none. Either way the app's are out of reach.
+  tryIt("cookies", () => { document.cookie = "probe=1"; if (document.cookie) return; throw new Error("none"); });
+  tryIt("pop-up", () => { if (!window.open("https://example.com")) throw new Error("no"); });
+  fetch("/api/design/build").then(() => note("app api", false), () => note("app api", true));
+  fetch("https://example.com/").then(() => note("internet", false), () => note("internet", true));
+  const pic = document.getElementById("pic");
+  pic.onerror = () => note("outside picture", true);
+  pic.onload = () => note("outside picture", false);
+</script>
+\`\`\``.replaceAll("\\`", "`");
+
 const FAKE_CHARTS = String.raw`Here's a chart.
 
 \`\`\`chart
@@ -882,6 +944,21 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     yield { type: "usage", input: Math.ceil((last?.text.length ?? 0) / 4), output: 60 };
     return;
   }
+  // A gadget asking: answers "<model>: <question>", or a changed page when a gadget is being changed.
+  if (system.startsWith("You are answering a request from a gadget")) {
+    yield { type: "text", text: `${model.name} says: ${(last?.text ?? "").slice(0, 60)}` };
+    yield { type: "usage", input: 400, output: 12 };
+    return;
+  }
+  if (system.startsWith("You are changing a gadget")) {
+    const page = /The gadget's page now:\n(`{3,})widget:[^\n]*\n([\s\S]*?)\n\1/.exec(system)?.[2] ?? "<p>Gadget</p>";
+    const text = q.includes("refuse-test")
+      ? "I can't make that change."
+      : `I've made that change.\n\n\`\`\`widget:Changed\n${page}\n<p id="changed">Changed: ${q.replace(/[<>&]/g, "")}</p>\n\`\`\``;
+    yield { type: "text", text };
+    yield { type: "usage", input: 2000, output: 900 };
+    return;
+  }
   // "what did I say about X" looks X up in this chat, to test the search-this-chat tool.
   const recall = chatSearch ? /what did i say about (.+?)\??$/i.exec(last?.text ?? "") : null;
   if (chatSearch && recall) {
@@ -962,6 +1039,20 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     (q.includes("make files") ? FAKE_FILES : "") +
     (q.includes("draw charts") ? FAKE_CHARTS : "") +
     (q.includes("analyse") ? FAKE_ANALYSIS.replace("{file}", seen.find((n) => /\.(csv|txt)$/i.test(n)) ?? "data.csv") : "");
+  // "tip calculator" builds an interactive tool, and "escape test" one that tries to get out of
+  // its sealed frame, to test interactive tools.
+  // "game gadget" builds one that asks an AI, lists the AIs and remembers, to test saved gadgets.
+  if (q.includes("tip calculator") || q.includes("escape test") || q.includes("game gadget")) {
+    const tool = q.includes("escape test") ? FAKE_ESCAPE_WIDGET : q.includes("game gadget") ? FAKE_GAME_WIDGET : FAKE_TIP_WIDGET;
+    const reply = `Here you go.\n\n${tool}\n\nTry it out.`;
+    for (let i = 0; i < reply.length; i += 80) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      await new Promise((r) => setTimeout(r, 5));
+      yield { type: "text", text: reply.slice(i, i + 80) };
+    }
+    yield { type: "usage", input: 1200, output: 600 };
+    return;
+  }
   // "redesign" makes it write a design brief for a new look, to test personal designs.
   if (q.includes("redesign") && system.includes("```design")) {
     const brief = `Here's the brief for your new look.\n\n\`\`\`design\n${(last?.text ?? "").replace(/^.*?redesign:?\s*/i, "").slice(0, 300) || "A playful look"}\n\`\`\`\n\nTap Build to try it.`;
