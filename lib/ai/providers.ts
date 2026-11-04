@@ -907,6 +907,17 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     : "";
   // "make files" makes it write files to download, to test generated documents.
   const made = q.includes("make files") ? FAKE_FILES : "";
+  // "redesign" makes it write a design brief for a new look, to test personal designs.
+  if (q.includes("redesign") && system.includes("```design")) {
+    const brief = `Here's the brief for your new look.\n\n\`\`\`design\n${(last?.text ?? "").replace(/^.*?redesign:?\s*/i, "").slice(0, 300) || "A playful look"}\n\`\`\`\n\nTap Build to try it.`;
+    for (let i = 0; i < brief.length; i += 24) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      await new Promise((r) => setTimeout(r, 8));
+      yield { type: "text", text: brief.slice(i, i + 24) };
+    }
+    yield { type: "usage", input: 1200, output: 120 };
+    return;
+  }
   // "next steps" makes it suggest follow-up questions, to test the follow-up buttons.
   const followups = q.includes("next steps") ? "\n\n<followups>\n- How do I check the answer?\n2. What if a is zero?\n</followups>" : "";
   // A question about part of an earlier answer says which part it was given, to test quoting.

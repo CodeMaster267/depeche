@@ -56,6 +56,12 @@ export default async function Account() {
           </p>
           <PasswordForm />
         </Section>
+        <Section title="My look">
+          <p className="text-[15px] text-mute">Redesign your own Depeche: colours, fonts, layout and buttons. Only you see it.</p>
+          <Link href="/design" className="press self-start text-[15px] underline underline-offset-4">
+            Change my look
+          </Link>
+        </Section>
         <Section title="Old chats">
           <KeepChatsToggle keep={prefs?.keep_chats ?? false} />
         </Section>

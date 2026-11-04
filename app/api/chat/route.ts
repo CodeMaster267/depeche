@@ -16,6 +16,7 @@ import { allow } from "@/lib/rate-limit";
 import { MAX_QUERIES, MAX_REASONING_CHARS, thinkingClock } from "@/lib/chat/activity";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
 import { MAX_COMPARE } from "@/lib/chat/compare";
+import { DESIGN_INSTRUCTIONS } from "@/lib/design/instructions";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
 export const maxDuration = 300;
@@ -531,6 +532,7 @@ function systemPrompt(name: string, voice: boolean, memories: string[], instruct
     memoryInstructions(name, memories),
     personalInstructions(name, instructions),
     voice ? "" : FILE_INSTRUCTIONS,
+    voice ? "" : DESIGN_INSTRUCTIONS,
     voice ? "" : followUpInstructions(name),
     voice
       ? "This message was spoken in voice chat and your reply will be read aloud: answer conversationally and briefly, in plain sentences, without tables, code or headings unless asked."

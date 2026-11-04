@@ -25,6 +25,7 @@ import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
 import type { Source } from "@/lib/chat/thread";
 import { SOURCE_NAMES } from "@/lib/import/types";
+import { LOOK_ACTION, Shortcuts, useLookTexts, type LookAction } from "@/components/design/Look";
 
 type Live = MessageRow & LiveActivity;
 
@@ -431,6 +432,23 @@ export function ChatApp({
   useEffect(() => {
     if (!initialChat && window.location.search.includes("new=")) window.history.replaceState(null, "", "/");
   }, [initialChat]);
+  const look = useLookTexts();
+
+  // Buttons a person's design adds (components/design/Look.tsx) ask for these.
+  const lookAction = useRef<(a: LookAction) => void>(() => {});
+  lookAction.current = (a) => {
+    if (a === "new-chat") startNew();
+    else if (a === "chats") setDrawer(true);
+    else if (a === "choose-model") setPicking(true);
+    else if (a === "voice-chat" && canListen && model) setVoiceOpen(true);
+    else if (a === "web-search" && searchable) toggleSearch();
+    else if (a === "attach") document.querySelector<HTMLInputElement>('[data-testid="file-input"]')?.click();
+  };
+  useEffect(() => {
+    const on = (e: Event) => lookAction.current((e as CustomEvent<LookAction>).detail);
+    window.addEventListener(LOOK_ACTION, on);
+    return () => window.removeEventListener(LOOK_ACTION, on);
+  }, []);
 
   // A chat renamed, pinned, archived or restored from a menu. Archived chats leave the list.
   const changeChat = (next: ChatRow) => {
@@ -449,9 +467,9 @@ export function ChatApp({
   };
 
   return (
-    <div className="flex h-dvh overflow-hidden">
+    <div data-part="app" className="flex h-dvh overflow-hidden">
       {/* Chats: always visible on wide screens, a drawer on phones. */}
-      <aside className="hidden w-[300px] shrink-0 border-r border-line md:block">
+      <aside data-part="sidebar-desktop" className="hidden w-[300px] shrink-0 border-r border-line md:block">
         <Sidebar
           {...shell}
           chats={shell.chats}
@@ -465,7 +483,7 @@ export function ChatApp({
       {drawer ? (
         <div className="fixed inset-0 z-40 md:hidden">
           <button type="button" aria-label="Close menu" className="absolute inset-0 bg-black/40" onClick={() => setDrawer(false)} />
-          <aside className="enter-glitch absolute inset-y-0 left-0 w-[86%] max-w-[340px] bg-bg">
+          <aside data-part="drawer" className="enter-glitch absolute inset-y-0 left-0 w-[86%] max-w-[340px] bg-bg">
             <Sidebar
               {...shell}
               activeId={chat?.id ?? null}
@@ -481,10 +499,11 @@ export function ChatApp({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header
+          data-part="chat-header"
           className="flex items-center gap-2 border-b border-line px-3 pb-2 md:px-6"
           style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}
         >
-          <button type="button" className="p-2 md:hidden" aria-label="Open menu" onClick={() => setDrawer(true)}>
+          <button type="button" data-part="menu-button" className="p-2 md:hidden" aria-label="Open menu" onClick={() => setDrawer(true)}>
             <MenuIcon />
           </button>
           <div className="flex min-w-0 flex-1 flex-col items-center md:flex-row md:items-center md:gap-4">
@@ -500,6 +519,7 @@ export function ChatApp({
               </button>
             ) : null}
           </div>
+          <Shortcuts place="header" onChat isAdmin={shell.isAdmin} className="max-md:hidden" />
           {chat ? <ChatMenu chat={chat} userId={shell.userId} onChange={changeChat} onDeleted={() => chatDeleted(chat.id)} /> : null}
           {chat || messages.length ? (
             <Link
@@ -542,10 +562,10 @@ export function ChatApp({
             pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           }}
         >
-          <div className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
+          <div data-part="thread" className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
             {messages.length === 0 ? (
               <div className="flex flex-col gap-2 pt-[12vh]">
-                <h2 className="text-[34px] font-semibold tracking-tight">Hi, {shell.name}.</h2>
+                <h2 data-part="greeting" className="text-[34px] font-semibold tracking-tight">{look.greeting(shell.name)}</h2>
                 {noModels ? (
                   <p className="text-[17px] text-mute">
                     {shell.isAdmin ? (
@@ -561,7 +581,7 @@ export function ChatApp({
                     )}
                   </p>
                 ) : (
-                  <p className="text-[17px] text-mute">What&apos;s on your mind?</p>
+                  <p data-part="greeting-line" className="text-[17px] text-mute">{look.subtitle ?? "What's on your mind?"}</p>
                 )}
               </div>
             ) : null}
@@ -618,7 +638,10 @@ export function ChatApp({
           </div>
         </div>
 
-        <div className="mx-auto w-full max-w-[760px] px-3 md:px-8" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
+        <div data-part="composer-wrap" className="mx-auto w-full max-w-[760px] px-3 md:px-8" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
+          {/* On phones the header has no room, so header buttons join the composer's row. */}
+          <Shortcuts place="composer" onChat isAdmin={shell.isAdmin} className="mb-2 overflow-x-auto" />
+          <Shortcuts place="header" onChat isAdmin={shell.isAdmin} className="mb-2 overflow-x-auto md:hidden" />
           {compareIds.length ? (
             <div data-testid="compare-chip" className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-line px-4 py-2 text-[14px]">
               <span className="min-w-0 truncate">
@@ -663,7 +686,7 @@ export function ChatApp({
               {hint}
             </p>
           ) : (
-            <p className="mt-2 hidden text-center text-[12px] text-mute md:block">Enter to send · Shift + Enter for a new line</p>
+            <p data-part="keyboard-hint" className="mt-2 hidden text-center text-[12px] text-mute md:block">Enter to send · Shift + Enter for a new line</p>
           )}
         </div>
       </div>
@@ -803,7 +826,7 @@ function Reply({
             {versions}
             {copied ? <span className="text-[13px]">Copied</span> : null}
           </span>
-          <span className="flex items-center gap-1 font-mono text-[12px]">
+          <span data-part="reply-model" className="flex items-center gap-1 font-mono text-[12px]">
             {info?.short ?? m.model}
             {typeof m.content.cost === "number" && (m.content.cost > 0 || m.content.usage) ? (
               <>
@@ -862,6 +885,7 @@ function Composer({
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const { placeholder } = useLookTexts();
   const [dragging, setDragging] = useState(false);
   useLayoutEffect(() => {
     const el = box.current;
@@ -872,6 +896,7 @@ function Composer({
 
   return (
     <form
+      data-part="composer"
       className={`rounded-[26px] border bg-bg p-2 focus-within:border-fg ${dragging ? "border-fg" : "border-line"}`}
       onSubmit={(e) => {
         e.preventDefault();
@@ -944,7 +969,7 @@ function Composer({
             }
           }}
           rows={1}
-          placeholder="Message Depeche"
+          placeholder={placeholder}
           aria-label="Message Depeche"
           disabled={disabled}
           className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
