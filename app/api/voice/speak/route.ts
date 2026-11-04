@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
   if (ready instanceof NextResponse) return ready;
   const { me, keys } = ready;
 
-  const body = (await req.json().catch(() => ({}))) as { text?: unknown };
+  const body = (await req.json().catch(() => ({}))) as { text?: unknown; fast?: unknown };
   const text = typeof body.text === "string" ? speakable(body.text).slice(0, MAX_SPEAK_CHARS) : "";
   if (!text) return fail(400, "Nothing to read.");
 
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   let problem = "";
   for (const { provider, apiKey } of keys) {
     try {
-      const s = await speak(provider, apiKey, text, req.signal);
+      const s = await speak(provider, apiKey, text, req.signal, body.fast === true);
       await recordUsage(hold, provider, s.model, s.input, s.output, s.cost);
       return new Response(new Blob([s.pcm as BlobPart]), {
         headers: { "content-type": "application/octet-stream", "x-sample-rate": String(s.rate), "cache-control": "no-store" },

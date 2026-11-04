@@ -18,7 +18,7 @@ function name(code: string) {
  * Which languages voice chat should expect, main one first. Picking two lets it write out speech
  * that mixes them, each part in its own language, instead of guessing one and translating.
  */
-export function LanguagePicker() {
+export function LanguagePicker({ onChange }: { onChange?: (languages: string[]) => void }) {
   const [open, setOpen] = useState(false);
   const [langs, setLangs] = useState<string[]>([]);
   useEffect(() => setLangs(voiceLanguages()), []);
@@ -29,6 +29,7 @@ export function LanguagePicker() {
     if (!next.length) return;
     setLangs(next);
     saveVoiceLanguages(next);
+    onChange?.(next);
   };
   const choices = [...new Set([...langs, ...COMMON])];
 
