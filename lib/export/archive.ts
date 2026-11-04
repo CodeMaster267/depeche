@@ -7,6 +7,7 @@
 import { zipSync, strToU8, type Zippable } from "fflate";
 import { activePath, type MessageRow } from "@/lib/chat/thread";
 import type { FileRef } from "@/lib/chat/files";
+import { codeFileName, codeLanguage } from "@/lib/canvas";
 
 export type ExportChat = {
   id: string;
@@ -32,6 +33,9 @@ export type ExportUsage = {
   message_id: string | null;
 };
 
+export type ExportCanvas = { id: string; chat_id: string; title: string; created_at: string; updated_at: string };
+export type ExportCanvasVersion = { canvas_id: string; content: string; author: string; message_id: string | null; created_at: string };
+
 export type ExportData = {
   exportedAt: string;
   profile: Record<string, unknown>;
@@ -39,6 +43,9 @@ export type ExportData = {
   messages: ExportMessage[];
   memories: ExportMemory[];
   usage: ExportUsage[];
+  /** Documents and code written beside a chat, with every version. */
+  canvases?: ExportCanvas[];
+  canvasVersions?: ExportCanvasVersion[];
   /** "About you" and "How should Depeche answer", when the person has written them. */
   instructions?: { about_me: string; answer_style: string; enabled: boolean; updated_at: string } | null;
 };
@@ -147,6 +154,8 @@ Everything here is yours and only yours: no one else's chats are in it.
 
   chats/          each chat as a Markdown file you can read in any app
   files/          files you attached that Depeche still had (files go after 3 unused days)
+  canvases/       the newest text of each canvas (documents and code beside a chat)
+  canvases.json   every canvas with all its versions
   chats.json      every chat and every message, including earlier versions of edited replies
   memories.md     what Depeche remembers about you
   memories.json   the same, with dates and status
@@ -181,6 +190,24 @@ export function exportEntries(data: ExportData, files: FetchedFile[]): Record<st
   const chatNamer = uniqueNamer();
   for (const chat of data.chats) {
     entries[`chats/${chatNamer(chatFileStem(chat) + ".md")}`] = strToU8(chatMarkdown(chat, byChat.get(chat.id) ?? [], links));
+  }
+
+  // Each canvas's newest text, named after its chat; every version is in canvases.json.
+  const canvases = data.canvases ?? [];
+  if (canvases.length) {
+    const versions = new Map<string, ExportCanvasVersion[]>();
+    for (const v of data.canvasVersions ?? []) versions.set(v.canvas_id, [...(versions.get(v.canvas_id) ?? []), v]);
+    const chats = new Map(data.chats.map((c) => [c.id, c]));
+    const canvasNamer = uniqueNamer();
+    for (const c of canvases) {
+      const newest = versions.get(c.id)?.at(-1);
+      if (!newest) continue;
+      const chat = chats.get(c.chat_id);
+      const stem = `${chat ? chatFileStem(chat) : day(c.created_at)} - `;
+      const name = codeLanguage(c.title) ? safeName(codeFileName(c.title), "canvas.txt") : `${safeName(c.title.replace(/\.(md|markdown)$/i, ""), "Canvas")}.md`;
+      entries[`canvases/${canvasNamer(stem + name)}`] = strToU8(newest.content);
+    }
+    entries["canvases.json"] = json(canvases.map((c) => ({ ...c, versions: versions.get(c.id) ?? [] })));
   }
 
   entries["README.txt"] = strToU8(README(data.exportedAt));

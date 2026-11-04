@@ -990,6 +990,20 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   // A question about part of an earlier answer says which part it was given, to test quoting.
   const about = /^About this part of your earlier answer:\n> (.*)/.exec(last?.text ?? "");
   const asked = about ? `You asked about "${about[1].slice(0, 60)}".\n\n` : "";
+  // "canvas" makes it write a canvas, or rewrite the open one (keeping the person's edits), to test the canvas.
+  if (q.includes("canvas")) {
+    const open = /\n(`{3,})canvas:(\S+)\n([\s\S]*?)\n\1(?:\n|$)/.exec(system);
+    const text = open
+      ? `I've tightened the canvas.\n\n${open[1]}canvas:${open[2]}\n${open[3]}\n\nRevised by the AI.\n${open[1]}\n\nDone.`
+      : "Here's a first draft in the canvas.\n\n```canvas:Wedding-speech\n# A toast\n\nThank you all for coming tonight.\n```\n\nTell me what to change.";
+    for (let i = 0; i < text.length; i += 24) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      await new Promise((r) => setTimeout(r, q.includes("slowly") ? 120 : 8));
+      yield { type: "text", text: text.slice(i, i + 24) };
+    }
+    yield { type: "usage", input: 900, output: 120 };
+    return;
+  }
   const reply = asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
