@@ -1,21 +1,29 @@
 name: Deploy to Vercel (hourly batch)
 
 # Vercel Hobby allows 100 deployments a day, and threads merge to main 50+ times a day. So Vercel
-# no longer builds every push to main (vercel.json: git.deploymentEnabled.main = false). Instead,
-# once an hour this asks Vercel to build main if anything was merged since the last hour, so many
-# merges go live together in one deployment: at most 24 a day. Run it by hand (Actions → this
-# workflow → Run workflow) to deploy straight away.
+# doesn't build every push to main (vercel.json: git.deploymentEnabled.main = false). Instead this
+# asks Vercel to build main through a Deploy Hook, batching merges:
+#   - on every push to main and every 10 minutes, it deploys if main's newest commit isn't deployed
+#     yet AND no deploy started in the last 30 minutes. So a merge after a quiet spell goes live in
+#     minutes, a busy spell goes out at most every 30 minutes (48 a day at most), and a scheduled run
+#     GitHub drops or delays (it often does) can't hold anything back for long.
+#   - run it by hand (Actions → this workflow → Run workflow) to deploy straight away.
+# "Deployed" means the commit has a Vercel status: the hook builds main's newest commit and Vercel
+# posts its status there.
 #
 # Secret: VERCEL_DEPLOY_HOOK, the Deploy Hook URL for branch main (Vercel → depeche → Settings →
 # Git → Deploy Hooks). Anyone with that URL can start a deploy, so it lives only in secrets.
 
 on:
+  push:
+    branches: [main]
   schedule:
-    - cron: "7 * * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+  statuses: read
 
 concurrency:
   group: deploy
@@ -27,35 +35,37 @@ jobs:
     timeout-minutes: 5
     env:
       HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - name: Check the deploy hook is set
-        id: ready
+      - name: Decide whether to deploy
+        id: decide
         run: |
           if [ -z "$HOOK" ]; then
             echo "::warning::VERCEL_DEPLOY_HOOK is not set, so nothing was deployed."
-            echo "go=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "go=true" >> "$GITHUB_OUTPUT"
+            echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-      - if: steps.ready.outputs.go == 'true'
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 50
-          persist-credentials: false
-      - name: Anything new on main?
-        if: steps.ready.outputs.go == 'true'
-        id: new
-        run: |
-          # 75 minutes, not 60: GitHub sometimes starts scheduled runs late, and a merge must never
-          # fall between two runs. An occasional extra deploy is harmless.
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ -n "$(git log --since='75 minutes ago' --format=%H -1)" ]; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-            echo "Deploying main at $(git rev-parse --short HEAD): $(git log -1 --format=%s)"
-          else
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-            echo "Nothing merged in the last hour; no deploy."
+          head=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            echo "Run by hand: deploying ${head:0:7}."
+            echo "go=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          if [ -n "$(gh api "repos/$GH_REPO/commits/$head/statuses" --jq '.[]|select(.context=="Vercel")|.state' | head -1)" ]; then
+            echo "main (${head:0:7}) is already deployed or deploying."
+            echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # When did the last deploy start? The newest Vercel status on main's recent commits.
+          last=""
+          for sha in $(gh api "repos/$GH_REPO/commits?sha=main&per_page=40" --jq '.[].sha'); do
+            last=$(gh api "repos/$GH_REPO/commits/$sha/statuses" --jq '[.[]|select(.context=="Vercel")|.created_at]|sort|last // empty')
+            [ -n "$last" ] && break
+          done
+          if [ -n "$last" ] && [ $(( $(date -u +%s) - $(date -u -d "$last" +%s) )) -lt 1800 ]; then
+            echo "A deploy started at $last, under 30 minutes ago; a later run will pick up ${head:0:7}."
+            echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "Deploying ${head:0:7} (last deploy started ${last:-a long time ago})."
+          echo "go=true" >> "$GITHUB_OUTPUT"
       - name: Ask Vercel to build and publish main
-        if: steps.new.outputs.deploy == 'true'
+        if: steps.decide.outputs.go == 'true'
         run: curl -fsS -X POST "$HOOK" -o /dev/null && echo "Vercel is building main; it's live on depai.vercel.app in a few minutes."
