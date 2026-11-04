@@ -311,7 +311,7 @@ export async function POST(req: NextRequest) {
       const memory = memoryFilter();
       let used = model;
       let notice: string | undefined;
-      let usage: { input: number; output: number } | undefined;
+      let usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number } | undefined;
       let sources: Source[] = [];
       let searches = 0;
       let queried = 0;
@@ -319,7 +319,7 @@ export async function POST(req: NextRequest) {
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch })) {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch, cacheKey: finalChatId })) {
           if (ev.type === "text") {
             // A suggested memory is taken out of the reply and offered separately.
             const shown = memory.push(ev.text);
@@ -327,7 +327,7 @@ export async function POST(req: NextRequest) {
               reply += shown;
               send({ type: "text", text: shown });
             }
-          } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output };
+          } else if (ev.type === "usage") usage = { input: ev.input, output: ev.output, cacheRead: ev.cacheRead, cacheWrite: ev.cacheWrite };
           else if (ev.type === "model") used = findModel(ev.id) ?? model;
           else if (ev.type === "searching") {
             // Looking back through this chat is free; only web searches have a fee.
@@ -359,7 +359,8 @@ export async function POST(req: NextRequest) {
         send({ type: "text", text: tail });
       }
 
-      // Stopped replies have no usage report, so estimate about four characters per token.
+      // Stopped replies have no usage report, so estimate about four characters per token, all of it
+      // charged as uncached input.
       if (!usage) {
         const inputChars = turns.reduce((n, t) => n + t.text.length, system.length);
         usage = { input: status === "failed" ? 0 : Math.ceil(inputChars / 4), output: Math.ceil(reply.length / 4) };
@@ -367,7 +368,9 @@ export async function POST(req: NextRequest) {
       // A reply stopped mid-search gets no report, so count the searches seen instead (erring high).
       searches = Math.max(searches, queried);
       // Each web search has a fee on top of tokens, so it counts toward the monthly limit too.
-      const cost = estimateCost(used, usage.input, usage.output) + searchCost(used.provider, searches);
+      // Input read from the provider's prompt cache costs a fraction; input written to it a little more.
+      const cost =
+        estimateCost(used, usage.input, usage.output, { read: usage.cacheRead, write: usage.cacheWrite }) + searchCost(used.provider, searches);
 
       const { data: saved } = await admin
         .from("messages")
