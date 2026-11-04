@@ -747,6 +747,43 @@ Flights,240
 
 `.replaceAll("\\`", "`");
 
+const FAKE_CHARTS = String.raw`Here's a chart.
+
+\`\`\`chart
+{"type":"bar","title":"Spending by month","x":["Jan","Feb","Mar","Apr"],"series":[{"name":"Food","values":[320,290,350,310]},{"name":"Travel","values":[120,180,90,240]}],"format":{"prefix":"£"}}
+\`\`\`
+
+\`\`\`chart
+{"type":"pie","title":"Where it went","x":["Rent","Food","Fun"],"series":[{"values":[900,320,80]}]}
+\`\`\`
+
+`.replaceAll("\\`", "`");
+
+/** "analyse" makes it write Python that runs in the browser, reading the attached CSV if any. */
+const FAKE_ANALYSIS = String.raw`Here's the analysis.
+
+\`\`\`python run
+import pandas as pd
+df = pd.read_csv("{file}")
+print("Rows:", len(df))
+print("Total:", df["Amount"].sum())
+chart(df, x="Month", y=["Amount"], type="line", title="Amount by month")
+\`\`\`
+
+\`\`\`python run
+import matplotlib.pyplot as plt
+plt.plot([1, 2, 3], [2, 4, 1])
+plt.title("Matplotlib")
+plt.show()
+\`\`\`
+
+\`\`\`python run
+import js
+print(js.document.cookie)
+\`\`\`
+
+`.replaceAll("\\`", "`");
+
 const FAKE_REPLY = String.raw`Here's a worked answer to "{q}".
 
 ## The formula
@@ -860,7 +897,10 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     ? [...(last?.text ?? "").matchAll(/<file name="([^"]+)">\n([\s\S]*?)\n<\/file>/g)].map((m) => `${m[1]} says: ${m[2].replace(/\s+/g, " ").slice(0, 120)}\n\n`).join("")
     : "";
   // "make files" makes it write files to download, to test generated documents.
-  const made = q.includes("make files") ? FAKE_FILES : "";
+  const made =
+    (q.includes("make files") ? FAKE_FILES : "") +
+    (q.includes("draw charts") ? FAKE_CHARTS : "") +
+    (q.includes("analyse") ? FAKE_ANALYSIS.replace("{file}", seen.find((n) => /\.(csv|txt)$/i.test(n)) ?? "data.csv") : "");
   const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {

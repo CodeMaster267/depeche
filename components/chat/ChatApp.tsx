@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
+import type { RunContext } from "@/components/markdown/RunCode";
 import { canSearch, findModel } from "@/lib/ai/models";
 import { titleFrom, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
@@ -38,6 +39,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     initialChat?.model && initialShell.modelIds.includes(initialChat.model) ? initialChat.model : initialShell.defaultModel,
   );
   const [picking, setPicking] = useState(false);
+  const [fresh, setFresh] = useState<Set<string>>(() => new Set());
   const [drawer, setDrawer] = useState(false);
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
@@ -221,6 +223,8 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             const saved = ev.message;
             if (saved) {
               setMessages((list) => list.map((m) => (m.id === replyId ? saved : m)));
+              // Code in a reply that just arrived may run by itself.
+              setFresh((f) => new Set(f).add(saved.id));
               setShell((s) => ({ ...s, spent: s.spent + Number(saved.content.cost ?? 0) }));
             } else patchReply((m) => ({ ...m, streaming: false, status: "failed", content: { ...m.content, error: ev.error } }));
           }
@@ -269,6 +273,18 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     };
     run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}) }, [mine]);
   };
+
+  // Code in replies can open this chat's files and send its results back as a message.
+  const sendRef = useRef(sendText);
+  sendRef.current = sendText;
+  const fileKey = messages.flatMap((m) => (m.role === "user" ? (m.content.files ?? []).map((f) => f.path) : [])).join("|");
+  const runContexts = useMemo(() => {
+    const files = messages.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : []));
+    const onSend = (t: string) => sendRef.current(t);
+    return { fresh: { files, autoRun: true, onSend } as RunContext, old: { files, autoRun: false, onSend } as RunContext };
+    // The files only change when fileKey does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileKey]);
 
   const regenerate = (questionId: string) => {
     if (busy) return;
@@ -374,6 +390,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
                 <Reply
                   key={m.id}
                   message={m}
+                  run={fresh.has(m.id) ? runContexts.fresh : runContexts.old}
                   canRegenerate={!busy && !!lastUser && m.parent_id === lastUser.id}
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
                 />
@@ -435,14 +452,14 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   );
 }
 
-function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; canRegenerate: boolean; onRegenerate: () => void }) {
+function Reply({ message: m, canRegenerate, onRegenerate, run }: { message: Live; canRegenerate: boolean; onRegenerate: () => void; run: RunContext }) {
   const [copied, setCopied] = useState(false);
   const info = findModel(m.model);
   const text = m.content.text ?? "";
   const cost = m.content.cost;
   return (
     <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
-      {text ? <Markdown text={text} streaming={m.streaming} /> : null}
+      {text ? <Markdown text={text} streaming={m.streaming} run={run} /> : null}
       {m.streaming && m.searchingNow ? <Searching queries={m.queries ?? []} where={m.searchingWhere} /> : null}
       {m.streaming && !m.searchingNow ? (
         <span aria-label="Writing" className="block h-6">
