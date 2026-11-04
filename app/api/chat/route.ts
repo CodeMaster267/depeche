@@ -455,7 +455,8 @@ export async function POST(req: NextRequest) {
           p_output: usage.output,
           p_cost: Number(cost.toFixed(6)),
         }),
-        admin.from("chats").update({ updated_at: now, model: model.id }).eq("id", finalChatId),
+        // Writing in an archived chat brings it back to the list.
+        admin.from("chats").update({ updated_at: now, model: model.id, archived_at: null }).eq("id", finalChatId),
         admin.from("profiles").update({ last_model: model.id }).eq("id", me.userId),
       ]);
 
