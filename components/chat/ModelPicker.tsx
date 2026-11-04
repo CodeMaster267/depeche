@@ -34,9 +34,11 @@ export function ModelPicker({
     const models = MODELS.filter(
       (m) => available.includes(m.id) && (!needle || `${m.name} ${m.tags.join(" ")}`.toLowerCase().includes(needle)),
     );
-    return PROVIDERS.map((p) => ({ provider: p, models: models.filter((m) => m.provider === p.id) })).filter(
-      (g) => g.models.length,
-    );
+    // Chat models by provider, then the models that make pictures together under their own heading.
+    return [
+      ...PROVIDERS.map((p) => ({ key: p.id, title: p.name.split(" (")[0], models: models.filter((m) => m.provider === p.id && !m.image) })),
+      { key: "pictures", title: "Make pictures", models: models.filter((m) => m.image) },
+    ].filter((g) => g.models.length);
   }, [available, q]);
 
   return (
@@ -70,9 +72,9 @@ export function ModelPicker({
         </label>
         <div className="overflow-y-auto overscroll-contain pb-4">
           {groups.map((g) => (
-            <section key={g.provider.id}>
+            <section key={g.key}>
               <h3 className="px-6 pb-1 pt-5 text-[12px] font-semibold uppercase tracking-[0.1em] text-mute">
-                {g.provider.name.split(" (")[0]}
+                {g.title}
               </h3>
               <ul>
                 {g.models.map((m) => (

@@ -74,7 +74,7 @@ describe("providers list", () => {
   it("offers DeepSeek and xAI with their models; only Grok searches", () => {
     expect(PROVIDERS.map((p) => p.id)).toEqual(expect.arrayContaining(["deepseek", "xai"]));
     expect(modelsFor([{ provider: "deepseek", models: null }]).map((m) => m.id)).toEqual(["deepseek-v4-pro", "deepseek-flash"]);
-    expect(modelsFor([{ provider: "xai", models: null }]).map((m) => m.id)).toEqual(["grok-4.7", "grok-4.3"]);
+    expect(modelsFor([{ provider: "xai", models: null }]).map((m) => m.id)).toEqual(["grok-4.7", "grok-4.3", "grok-imagine-image-2.0"]);
     expect(PROVIDER_NAME.deepseek).toBe("DeepSeek");
     expect(PROVIDER_NAME.xai).toBe("xAI");
     expect(canSearch(findModel("deepseek-v4-pro"))).toBe(false);
@@ -85,7 +85,7 @@ describe("providers list", () => {
     expect(canLookUp("deepseek")).toBe(false);
     expect(canLookUp("xai")).toBe(false);
     expect(canLookUp("anthropic")).toBe(true);
-    expect(MODELS.filter((m) => m.provider === "deepseek" || m.provider === "xai").every((m) => m.price.input > 0 && m.price.output > 0)).toBe(true);
+    expect(MODELS.filter((m) => (m.provider === "deepseek" || m.provider === "xai") && !m.image).every((m) => m.price.input > 0 && m.price.output > 0)).toBe(true);
   });
 
   it("charge Grok's long-context rate once input reaches 200,000 tokens, and hold for it", () => {

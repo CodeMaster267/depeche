@@ -12,6 +12,7 @@ import { documentText } from "@/lib/docs/read";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
+import { pictureReply } from "./picture";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
 export const maxDuration = 300;
@@ -103,6 +104,14 @@ export async function POST(req: NextRequest) {
     all = existing ?? [];
   } else if (body.regenerate) {
     return fail(404, "That chat doesn't exist.");
+  }
+
+  // Picture models make or edit a picture instead of writing a reply.
+  if (model.image) {
+    return pictureReply({
+      me, db, admin, model, apiKey, chatId, all, text, files: fileRefs,
+      clientRequestId: body.clientRequestId, regenerate: body.regenerate,
+    });
   }
 
   // The monthly limit is a hard one: reserve the most this reply could cost before anything is
@@ -263,6 +272,10 @@ export async function POST(req: NextRequest) {
           attached.push({ name: f.name, mime: f.mime, data: Buffer.from(await blob.arrayBuffer()).toString("base64") });
         }
       }
+    }
+    // Pictures a picture model made are named, so a chat model knows they're there.
+    if (m.role === "assistant" && m.content.files?.length) {
+      t += `\n\n${m.content.files.map((f) => `[Made the picture "${f.name.replace(/"/g, "'")}".]`).join(" ")}`;
     }
     t = t.trim();
     if ((!t && !attached.length) || m.role === "system" || (m.role === "assistant" && m.status === "failed")) {
