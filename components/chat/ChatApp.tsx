@@ -19,6 +19,7 @@ import { comparedWith } from "@/lib/chat/compare";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
 import { ChatMenu } from "./ChatMenu";
+import { DeletionNotice } from "./DeletionNotice";
 import { UserMessage, VersionSwitch } from "./Versions";
 import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions } from "./Sources";
@@ -594,6 +595,10 @@ export function ChatApp({
             <span className="h-10 w-10 shrink-0 md:hidden" aria-hidden />
           )}
         </header>
+        <DeletionNotice
+          expiring={shell.expiring}
+          onKept={(ids) => setShell((s) => ({ ...s, expiring: s.expiring.filter((c) => !ids.includes(c.id)) }))}
+        />
         {chat?.archived_at ? (
           <div className="flex items-center justify-center gap-3 border-b border-line px-4 py-2 text-[14px] text-mute" role="status">
             <span>This chat is archived. Writing in it brings it back.</span>
