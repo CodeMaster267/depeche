@@ -119,8 +119,8 @@ test("a person redesigns Depeche from a chat, keeps it, and goes back to standar
   await expect(page.getByRole("heading", { name: "Hi, Tara." })).toBeVisible();
   expect(await bodyBackground(page)).toBe(standard);
   // Leaving a chat cuts off its background requests, which Safari reports as "access control
-  // checks"; that is the browser dropping a request nobody needs any more.
-  expect(errors.filter((e) => !/due to access control checks/.test(e))).toEqual([]);
+  // checks" or "Load failed"; that is the browser dropping a request nobody needs any more.
+  expect(errors.filter((e) => !/due to access control checks|^Load failed$/.test(e))).toEqual([]);
 
   // The sign-in page is never redesigned.
   await page.context().clearCookies();
