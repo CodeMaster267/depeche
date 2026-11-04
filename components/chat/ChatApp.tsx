@@ -39,6 +39,7 @@ import { EditingChip, MakingPicture, ReplyPictures, isPicture } from "./Pictures
 // Loaded only when someone scans, so the chat itself stays quick to open.
 const ScanSheet = dynamic(() => import("./ScanSheet"), { ssr: false });
 import type { Source } from "@/lib/chat/thread";
+import { RippleField } from "@/components/RippleField";
 import { SOURCE_NAMES } from "@/lib/import/types";
 import { LOOK_ACTION, Shortcuts, useLookTexts, type LookAction } from "@/components/design/Look";
 
@@ -832,16 +833,18 @@ export function ChatApp({
 
         <div
           ref={scroller}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
           onScroll={(e) => {
             const el = e.currentTarget;
             pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           }}
         >
+          {/* An empty new chat gets the letterflip field behind it, clear of the greeting. */}
+          {messages.length === 0 ? <RippleField clear="[data-ripple-clear] > *" /> : null}
           <CanvasOpener.Provider value={canvas.open}>
-          <div data-part="thread" className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
+          <div data-part="thread" className="relative mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
             {messages.length === 0 ? (
-              <div className="flex flex-col gap-2 pt-[12vh]">
+              <div data-ripple-clear className="flex flex-col gap-2 pt-[12vh]">
                 <h2 data-part="greeting" className="text-[34px] font-semibold tracking-tight">{temporary ? "Temporary chat" : look.greeting(shell.name)}</h2>
                 {temporary && !noModels ? (
                   <p data-testid="temporary-note" className="max-w-[460px] text-[17px] text-mute">
