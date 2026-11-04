@@ -57,6 +57,15 @@ describe("provider keys", () => {
     expect(await asServer("select count(*)::int as n from provider_keys where provider = 'groq'")).toEqual([{ n: 0 }]);
   });
 
+  it("accept DeepSeek and xAI keys", async () => {
+    for (const provider of ["deepseek", "xai"]) {
+      await asServer(`select public.save_provider_key($1, $2, '\\x05'::bytea, 'ds12')`, [P.bea, provider]);
+      expect(await asServer("select family_id from provider_keys where provider = $1", [provider])).toEqual([{ family_id: F.b }]);
+      await asServer(`select public.remove_provider_key($1, $2)`, [P.bea, provider]);
+    }
+    expect(await asServer("select count(*)::int as n from provider_keys where provider in ('deepseek', 'xai')")).toEqual([{ n: 0 }]);
+  });
+
   it("can be replaced, keeping one key per provider", async () => {
     await asServer(`select public.save_provider_key($1, 'google', '\\x09'::bytea, 'g9g9')`, [P.hasan]);
     expect(await asServer("select last4 from provider_keys where provider = 'google'")).toEqual([{ last4: "g9g9" }]);

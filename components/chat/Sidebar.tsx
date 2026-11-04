@@ -31,6 +31,7 @@ function group(chats: ChatRow[]) {
 
 /** Your chats, newest first, plus the way to your account and (for admins) family settings. */
 export function Sidebar({
+  userId,
   chats,
   activeId,
   name,
@@ -43,6 +44,7 @@ export function Sidebar({
   onChatChange,
   onChatDeleted,
 }: {
+  userId: string;
   chats: ChatRow[];
   activeId: string | null;
   name: string;
@@ -141,6 +143,7 @@ export function Sidebar({
                   <span className="absolute inset-y-0 right-0.5 flex items-center">
                     <ChatMenu
                       chat={c}
+                      userId={userId}
                       label={`Options for ${c.title}`}
                       className="chat-more rounded-full p-2 text-mute transition-opacity hover:text-fg"
                       onChange={change}

@@ -1,3 +1,4 @@
+import { PROVIDER_NAME } from "@/lib/ai/models";
 /** Turns admin log rows into sentences, for the family page and for each person's Account page. */
 export type LogRow = {
   id: string;
@@ -8,7 +9,7 @@ export type LogRow = {
   created_at: string;
 };
 
-const PROVIDER_NAMES: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" };
+const PROVIDER_NAMES: Record<string, string> = PROVIDER_NAME;
 const money = (v: unknown) => `$${Number(v ?? 0).toFixed(2)}`;
 
 export function describeLog(row: LogRow, names: Map<string, string>, me: string): string {
