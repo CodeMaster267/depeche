@@ -33,7 +33,7 @@ const STANDINS = "abcdeghknopqsuvxyz0123456789^][_/\\<>=+*#%&?!:;.";
 const RED = [1, 0x1e / 255, 0x3c / 255];
 const CYAN = [0, 0xe5 / 255, 1];
 
-export type RippleMode = "mouse" | "ambient";
+export type RippleMode = "mouse" | "ambient" | "pulse";
 
 /**
  * How this device gets the effect. With a real mouse (and no touch screen, so iPads with a trackpad
@@ -52,8 +52,18 @@ export type LetterflipOptions = {
   text: string;
   /** Elements (inside the canvas's parent) to keep clear of letters, so what people read stays clean. */
   clearSelector?: string;
-  /** "mouse" follows the pointer; "ambient" drifts on its own (touch screens). */
+  /**
+   * "mouse" follows the pointer; "ambient" drifts on its own (touch screens); "pulse" stays still
+   * until `pulse()` is called, then sends a short burst of waves that fades (behind a chat).
+   */
   mode?: RippleMode;
+  /** Soft: letters are invisible at rest and only faintly lit by a wave (behind text people read). */
+  soft?: boolean;
+};
+
+export type Letterflip = (() => void) & {
+  /** Pulse mode: a burst of waves, `strength` 0 to 1, painted for `ms`, then fading to stillness. */
+  pulse: (strength: number, ms: number) => void;
 };
 
 const VERT = `#version 300 es
@@ -104,6 +114,7 @@ uniform vec2 view;      // canvas size, CSS px
 uniform vec2 cell;      // letter cell, CSS px
 uniform float standBase, standCount;
 uniform float rest;     // opacity of a letter at rest
+uniform float peak;     // opacity of a fully lit letter
 uniform vec4 clearRects[${MAX_CLEAR}]; // x0, y0, x1, y1 in CSS px from the top left
 uniform int clearCount;
 ${WARP}
@@ -133,7 +144,7 @@ void main() {
   float k = mod(floor(clamp((now - before - 0.01) / 0.99 * 5.0, 0.0, 1.0) * 5.654), 8.0);
   float lit = smoothstep(0.3, 0.8, now);
   float shown = k > 0.0 ? standBase + mod(seed + k * 5.0, standCount) : g;
-  float level = mix(rest, 1.0, max(lit, k > 0.0 ? 0.7 : 0.0)) * clear;
+  float level = mix(rest, peak, max(lit, k > 0.0 ? 0.7 : 0.0)) * clear;
   o = vec4(shown / 255.0, level, k > 0.0 ? 1.0 : 0.0, 1.0);
 }`;
 
@@ -201,7 +212,7 @@ const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
  * stops it and frees the GPU, or null when the browser can't run it (the page then simply has no
  * field, which is also what phones, tablets and reduced-motion visitors get).
  */
-export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): (() => void) | null {
+export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): Letterflip | null {
   const gl = canvas.getContext("webgl2", {
     alpha: true,
     premultipliedAlpha: true,
@@ -221,7 +232,7 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
   const U = {
     sim: Object.fromEntries(["prev", "size", "seg[0]", "radius[0]", "phase", "warpK"].map((n) => [n, loc(sim, n)])),
     letters: Object.fromEntries(
-      ["cur", "prev", "state", "simSize", "view", "cell", "standBase", "standCount", "rest", "clearRects", "clearCount", "phase", "warpK"].map(
+      ["cur", "prev", "state", "simSize", "view", "cell", "standBase", "standCount", "rest", "peak", "clearRects", "clearCount", "phase", "warpK"].map(
         (n) => [n, loc(letters, n)],
       ),
     ),
@@ -275,7 +286,7 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     const m = getComputedStyle(canvas).color.match(/[\d.]+/g)?.map(Number) ?? [255, 255, 255];
     ink = m.slice(0, 3).map((v) => v / 255);
     const dark = (ink[0] + ink[1] + ink[2]) / 3 > 0.5;
-    rest = dark ? 0.085 : 0.075;
+    rest = opts.soft ? 0 : dark ? 0.085 : 0.075;
   };
 
   const buildAtlas = () => {
@@ -411,6 +422,7 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     gl.uniform1f(L.standBase, standBase);
     gl.uniform1f(L.standCount, STANDINS.length);
     gl.uniform1f(L.rest, rest);
+    gl.uniform1f(L.peak, opts.soft ? 0.3 : 1);
     gl.uniform4fv(L.clearRects, clearRects);
     gl.uniform1i(L.clearCount, clearCount);
     setWarp(L);
@@ -476,6 +488,9 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
   // Ambient: two unseen wanderers drift on slow, never-repeating paths and paint in bursts, so rings
   // keep rising and fading across the field. About 30 steps a second, which also halves the work.
   const ambient = opts.mode === "ambient";
+  const pulsing = opts.mode === "pulse";
+  // Pulse mode: how strong the current burst is, and when it stops painting.
+  let burst = 0, burstUntil = 0, burstMs = 1, burstWanted = false;
   const wanderers = [0, 1].map(() => ({
     f: [0.09 + Math.random() * 0.08, 0.07 + Math.random() * 0.08],
     p: [Math.random() * 6.283, Math.random() * 6.283, Math.random() * 6.283],
@@ -520,14 +535,23 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
       };
       const from = wd.last ?? pos;
       wd.last = pos;
-      // Bursts: the brush swells and vanishes every few seconds, so each burst leaves a ring.
-      const pulse = Math.max(0, Math.sin(t * (0.55 + i * 0.17) + wd.p[2]));
+      // Bursts: the brush swells and vanishes every few seconds, so each burst leaves a ring. In
+      // pulse mode the brush fades out over the burst instead, then everything settles.
+      const pulse = pulsing
+        ? burst * Math.sqrt(clamp01((burstUntil - now) / burstMs)) * (0.6 + 0.4 * Math.abs(Math.sin(t * 2.1 + wd.p[2])))
+        : Math.max(0, Math.sin(t * (0.55 + i * 0.17) + wd.p[2]));
       const r = (0.035 * Math.min(innerHeight, 900) * pulse * pulse) / CELL;
       segs.push(from.x / CELL, (h - from.y) / CELL, pos.x / CELL, (h - pos.y) / CELL);
       radii.push(r > 0.6 ? r : 0);
     }
     step(segs, radii);
     draw();
+    // A burst is over once it has stopped painting and its waves have faded (about 3 s).
+    if (pulsing && now - burstUntil > 3200) {
+      pauseDrift();
+      clearSim();
+      draw();
+    }
   };
   const startDrift = () => {
     if (raf || stopped || !ready || !visible) return;
@@ -555,10 +579,15 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     if (visible) startDrift();
     else pauseDrift();
   });
+  const pulseIo = new IntersectionObserver(([e]) => {
+    visible = !!e?.isIntersecting;
+    if (pulsing && !visible) pauseDrift();
+  });
   io.observe(canvas);
+  if (pulsing) pulseIo.observe(canvas);
 
   const start = () => {
-    if (ambient || raf || stopped || !ready) return;
+    if (ambient || pulsing || raf || stopped || !ready) return;
     lastPaint = performance.now();
     canvas.dataset.ripple = "moving";
     raf = requestAnimationFrame(frame);
@@ -622,7 +651,7 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
       draw();
       ready = true;
       canvas.dataset.ripple = "ready";
-      if (ambient) startDrift();
+      if (ambient || (pulsing && burstWanted)) startDrift();
     });
 
   function stop() {
@@ -632,13 +661,26 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
     clearTimeout(resizeTimer);
     ro.disconnect();
     io.disconnect();
+    pulseIo.disconnect();
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("scroll", onScroll, { capture: true });
     scheme.removeEventListener("change", onScheme);
     canvas.removeEventListener("webglcontextlost", onLost);
   }
-  return () => {
-    stop();
-    gl.getExtension("WEBGL_lose_context")?.loseContext();
+  const pulse = (strength: number, ms: number) => {
+    const now = performance.now();
+    burst = Math.max(clamp01(strength), now < burstUntil ? burst : 0);
+    burstUntil = Math.max(burstUntil, now + ms);
+    burstMs = Math.max(1, burstUntil - now);
+    burstWanted = true;
+    if (!t0) t0 = now;
+    startDrift();
   };
+  return Object.assign(
+    () => {
+      stop();
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+    },
+    { pulse },
+  );
 }
