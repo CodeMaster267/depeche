@@ -238,7 +238,7 @@ function RenameSheet({ title, onSave, onClose }: { title: string; onSave: (title
 }
 
 /** A small sheet: slides up from the bottom on phones, a centred card on wider screens. */
-function Sheet({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
+export function Sheet({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
