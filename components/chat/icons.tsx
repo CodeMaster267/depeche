@@ -146,3 +146,37 @@ export const CodeIcon = (p: P) => (
     <path d="M8.5 7.5L4 12l4.5 4.5M15.5 7.5L20 12l-4.5 4.5M13.5 5l-3 14" />
   </svg>
 );
+export const PersonIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="12" cy="8.5" r="3.5" />
+    <path d="M5 20c1.2-3.6 3.9-5.5 7-5.5s5.8 1.9 7 5.5" />
+  </svg>
+);
+export const PeopleIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="9" cy="9" r="3" />
+    <path d="M3.5 19c.9-3 2.9-4.6 5.5-4.6s4.6 1.6 5.5 4.6" />
+    <path d="M15.5 6.3a3 3 0 0 1 0 5.4M17.5 14.7c1.4.6 2.4 2 3 4.3" />
+  </svg>
+);
+export const PulseIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M3 12h4l2-5 4 10 2-5h6" />
+  </svg>
+);
+export const MemoryIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M7 4h10v16l-5-3.5L7 20z" />
+  </svg>
+);
+export const BugIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <rect x="7.5" y="7" width="9" height="12" rx="4.5" />
+    <path d="M12 11v8M7.5 12H4M20 12h-3.5M8 16.5l-3 1.5M16 16.5l3 1.5M9.5 7.5 8 5M14.5 7.5 16 5" />
+  </svg>
+);
+export const ChevronUpDownIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="m8 9 4-4 4 4M8 15l4 4 4-4" />
+  </svg>
+);

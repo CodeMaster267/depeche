@@ -28,12 +28,12 @@ test("header links look like buttons and mark the current page", async ({ page }
   await signInWithPassword(page, OWNER.email, OWNER.password);
   await page.getByRole("heading", { name: "Hi, Hasan." }).waitFor();
   const account = await menuLink(page, "Account");
-  await expect(account).toHaveClass(/nav-pill/);
-  const border = await account.evaluate((el) => getComputedStyle(el).borderTopWidth);
-  expect(border).toBe("1px");
   await account.click();
   await expect(page).toHaveURL(/\/account$/);
-  await expect(page.getByRole("link", { name: "Account" })).toHaveAttribute("aria-current", "page");
+  const header = page.getByRole("link", { name: "Account" });
+  await expect(header).toHaveClass(/nav-pill/);
+  expect(await header.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("1px");
+  await expect(header).toHaveAttribute("aria-current", "page");
   // Sign out sits at the top now, beside the email.
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeInViewport();
   expect(errors).toEqual([]);

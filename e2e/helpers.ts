@@ -96,5 +96,10 @@ export function watchErrors(page: Page): string[] {
 export async function menuLink(page: Page, name: string) {
   const open = page.getByRole("button", { name: "Open menu" });
   if (await open.isVisible()) await open.click();
-  return page.getByRole("link", { name, exact: true });
+  // Your pages sit in the account menu at the foot of the chats list; other pages show them in the header.
+  const account = page.getByRole("button", { name: /account menu$/ });
+  const link = page.getByRole("link", { name, exact: true });
+  await account.or(link).first().waitFor({ timeout: 5_000 }).catch(() => {});
+  if ((await account.isVisible()) && (await account.getAttribute("aria-expanded")) !== "true") await account.click();
+  return link;
 }
