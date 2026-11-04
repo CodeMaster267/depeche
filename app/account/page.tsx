@@ -8,6 +8,8 @@ import { describeLog, when, type LogRow } from "@/lib/family/log";
 import { signOut } from "@/app/sign-in/actions";
 import { signOutEverywhere } from "./actions";
 import { ExportButton } from "@/components/ExportButton";
+import { vapidKeys } from "@/lib/push/server";
+import { NotificationsToggle } from "./Notifications";
 import { DeleteEverythingForm, KeepChatsToggle, PasswordForm, ProfileForm, ShareTitlesToggle } from "./forms";
 
 export const metadata: Metadata = { title: "Account · Depeche" };
@@ -54,6 +56,9 @@ export default async function Account() {
             temporary one.
           </p>
           <PasswordForm />
+        </Section>
+        <Section title="Notifications">
+          <NotificationsToggle publicKey={vapidKeys()?.publicKey ?? null} />
         </Section>
         <Section title="Old chats">
           <KeepChatsToggle keep={prefs?.keep_chats ?? false} />

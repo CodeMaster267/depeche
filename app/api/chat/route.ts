@@ -11,6 +11,7 @@ import { MAX_FILES_PER_MESSAGE, OFFICE_TYPES, UPLOAD_BUCKET, isFileRef, readAsTe
 import { documentText } from "@/lib/docs/read";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
+import { notifyIfAway } from "@/lib/push/notify";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
@@ -424,6 +425,10 @@ export async function POST(req: NextRequest) {
         if (open) controller.close();
       } catch {
         // The browser already went away.
+      }
+      // Left the app while this was being written? A notification says it's ready.
+      if (status !== "stopped" && UUID.test(body.clientRequestId ?? "")) {
+        await notifyIfAway(me.userId, body.clientRequestId!, finalChatId, status === "completed").catch(() => {});
       }
       finished();
     },
