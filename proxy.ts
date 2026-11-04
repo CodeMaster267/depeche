@@ -19,7 +19,8 @@ import {
  * devices) and sends anyone who isn't signed in to the sign-in page. Pages still check the
  * profile themselves; this is only the first gate.
  */
-const PUBLIC = ["/sign-in", "/setup", "/invite/", "/auth/", "/api/keep-alive", "/api/cleanup", "/sw.js", "/api/research/step"];
+// Shared chats (/s/…) open for anyone holding the link; the page itself checks the link.
+const PUBLIC = ["/sign-in", "/setup", "/invite/", "/auth/", "/s/", "/api/keep-alive", "/api/cleanup", "/sw.js", "/api/research/step"];
 /** Reachable while the app lock is on and this device is locked. */
 const LOCK_FREE = [...PUBLIC, "/lock", "/api/lock/"];
 const under = (path: string, list: string[]) => list.some((p) => path === p || path.startsWith(p));

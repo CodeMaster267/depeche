@@ -18,6 +18,9 @@ import { ACCEPT, AUDIO_ACCEPT, AttachmentTray, useAttachments, type Pending } fr
 import { AskAboutSelection, CostButton, FollowUps, QuoteChip } from "./Extras";
 import { ModelPicker } from "./ModelPicker";
 import { Compare } from "./Compare";
+import { TemporaryToggle, historyOf, type TemporaryTurn } from "./Temporary";
+import { supabaseBrowser } from "@/lib/supabase/browser";
+import { UPLOAD_BUCKET } from "@/lib/chat/files";
 import { comparedWith } from "@/lib/chat/compare";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
@@ -72,6 +75,7 @@ export function ChatApp({
   messages: initial,
   all: initialAll,
   focus,
+  temporary: startTemporary = false,
 }: {
   shell: Shell;
   chat: ChatRow | null;
@@ -80,8 +84,25 @@ export function ChatApp({
   all?: MessageRow[];
   /** A message to scroll to and mark, when the chat was opened from a search result. */
   focus?: string | null;
+  /** Start as a temporary chat (opened from /?temporary). */
+  temporary?: boolean;
 }) {
   const router = useRouter();
+  // A temporary chat lives only on this screen: nothing is saved, and it's gone once you leave.
+  const [temporary, setTemporary] = useState(startTemporary && !initialChat);
+  // Files sent in a temporary chat are deleted when you leave it (the daily clean-up catches any left).
+  const temporaryFiles = useRef<string[]>([]);
+  useEffect(() => {
+    const forget = () => {
+      const paths = temporaryFiles.current.splice(0);
+      if (paths.length) supabaseBrowser().storage.from(UPLOAD_BUCKET).remove(paths).catch(() => {});
+    };
+    window.addEventListener("pagehide", forget);
+    return () => {
+      window.removeEventListener("pagehide", forget);
+      forget();
+    };
+  }, []);
   const [shell, setShell] = useState(initialShell);
   const [chat, setChat] = useState<ChatRow | null>(initialChat);
   // Edits and regenerations sit beside the originals, so a chat is a tree. `leaf` is where the
@@ -326,9 +347,19 @@ export function ChatApp({
   };
 
   async function run(
-    body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean; parent?: string | null; quote?: string; compare?: CompareTag },
+    body: {
+      text?: string;
+      files?: FileRef[];
+      regenerate?: string;
+      voice?: boolean;
+      parent?: string | null;
+      quote?: string;
+      compare?: CompareTag;
+      temporary?: boolean;
+      history?: TemporaryTurn[];
+    },
     optimistic: Live[],
-    opts: RunOptions = {},
+    opts: RunOptions & { question?: string } = {},
   ) {
     const model = opts.model ?? selected;
     if (!model) return;
@@ -341,7 +372,7 @@ export function ChatApp({
     const placeholder: Live = {
       id: replyId,
       chat_id: chat?.id ?? "",
-      parent_id: optimistic[0]?.id ?? body.regenerate ?? null,
+      parent_id: optimistic[0]?.id ?? body.regenerate ?? opts.question ?? null,
       role: "assistant",
       content: body.compare ? { text: "", compare: body.compare } : { text: "" },
       status: "streaming",
@@ -407,7 +438,7 @@ export function ChatApp({
         for (const line of lines) {
           if (!line) continue;
           const ev = JSON.parse(line) as
-            | { type: "start"; chatId: string; userMessage: MessageRow }
+            | { type: "start"; chatId: string | null; userMessage: MessageRow }
             | { type: "text"; text: string }
             | { type: "thinking"; text: string }
             | { type: "notice"; text: string }
@@ -415,8 +446,10 @@ export function ChatApp({
             | { type: "sources"; sources: Source[] }
             | { type: "making"; editing?: boolean }
             | { type: "done" | "error"; message: MessageRow | null; error?: string };
-          if (ev.type === "start") {
-            if (!chatId) {
+          if (ev.type === "start" && body.temporary) {
+            // Nothing was saved: the question keeps its place on screen under its own id.
+          } else if (ev.type === "start") {
+            if (!chatId && ev.chatId) {
               chatId = ev.chatId;
               const created: ChatRow = {
                 id: ev.chatId,
@@ -436,7 +469,7 @@ export function ChatApp({
                 list.map((m) => (m.id === local ? real : m.id === replyId ? { ...m, parent_id: real.id, chat_id: real.chat_id } : m)),
               );
             }
-            opts.onStart?.(ev.chatId, ev.userMessage.id);
+            if (ev.chatId) opts.onStart?.(ev.chatId, ev.userMessage.id);
           } else if (ev.type === "text") {
             pending += ev.text;
             if (!frame) frame = requestAnimationFrame(flush);
@@ -469,7 +502,8 @@ export function ChatApp({
           } else {
             if (frame) cancelAnimationFrame(frame);
             flush();
-            const saved = ev.message;
+            // A temporary chat's reply hangs under the question as it is on screen.
+            const saved = ev.message && body.temporary ? { ...ev.message, parent_id: placeholder.parent_id } : ev.message;
             if (saved) {
               setTree((list) => list.map((m) => (m.id === replyId ? saved : m)));
               if (follow) setLeaf(saved.id);
@@ -515,6 +549,7 @@ export function ChatApp({
     const text = draft.trim();
     if ((!text && !attachments.ready) || attachments.uploading || busy || research.running || !model) return;
     if (deep && searchable && !imaging) {
+      if (temporary) return setBanner("Deep research isn't available in a temporary chat.");
       if (attachments.items.length) return setBanner("Deep research works from your message only. Remove the attached files first.");
       if (!text) return;
       setDraft("");
@@ -546,6 +581,11 @@ export function ChatApp({
       model: null,
       created_at: new Date().toISOString(),
     };
+    if (temporary) {
+      temporaryFiles.current.push(...files.map((f) => f.path));
+      run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}), temporary, history: historyOf(messages) }, [{ ...mine, parent_id: end?.id ?? null }]);
+      return;
+    }
     const others = compareIds.map((id) => findModel(id)).filter((m): m is Model => !!m && !m.image && shell.modelIds.includes(m.id));
     if (!voice && others.length >= 2) {
       // Comparing: the first model answers the message as usual; once it's saved, the others answer
@@ -625,6 +665,18 @@ export function ChatApp({
 
   const regenerate = (questionId: string) => {
     if (busy) return;
+    if (temporary) {
+      // Nothing is stored, so ask the question again with the conversation before it.
+      const at = messages.findIndex((m) => m.id === questionId);
+      const q = messages[at];
+      if (!q) return;
+      run(
+        { text: q.content.text ?? "", ...(q.content.files?.length ? { files: q.content.files } : {}), temporary, history: historyOf(messages.slice(0, at)) },
+        [],
+        { question: q.id },
+      );
+      return;
+    }
     // The old reply is kept as an earlier version; the new one is shown in its place.
     run({ regenerate: questionId }, []);
   };
@@ -715,7 +767,7 @@ export function ChatApp({
             <MenuIcon />
           </button>
           <div className="flex min-w-0 flex-1 flex-col items-center md:flex-row md:items-center md:gap-4">
-            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">{chat?.title ?? "New chat"}</h1>
+            <h1 className="max-w-full truncate text-[17px] font-semibold md:text-[18px]">{chat?.title ?? (temporary ? "Temporary chat" : "New chat")}</h1>
             {model ? (
               <button
                 type="button"
@@ -748,7 +800,14 @@ export function ChatApp({
               <NewChatIcon className="h-[19px] w-[19px]" />
             </Link>
           ) : (
-            <span className="h-10 w-10 shrink-0 md:hidden" aria-hidden />
+            // An empty new chat can become a temporary one; once it has messages it stays as it is.
+            <TemporaryToggle
+              on={temporary}
+              onToggle={() => {
+                setTemporary((t) => !t);
+                window.history.replaceState(null, "", temporary ? "/" : "/?temporary");
+              }}
+            />
           )}
         </header>
         <DeletionNotice
@@ -783,8 +842,13 @@ export function ChatApp({
           <div data-part="thread" className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
             {messages.length === 0 ? (
               <div className="flex flex-col gap-2 pt-[12vh]">
-                <h2 data-part="greeting" className="text-[34px] font-semibold tracking-tight">{look.greeting(shell.name)}</h2>
-                {noModels ? (
+                <h2 data-part="greeting" className="text-[34px] font-semibold tracking-tight">{temporary ? "Temporary chat" : look.greeting(shell.name)}</h2>
+                {temporary && !noModels ? (
+                  <p data-testid="temporary-note" className="max-w-[460px] text-[17px] text-mute">
+                    This chat won&apos;t be saved or added to your chats, and nothing in it is remembered. It&apos;s gone once you
+                    leave or start a new chat.
+                  </p>
+                ) : noModels ? (
                   <p className="text-[17px] text-mute">
                     {shell.isAdmin ? (
                       <>
@@ -859,7 +923,7 @@ export function ChatApp({
                   found={found === m.id}
                   onEdit={pictureModels.length ? (f) => editPicture(f, m.model) : undefined}
                   run={fresh.has(m.id) ? runContexts.fresh : runContexts.old}
-                  canRegenerate={!busy && !!m.parent_id && !m.parent_id.startsWith("local-")}
+                  canRegenerate={!busy && !!m.parent_id && (temporary || !m.parent_id.startsWith("local-"))}
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
                   versions={<ReplyVersions message={m} tree={tree} busy={busy} onPick={showVersion} />}
                   // Suggested follow-ups only under the newest answer, once it's finished.

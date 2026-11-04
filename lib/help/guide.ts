@@ -134,6 +134,21 @@ Voice works while the app is open; iPhones don't let websites listen in the back
   deleted, a line at the top of the chat screen says so, with "Keep" to save them.`,
   },
   {
+    id: "temporary-and-sharing",
+    title: "Temporary chats and sharing a chat",
+    routes: ["/s/[token]"],
+    text: `
+- Temporary chat: on a new, empty chat, tap the dashed speech bubble at the top right (it shows "Temporary" when on).
+  Nothing in it is saved: it isn't added to your chats, no memories are used or suggested, and it's gone once you leave,
+  reload or tap New chat. Its cost still counts toward your monthly limit. Pictures and deep research need a normal chat.
+  You can also open depai.vercel.app/?temporary to start one straight away.
+- Share a chat: open the chat's three dots (in the chat list or at the top of the chat) and tap Share, then "Create link".
+  Anyone with the link can read a copy of the chat as it is at that moment, without signing in; they can't write in it.
+  Attached files show by name only. Messages you send later aren't in the copy until you tap "Update to now" (the link
+  stays the same). "Copy link" copies it, "Send…" opens your phone's share sheet, and "Stop sharing" makes the link stop
+  working at once. Deleting the chat deletes its link too. Shared pages are hidden from search engines.`,
+  },
+  {
     id: "skills",
     title: "Skills",
     routes: ["/skills", "/skills/[id]"],
