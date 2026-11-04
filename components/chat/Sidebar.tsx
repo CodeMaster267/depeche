@@ -10,6 +10,7 @@ import type { ChatRow } from "@/lib/chat/thread";
 import type { ProjectRow } from "@/lib/chat/projects";
 import { ChatMenu } from "./ChatMenu";
 import { NewProjectSheet } from "./Projects";
+import { Shortcuts } from "@/components/design/Look";
 import { ArchiveIcon, BackIcon, CloseIcon, FolderIcon, FolderPlusIcon, PlusIcon, SearchIcon } from "./icons";
 
 /** Projects shown before "Show all". */
@@ -97,7 +98,7 @@ export function Sidebar({
   const shownProjects = allProjects || needle ? foundProjects : foundProjects.slice(0, FEW_PROJECTS);
 
   return (
-    <nav aria-label="Chats" className="flex h-full flex-col gap-4 px-4" style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}>
+    <nav aria-label="Chats" data-part="sidebar" className="flex h-full flex-col gap-4 px-4" style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}>
       <div className="flex items-center justify-between px-2 pt-1">
         <Link href="/" onClick={onNavigate} className="text-[20px]" aria-label="Depeche home">
           <Wordmark />
@@ -120,7 +121,8 @@ export function Sidebar({
         <PlusIcon />
         <span>New chat</span>
       </Link>
-      <label className="flex h-11 items-center gap-2 rounded-2xl bg-soft px-4 text-mute">
+      <Shortcuts place="sidebar" onChat isAdmin={isAdmin} className="-mb-1 flex-wrap" />
+      <label data-part="search-chats" className="flex h-11 items-center gap-2 rounded-2xl bg-soft px-4 text-mute">
         <SearchIcon />
         <input
           value={q}
@@ -234,6 +236,7 @@ export function Sidebar({
             {!chats.some((c) => !c.project_id) && !needle ? <p className="px-3 text-[15px] text-mute">Your chats will appear here.</p> : null}
             <button
               type="button"
+              data-part="archived-link"
               onClick={() => setShowArchived(true)}
               className="mb-2 mt-1 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[15px] text-mute hover:bg-soft"
             >
@@ -254,13 +257,17 @@ export function Sidebar({
             <span className="mt-1 flex flex-wrap gap-2 whitespace-nowrap text-[14px]">
               {isAdmin ? <NavLink href="/family">Family</NavLink> : null}
               <NavLink href="/assistants">Assistants</NavLink>
+              {isAdmin ? <NavLink href="/health">Health</NavLink> : null}
               <NavLink href="/memory">Memory</NavLink>
               <NavLink href="/account">Account</NavLink>
-              <NavLink href={`/report?from=${encodeURIComponent(activeId ? `/c/${activeId}` : "/")}`}>Report a bug</NavLink>
+              <NavLink href="/design">My look</NavLink>
+              <span data-part="report-link" className="contents">
+                <NavLink href={`/report?from=${encodeURIComponent(activeId ? `/c/${activeId}` : "/")}`}>Report a bug</NavLink>
+              </span>
             </span>
           </span>
         </div>
-        <div className="px-2" data-testid="spending">
+        <div className="px-2" data-testid="spending" data-part="spending">
           <div className="h-1 overflow-hidden rounded-full bg-line">
             <div className="h-full bg-fg" style={{ width: `${share * 100}%` }} />
           </div>

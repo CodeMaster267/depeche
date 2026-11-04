@@ -85,4 +85,26 @@ describe("export", () => {
     expect(entries["files/syllabus.pdf"]).toBeDefined();
     expect(exportEntries(data, [])["projects.json"]).toBeUndefined();
   });
+
+  it("adds each canvas's newest text, and every version in canvases.json", () => {
+    const withCanvases: ExportData = {
+      ...data,
+      canvases: [
+        { id: "k1", chat_id: "c1", title: "Wedding-speech", created_at: "2026-11-03T10:00:00Z", updated_at: "2026-11-03T10:05:00Z" },
+        { id: "k2", chat_id: "c1", title: "page.html", created_at: "2026-11-03T10:00:00Z", updated_at: "2026-11-03T10:05:00Z" },
+      ],
+      canvasVersions: [
+        { canvas_id: "k1", content: "# Draft", author: "assistant", message_id: "m2", created_at: "2026-11-03T10:01:00Z" },
+        { canvas_id: "k1", content: "# Final", author: "person", message_id: null, created_at: "2026-11-03T10:05:00Z" },
+        { canvas_id: "k2", content: "<p>hi</p>", author: "assistant", message_id: "m3", created_at: "2026-11-03T10:02:00Z" },
+      ],
+    };
+    const out = exportEntries(withCanvases, []);
+    expect(strFromU8(out["canvases/2026-11-03 Trip plans - Wedding-speech.md"])).toBe("# Final");
+    // A web page is kept as text, never as something a browser would open.
+    expect(strFromU8(out["canvases/2026-11-03 Trip plans - page.html.txt"])).toBe("<p>hi</p>");
+    const json = JSON.parse(strFromU8(out["canvases.json"]));
+    expect(json[0].versions.map((v: { author: string }) => v.author)).toEqual(["assistant", "person"]);
+    expect(exportEntries(data, [])["canvases.json"]).toBeUndefined();
+  });
 });

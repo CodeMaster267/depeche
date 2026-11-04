@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AppHeader, Page, Section } from "@/components/AppHeader";
 import { requireMe } from "@/lib/auth/session";
@@ -119,6 +120,15 @@ export default async function Family() {
               />
             ))}
           </ul>
+        </Section>
+
+        <Section title="Designs">
+          <p className="text-[15px] text-mute">
+            Everyone can redesign their own Depeche. Set how many builds each person gets, switch designs off, and see what people asked for.
+          </p>
+          <Link href="/family/designs" className="press self-start text-[15px] underline underline-offset-4">
+            Manage designs
+          </Link>
         </Section>
 
         <Section title="Invite someone">

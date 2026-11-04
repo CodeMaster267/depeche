@@ -3,6 +3,7 @@ import { ChatApp } from "@/components/chat/ChatApp";
 import { isConfigured } from "@/lib/config";
 import { requireMe } from "@/lib/auth/session";
 import { loadShell } from "@/lib/chat/load";
+import { PersonalLook } from "@/components/design/PersonalLook";
 
 export const dynamic = "force-dynamic";
 
@@ -30,12 +31,14 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ n
   // ?assistant=… starts the chat with one of your saved assistants (or one your family shared).
   const assistant = shell.assistants.find((a) => a.id === assistantId) ?? null;
   return (
-    <ChatApp
-      key={`new-${String(fresh ?? "").slice(0, 20)}-${assistant?.id ?? ""}`}
-      shell={shell}
-      chat={null}
-      messages={[]}
-      assistant={assistant}
-    />
+    <PersonalLook>
+      <ChatApp
+        key={`new-${String(fresh ?? "").slice(0, 20)}-${assistant?.id ?? ""}`}
+        shell={shell}
+        chat={null}
+        messages={[]}
+        assistant={assistant}
+      />
+    </PersonalLook>
   );
 }

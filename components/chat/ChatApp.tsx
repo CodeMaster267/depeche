@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
 import type { RunContext } from "@/components/markdown/RunCode";
-import { canSearch, findModel, type Model } from "@/lib/ai/models";
+import { MODELS, canSearch, findModel, type Model } from "@/lib/ai/models";
 import { latestLeaf, pathTo, titleFrom, versionsOf, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
 import { archiveChat, refreshChat, refreshShell, rememberModel } from "@/app/c/actions";
@@ -25,16 +25,26 @@ import { Compare } from "./Compare";
 import { comparedWith } from "@/lib/chat/compare";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
+import { CanvasIcon, CanvasMessage, CanvasOpener, CanvasPane, useCanvas } from "./Canvas";
 import { ChatMenu } from "./ChatMenu";
 import { DeletionNotice } from "./DeletionNotice";
 import { UserMessage, VersionSwitch } from "./Versions";
 import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, FolderIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, RetryIcon, SparkIcon, StopIcon } from "./icons";
 import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
+import { ResearchCard, ResearchIcon, runFor, useResearch } from "./Research";
+import type { RunView } from "@/lib/research/types";
+import { EditingChip, MakingPicture, ReplyPictures, isPicture } from "./Pictures";
 import type { Source } from "@/lib/chat/thread";
 import { SOURCE_NAMES } from "@/lib/import/types";
+import { LOOK_ACTION, Shortcuts, useLookTexts, type LookAction } from "@/components/design/Look";
 
-type Live = MessageRow & LiveActivity;
+type Live = MessageRow &
+  LiveActivity & {
+    /** A picture model is drawing (editing one, if `editing`). */
+    making?: boolean;
+    editing?: boolean;
+  };
 
 const SEARCH_PREF = "depeche:web-search";
 
@@ -137,6 +147,8 @@ export function ChatApp({
     });
   };
   const [voiceOpen, setVoiceOpen] = useState(false);
+  // Deep research: on for the next message only.
+  const [deep, setDeep] = useState(false);
   const attachments = useAttachments(initialShell.userId);
   // Replies being written right now: one, or two or three when comparing models.
   const aborts = useRef(new Set<AbortController>());
@@ -145,11 +157,26 @@ export function ChatApp({
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
+  const streamingReply = messages.find((m) => m.streaming);
+  const lastReply = messages.at(-1)?.role === "assistant" ? messages.at(-1) : undefined;
+  const hasCanvas = messages.some((m) => m.role === "assistant" && (m.content.text ?? "").includes("canvas:"));
+  const canvas = useCanvas(chat?.id ?? null, streamingReply ? (streamingReply.content.text ?? "") : null, lastReply?.content.text ?? null, hasCanvas);
 
   const model = findModel(modelId);
   const selected = model;
   // DeepSeek and some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
   const searchable = canSearch(model);
+  // Picture models make or edit a picture from each message.
+  const imaging = !!model?.image;
+  const pictureModels = MODELS.filter((m) => m.image && shell.modelIds.includes(m.id));
+  // The newest picture in the chat is edited by the next message to a picture model, unless the
+  // person taps × to make a new one.
+  const newest = messages.at(-1);
+  const lastPicture =
+    newest?.role === "assistant" && !newest.streaming ? newest.content.files?.find(isPicture) : undefined;
+  const [editLast, setEditLast] = useState(true);
+  useEffect(() => setEditLast(true), [lastPicture?.path]);
+  const editing = imaging && editLast && lastPicture && !attachments.items.some((x) => x.ref?.path === lastPicture.path) ? lastPicture : undefined;
   const noModels = shell.modelIds.length === 0;
   // Listening needs a provider that understands audio (Groq, OpenAI or Google); Claude has none.
   const canListen = shell.modelIds.some((id) => ["groq", "openai", "google"].includes(findModel(id)?.provider ?? ""));
@@ -165,6 +192,7 @@ export function ChatApp({
     if (aborts.current.size) return;
     const next = await refreshShell().catch(() => null);
     if (next) setShell(next);
+    canvas.refresh();
     if (chat) {
       const found = await refreshChat(chat.id).catch(() => null);
       if (found && !aborts.current.size) {
@@ -175,6 +203,7 @@ export function ChatApp({
         setLeaf((l) => (l && all.some((m) => m.id === l) ? latestLeaf(all, l) : (found.messages.at(-1)?.id ?? null)));
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat]);
   useEffect(() => {
     const onVisible = () => document.visibilityState === "visible" && sync();
@@ -185,6 +214,68 @@ export function ChatApp({
       window.removeEventListener("focus", onVisible);
     };
   }, [sync]);
+
+  const research = useResearch(chat?.id ?? null, () => sync());
+  const toggleDeep = () => {
+    setHint(deep ? "Deep research off" : "Deep research: several web searches and a long report with sources. Takes a few minutes.");
+    clearTimeout(hintTimer.current);
+    hintTimer.current = setTimeout(() => setHint(null), 3500);
+    setDeep((on) => !on);
+  };
+
+  /** Starts deep research on the message; progress shows under it and the report arrives as a reply. */
+  async function startResearch(text: string) {
+    if (!model) return;
+    setBanner(null);
+    setBusy(true);
+    pinnedToBottom.current = true;
+    const before = messages.at(-1)?.id ?? null;
+    const mine: Live = {
+      id: draftId(),
+      chat_id: chat?.id ?? "",
+      parent_id: before,
+      role: "user",
+      content: { text },
+      status: "completed",
+      model: null,
+      created_at: new Date().toISOString(),
+    };
+    setTree((m) => [...m, mine]);
+    setLeaf(mine.id);
+    try {
+      const res = await fetch("/api/research", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chatId: chat?.id ?? null, parent: before, model: model.id, clientRequestId: crypto.randomUUID(), text }),
+      });
+      const out = (await res.json().catch(() => ({}))) as { error?: string; chatId?: string; userMessage?: MessageRow; run?: RunView };
+      if (!res.ok || !out.chatId || !out.userMessage || !out.run) {
+        setTree((list) => list.filter((m) => m.id !== mine.id));
+        setLeaf(before);
+        setDraft(text);
+        setDeep(true);
+        setBanner(out.error ?? "Couldn't start the research. Try again.");
+        return;
+      }
+      if (!chat) {
+        const created: ChatRow = { id: out.chatId, title: titleFrom(text), model: model.id, pinned: false, updated_at: new Date().toISOString() };
+        setChat(created);
+        setShell((s) => ({ ...s, chats: [created, ...s.chats] }));
+        window.history.replaceState(null, "", `/c/${out.chatId}`);
+      }
+      const saved = out.userMessage;
+      setTree((list) => list.map((m) => (m.id === mine.id ? saved : m)));
+      setLeaf(saved.id);
+      research.add(out.run);
+    } catch {
+      setTree((list) => list.filter((m) => m.id !== mine.id));
+      setLeaf(before);
+      setDraft(text);
+      setBanner("Couldn't start the research. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // Leaving the app while an answer is being written asks for a notification when it's ready
   // (only on devices where notifications are on, from Account). Coming back cancels it.
@@ -217,7 +308,20 @@ export function ChatApp({
     setModelId(id);
     setCompareIds([]);
     setPicking(false);
-    rememberModel(id).catch(() => {});
+    // New chats start with the last chat model, never a picture model.
+    if (!findModel(id)?.image) rememberModel(id).catch(() => {});
+  };
+
+  /** Edit a picture: switch to a picture model if needed (the one that made it, if it can). */
+  const editPicture = (f: FileRef, madeBy: string | null) => {
+    if (!imaging) {
+      const next = pictureModels.find((m) => m.id === madeBy) ?? pictureModels[0];
+      if (!next) return;
+      setModelId(next.id);
+    }
+    if (f.path === lastPicture?.path) setEditLast(true);
+    else attachments.attach(f);
+    document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Depeche"]')?.focus();
   };
 
   async function run(
@@ -254,6 +358,8 @@ export function ChatApp({
     const clientRequestId = crypto.randomUUID();
     writing.current.set(clientRequestId, { away: false, live: true });
     try {
+      // The person's canvas edits are saved first, so the AI works on what they see.
+      const open = await canvas.beforeSend();
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -264,6 +370,7 @@ export function ChatApp({
           search: search && canSearch(model),
           ...(!chatId && project ? { projectId: project.id } : {}),
           ...(!chatId && assistant ? { assistantId: assistant.id } : {}),
+          ...open,
           ...body,
         }),
         signal: abort.signal,
@@ -314,6 +421,7 @@ export function ChatApp({
             | { type: "notice"; text: string }
             | { type: "searching"; query?: string; where?: "chat" }
             | { type: "sources"; sources: Source[] }
+            | { type: "making"; editing?: boolean }
             | { type: "done" | "error"; message: MessageRow | null; error?: string };
           if (ev.type === "start") {
             if (!chatId) {
@@ -363,6 +471,9 @@ export function ChatApp({
           } else if (ev.type === "sources") {
             const sources = ev.sources;
             patchReply((m) => ({ ...m, content: { ...m.content, sources } }));
+          } else if (ev.type === "making") {
+            const editing = !!ev.editing;
+            patchReply((m) => (m.making ? m : { ...m, making: true, editing }));
           } else if (ev.type === "notice") {
             patchReply((m) => ({ ...m, content: { ...m.content, notice: ev.text } }));
           } else {
@@ -382,7 +493,11 @@ export function ChatApp({
       }
       if (frame) flush();
     } catch {
-      if (abort.signal.aborted) {
+      if (abort.signal.aborted && model.image) {
+        // A picture is still made and saved after Stop (it's billed either way): fetch it later.
+        patchReply((m) => ({ ...m, streaming: false, making: false, content: { ...m.content, notice: "Still making the picture. It will appear here when it's ready." } }));
+        for (const wait of [15_000, 45_000, 100_000]) setTimeout(() => sync(), wait);
+      } else if (abort.signal.aborted) {
         patchReply((m) => ({ ...m, streaming: false, status: "stopped" }));
         // The server saves what was written; pick up its copy once it has.
         setTimeout(() => sync(), 1500);
@@ -408,10 +523,21 @@ export function ChatApp({
 
   const send = () => {
     const text = draft.trim();
-    if ((!text && !attachments.ready) || attachments.uploading || busy || !model) return;
+    if ((!text && !attachments.ready) || attachments.uploading || busy || research.running || !model) return;
+    if (deep && searchable && !imaging) {
+      if (attachments.items.length) return setBanner("Deep research works from your message only. Remove the attached files first.");
+      if (!text) return;
+      setDraft("");
+      setDeep(false);
+      startResearch(text);
+      return;
+    }
+    // A picture model needs to be told what to make or change.
+    if (imaging && !text) return;
     setDraft("");
     setQuote(null);
-    sendText(text, false, attachments.take(), quote ?? undefined);
+    const files = attachments.take();
+    sendText(text, false, editing ? [editing, ...files].slice(0, 5) : files, quote ?? undefined);
   };
 
   // The message a new one follows: the end of the conversation on screen.
@@ -430,7 +556,7 @@ export function ChatApp({
       model: null,
       created_at: new Date().toISOString(),
     };
-    const others = compareIds.map((id) => findModel(id)).filter((m): m is Model => !!m && shell.modelIds.includes(m.id));
+    const others = compareIds.map((id) => findModel(id)).filter((m): m is Model => !!m && !m.image && shell.modelIds.includes(m.id));
     if (!voice && others.length >= 2) {
       // Comparing: the first model answers the message as usual; once it's saved, the others answer
       // the same message. Each is its own request with its own spending hold.
@@ -513,6 +639,8 @@ export function ChatApp({
     run({ regenerate: questionId }, []);
   };
 
+  const shownIds = new Set(messages.map((m) => m.id));
+
   // A fresh chat. The home screen that a chat was started on is the same page as the new one, so
   // it gets a fresh key (?new=…) to start over; a reply still being written finishes on the server.
   const startNew = () => {
@@ -549,6 +677,24 @@ export function ChatApp({
     }));
   };
 
+  const look = useLookTexts();
+
+  // Buttons a person's design adds (components/design/Look.tsx) ask for these.
+  const lookAction = useRef<(a: LookAction) => void>(() => {});
+  lookAction.current = (a) => {
+    if (a === "new-chat") startNew();
+    else if (a === "chats") setDrawer(true);
+    else if (a === "choose-model") setPicking(true);
+    else if (a === "voice-chat" && canListen && model) setVoiceOpen(true);
+    else if (a === "web-search" && searchable) toggleSearch();
+    else if (a === "attach") document.querySelector<HTMLInputElement>('[data-testid="file-input"]')?.click();
+  };
+  useEffect(() => {
+    const on = (e: Event) => lookAction.current((e as CustomEvent<LookAction>).detail);
+    window.addEventListener(LOOK_ACTION, on);
+    return () => window.removeEventListener(LOOK_ACTION, on);
+  }, []);
+
   // A chat renamed, pinned, archived or restored from a menu. Archived chats leave the list.
   const changeChat = (next: ChatRow) => {
     if (chat?.id === next.id) setChat(next);
@@ -567,9 +713,9 @@ export function ChatApp({
 
   return (
     <ProjectsContext.Provider value={projectsValue}>
-    <div className="flex h-dvh overflow-hidden">
+    <div data-part="app" className="flex h-dvh overflow-hidden">
       {/* Chats: always visible on wide screens, a drawer on phones. */}
-      <aside className="hidden w-[300px] shrink-0 border-r border-line md:block">
+      <aside data-part="sidebar-desktop" className={`hidden w-[300px] shrink-0 border-r border-line ${canvas.isOpen ? "2xl:block" : "md:block"}`}>
         <Sidebar
           {...shell}
           chats={shell.chats}
@@ -585,7 +731,7 @@ export function ChatApp({
       {drawer ? (
         <div className="fixed inset-0 z-40 md:hidden">
           <button type="button" aria-label="Close menu" className="absolute inset-0 bg-black/40" onClick={() => setDrawer(false)} />
-          <aside className="enter-glitch absolute inset-y-0 left-0 w-[86%] max-w-[340px] bg-bg">
+          <aside data-part="drawer" className="enter-glitch absolute inset-y-0 left-0 w-[86%] max-w-[340px] bg-bg">
             <Sidebar
               {...shell}
               activeId={chat?.id ?? null}
@@ -603,10 +749,11 @@ export function ChatApp({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header
+          data-part="chat-header"
           className="flex items-center gap-2 border-b border-line px-3 pb-2 md:px-6"
           style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}
         >
-          <button type="button" className="p-2 md:hidden" aria-label="Open menu" onClick={() => setDrawer(true)}>
+          <button type="button" data-part="menu-button" className="p-2 md:hidden" aria-label="Open menu" onClick={() => setDrawer(true)}>
             <MenuIcon />
           </button>
           <div className="flex min-w-0 flex-1 flex-col items-center md:flex-row md:items-center md:gap-4">
@@ -652,6 +799,12 @@ export function ChatApp({
               </button>
             ) : null}
           </div>
+          <Shortcuts place="header" onChat isAdmin={shell.isAdmin} className="max-md:hidden" />
+          {canvas.canvases.length && !canvas.isOpen ? (
+            <button type="button" className="p-2 text-mute hover:text-fg" aria-label="Open canvas" onClick={() => canvas.open(canvas.canvases[0].title)}>
+              <CanvasIcon />
+            </button>
+          ) : null}
           {chat ? <ChatMenu chat={chat} userId={shell.userId} onChange={changeChat} onDeleted={() => chatDeleted(chat.id)} /> : null}
           {chat || messages.length ? (
             <Link
@@ -698,7 +851,8 @@ export function ChatApp({
             pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           }}
         >
-          <div className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
+          <CanvasOpener.Provider value={canvas.open}>
+          <div data-part="thread" className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 py-6 md:px-8">
             {messages.length === 0 && project && !chat ? (
               <ProjectPanel
                 userId={shell.userId}
@@ -721,7 +875,7 @@ export function ChatApp({
               </div>
             ) : messages.length === 0 ? (
               <div className="flex flex-col gap-2 pt-[12vh]">
-                <h2 className="text-[34px] font-semibold tracking-tight">Hi, {shell.name}.</h2>
+                <h2 data-part="greeting" className="text-[34px] font-semibold tracking-tight">{look.greeting(shell.name)}</h2>
                 {noModels ? (
                   <p className="text-[17px] text-mute">
                     {shell.isAdmin ? (
@@ -737,7 +891,7 @@ export function ChatApp({
                     )}
                   </p>
                 ) : (
-                  <p className="text-[17px] text-mute">What&apos;s on your mind?</p>
+                  <p data-part="greeting-line" className="text-[17px] text-mute">{look.subtitle ?? "What's on your mind?"}</p>
                 )}
                 {!noModels && shell.assistants.length ? (
                   <ul className="mt-5 flex flex-wrap gap-2" aria-label="Start with an assistant">
@@ -770,14 +924,23 @@ export function ChatApp({
             ) : null}
             {messages.map((m) =>
               m.role === "user" ? (
-                <UserMessage
-                  key={m.id}
-                  message={m}
-                  versions={versionsOf(tree, m)}
-                  busy={busy}
-                  onEdit={(text) => edit(m, text)}
-                  onPickVersion={showVersion}
-                />
+                <div key={m.id} className="flex flex-col">
+                  <UserMessage
+                    message={m}
+                    versions={versionsOf(tree, m)}
+                    busy={busy || research.running}
+                    onEdit={(text) => edit(m, text)}
+                    onPickVersion={showVersion}
+                  />
+                  {(() => {
+                    const run = runFor(research.runs, m.id, shownIds);
+                    return run ? (
+                      <div className="w-full pt-5">
+                        <ResearchCard run={run} onStop={research.stop} />
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
               ) : comparedWith(tree, m).length > 1 ? (
                 <Compare
                   key={m.content.compare!.id}
@@ -802,9 +965,10 @@ export function ChatApp({
                   )}
                 />
               ) : (
+                <CanvasMessage.Provider key={m.id} value={m.id.startsWith("local-") ? null : m.id}>
                 <Reply
-                  key={m.id}
                   message={m}
+                  onEdit={pictureModels.length ? (f) => editPicture(f, m.model) : undefined}
                   run={fresh.has(m.id) ? runContexts.fresh : runContexts.old}
                   canRegenerate={!busy && !!m.parent_id && !m.parent_id.startsWith("local-")}
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
@@ -813,12 +977,17 @@ export function ChatApp({
                   followUps={!busy && m.id === messages.at(-1)?.id ? m.content.followups : undefined}
                   onFollowUp={(q) => sendText(q)}
                 />
+                </CanvasMessage.Provider>
               ),
             )}
           </div>
+          </CanvasOpener.Provider>
         </div>
 
-        <div className="mx-auto w-full max-w-[760px] px-3 md:px-8" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
+        <div data-part="composer-wrap" className="mx-auto w-full max-w-[760px] px-3 md:px-8" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
+          {/* On phones the header has no room, so header buttons join the composer's row. */}
+          <Shortcuts place="composer" onChat isAdmin={shell.isAdmin} className="mb-2 overflow-x-auto" />
+          <Shortcuts place="header" onChat isAdmin={shell.isAdmin} className="mb-2 overflow-x-auto md:hidden" />
           {compareIds.length ? (
             <div data-testid="compare-chip" className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-line px-4 py-2 text-[14px]">
               <span className="min-w-0 truncate">
@@ -835,6 +1004,9 @@ export function ChatApp({
             </p>
           ) : null}
           <Composer
+            editing={editing}
+            onClearEditing={() => setEditLast(false)}
+            placeholder={imaging ? (editing || attachments.items.some((x) => x.mime.startsWith("image/")) ? "Describe what to change" : "Describe a picture to make") : deep && searchable ? "What to research?" : project && !chat ? `New chat in ${project.name}` : assistant && !chat ? `Message ${assistant.name}` : "Message Depeche"}
             quote={quote}
             onClearQuote={() => setQuote(null)}
             attachments={attachments.items}
@@ -843,31 +1015,35 @@ export function ChatApp({
               if (skipped) setBanner("You can attach up to 5 files to one message.");
             }}
             onRemoveAttachment={attachments.remove}
-            canSend={!attachments.uploading && (!!draft.trim() || attachments.ready)}
+            canSend={!attachments.uploading && (!!draft.trim() || (attachments.ready && !imaging))}
             value={draft}
             onChange={setDraft}
             onSend={send}
-            onStop={stopAll}
-            busy={busy}
+            onStop={() => (research.running ? research.stop() : stopAll())}
+            busy={busy || research.running}
             disabled={!model}
             search={search && searchable}
             searchable={searchable}
             onToggleSearch={toggleSearch}
-            voice={canListen && !!model}
+            deep={deep && searchable && !imaging}
+            onToggleDeep={toggleDeep}
+            deepable={searchable && !imaging}
+            voice={canListen && !!model && !imaging}
             onVoice={() => setVoiceOpen(true)}
             onDictated={(t) => setDraft((d) => (d.trim() ? `${d.trimEnd()} ${t}` : t))}
             onVoiceError={setBanner}
-            placeholder={project && !chat ? `New chat in ${project.name}` : assistant && !chat ? `Message ${assistant.name}` : undefined}
           />
           {hint ? (
             <p role="status" className="mt-2 text-center text-[12px] text-mute">
               {hint}
             </p>
           ) : (
-            <p className="mt-2 hidden text-center text-[12px] text-mute md:block">Enter to send · Shift + Enter for a new line</p>
+            <p data-part="keyboard-hint" className="mt-2 hidden text-center text-[12px] text-mute md:block">Enter to send · Shift + Enter for a new line</p>
           )}
         </div>
       </div>
+
+      <CanvasPane state={canvas} />
 
       <AskAboutSelection
         scroller={scroller}
@@ -927,6 +1103,7 @@ function Reply({
   message: m,
   canRegenerate,
   onRegenerate,
+  onEdit,
   followUps,
   onFollowUp,
   versions,
@@ -935,6 +1112,7 @@ function Reply({
   message: Live;
   canRegenerate: boolean;
   onRegenerate: () => void;
+  onEdit?: (f: FileRef) => void;
   followUps?: string[];
   onFollowUp: (q: string) => void;
   /** "‹ 1/2 ›" when this reply has other versions. */
@@ -949,13 +1127,15 @@ function Reply({
   return (
     <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
       <Activity message={m} />
+      {m.content.files?.length ? <ReplyPictures files={m.content.files} onEdit={onEdit} /> : null}
       {text ? (
         // Text selected in here can be asked about (see AskAboutSelection).
         <div data-reply-text className="contents">
           <Markdown text={text} streaming={m.streaming} run={run} />
         </div>
       ) : null}
-      {m.streaming && !m.searchingNow && !m.thinkingNow ? (
+      {m.streaming && m.making ? <MakingPicture editing={m.editing} /> : null}
+      {m.streaming && !m.searchingNow && !m.thinkingNow && !m.making ? (
         <span aria-label="Writing" className="block h-6">
           <span className="stream-cursor" />
         </span>
@@ -1008,7 +1188,7 @@ function Reply({
             {versions}
             {copied ? <span className="text-[13px]">Copied</span> : null}
           </span>
-          <span className="flex items-center gap-1 font-mono text-[12px]">
+          <span data-part="reply-model" className="flex items-center gap-1 font-mono text-[12px]">
             {info?.short ?? m.model}
             {typeof m.content.cost === "number" && (m.content.cost > 0 || m.content.usage) ? (
               <>
@@ -1025,6 +1205,9 @@ function Reply({
 }
 
 function Composer({
+  editing,
+  onClearEditing,
+  placeholder,
   quote,
   onClearQuote,
   attachments,
@@ -1040,18 +1223,26 @@ function Composer({
   search,
   searchable,
   onToggleSearch,
+  deep,
+  onToggleDeep,
+  deepable,
   voice,
   onVoice,
   onDictated,
   onVoiceError,
-  placeholder = "Message Depeche",
 }: {
-  placeholder?: string;
+  editing?: FileRef;
+  onClearEditing: () => void;
+  placeholder: string;
   quote: string | null;
   onClearQuote: () => void;
   search: boolean;
   searchable: boolean;
   onToggleSearch: () => void;
+  deep: boolean;
+  onToggleDeep: () => void;
+  /** Whether this model can do deep research (it must search the web, and not be a picture model). */
+  deepable: boolean;
   attachments: Pending[];
   onAttach: (files: File[]) => void;
   onRemoveAttachment: (id: string) => void;
@@ -1069,6 +1260,9 @@ function Composer({
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const look = useLookTexts();
+  // A look can reword the usual prompt; picture prompts stay as they are.
+  const hint = placeholder === "Message Depeche" && look.placeholder ? look.placeholder : placeholder;
   const [dragging, setDragging] = useState(false);
   useLayoutEffect(() => {
     const el = box.current;
@@ -1079,6 +1273,7 @@ function Composer({
 
   return (
     <form
+      data-part="composer"
       className={`rounded-[26px] border bg-bg p-2 focus-within:border-fg ${dragging ? "border-fg" : "border-line"}`}
       onSubmit={(e) => {
         e.preventDefault();
@@ -1097,6 +1292,7 @@ function Composer({
         onAttach([...e.dataTransfer.files]);
       }}
     >
+      {editing ? <EditingChip file={editing} onClear={onClearEditing} /> : null}
       {quote ? <QuoteChip quote={quote} onClear={onClearQuote} /> : null}
       <AttachmentTray items={attachments} onRemove={onRemoveAttachment} />
       <div className="flex items-end gap-1">
@@ -1133,6 +1329,17 @@ function Composer({
         >
           {search ? <GlobeIcon /> : <GlobeOffIcon />}
         </button>
+        <button
+          type="button"
+          onClick={onToggleDeep}
+          disabled={!deepable || disabled}
+          aria-pressed={deep}
+          aria-label="Deep research"
+          title={!deepable ? "This model can't do deep research" : deep ? "Deep research on for this message" : "Deep research: a long report with sources"}
+          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${deep ? "bg-inv text-on-inv" : "text-faint hover:text-fg"}`}
+        >
+          <ResearchIcon />
+        </button>
         <textarea
           ref={box}
           value={value}
@@ -1151,7 +1358,7 @@ function Composer({
             }
           }}
           rows={1}
-          placeholder={placeholder}
+          placeholder={hint}
           aria-label="Message Depeche"
           disabled={disabled}
           className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"

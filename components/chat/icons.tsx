@@ -106,6 +106,16 @@ export const FileIcon = (p: P) => (
     <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5" />
   </svg>
 );
+export const DownloadIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14" />
+  </svg>
+);
+export const BrushIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M14.5 4.5l5 5L11 18l-5-5zM6 13l-1.5 1.5C3 16 3.5 19 3.5 20.5 5 20.5 8 21 9.5 19.5L11 18" />
+  </svg>
+);
 export const ArchiveIcon = (p: P) => (
   <svg {...base} width={20} height={20} {...p}>
     <path d="M4 7h16v12H4zM3 4h18v3H3zM10 11h4" />

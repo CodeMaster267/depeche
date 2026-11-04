@@ -23,6 +23,8 @@ export type Pending = {
   status: "uploading" | "ready" | "error";
   error?: string;
   ref?: FileRef;
+  /** Already stored (a picture from this chat being edited): removing it here never deletes it. */
+  kept?: boolean;
 };
 
 /** What the file picker offers. Other kinds can't be sent to a model. */
@@ -129,15 +131,24 @@ export function useAttachments(userId: string) {
 
   function remove(id: string) {
     const item = live.current.find((x) => x.id === id);
-    if (item?.preview) URL.revokeObjectURL(item.preview);
-    if (item?.ref) supabaseBrowser().storage.from(UPLOAD_BUCKET).remove([item.ref.path]).catch(() => {});
+    if (item?.preview && !item.kept) URL.revokeObjectURL(item.preview);
+    if (item?.ref && !item.kept) supabaseBrowser().storage.from(UPLOAD_BUCKET).remove([item.ref.path]).catch(() => {});
     setItems((list) => list.filter((x) => x.id !== id));
+  }
+
+  /** Adds a file that is already stored, such as a picture to edit. */
+  async function attach(ref: FileRef) {
+    if (live.current.some((x) => x.ref?.path === ref.path) || live.current.length >= MAX_FILES_PER_MESSAGE) return;
+    const id = crypto.randomUUID();
+    setItems((list) => [...list, { id, name: ref.name, mime: ref.mime, size: ref.size, status: "ready", ref, kept: true }]);
+    const { data } = await supabaseBrowser().storage.from(UPLOAD_BUCKET).createSignedUrl(ref.path, 3600);
+    if (data?.signedUrl) patch(id, { preview: data.signedUrl });
   }
 
   /** Hands over what's ready to send and empties the tray (the files stay uploaded). */
   function take(): FileRef[] {
     const refs = live.current.flatMap((x) => (x.status === "ready" && x.ref ? [x.ref] : []));
-    for (const x of live.current) if (x.preview) URL.revokeObjectURL(x.preview);
+    for (const x of live.current) if (x.preview && !x.kept) URL.revokeObjectURL(x.preview);
     setItems([]);
     return refs;
   }
@@ -145,6 +156,7 @@ export function useAttachments(userId: string) {
   return {
     items,
     add,
+    attach,
     remove,
     take,
     uploading: items.some((x) => x.status === "uploading"),
