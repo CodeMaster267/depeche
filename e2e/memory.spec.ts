@@ -79,8 +79,13 @@ test("a dismissed suggestion is never kept", async ({ page }) => {
   await page.getByRole("dialog", { name: "Choose a model" }).getByRole("button", { name: /Gemini 3\.8 Flash/ }).click();
   await page.getByLabel("Message Depeche").fill("My favourite colour is black");
   await page.getByRole("button", { name: "Send" }).click();
-  await page.getByTestId("memory-suggestion").getByRole("button", { name: "No thanks" }).click();
-  await expect(page.getByTestId("memory-suggestion")).toHaveCount(0);
+  // As above: tap again if Safari took the tap before the page was ready for it.
+  await expect(page.getByTestId("memory-suggestion")).toBeVisible({ timeout: 15_000 });
+  await expect(async () => {
+    const noThanks = page.getByTestId("memory-suggestion").getByRole("button", { name: "No thanks" });
+    if (await noThanks.isVisible()) await noThanks.click();
+    await expect(page.getByTestId("memory-suggestion")).toHaveCount(0, { timeout: 3_000 });
+  }).toPass({ timeout: 15_000 });
   await expect
     .poll(async () => (await db.from("memories").select("status").eq("owner_id", user.user!.id).single()).data?.status)
     .toBe("rejected");

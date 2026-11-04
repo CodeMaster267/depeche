@@ -8,12 +8,15 @@ import { decideMemory } from "@/app/memory/actions";
 export function MemorySuggestion({ memory }: { memory: { id: string; content: string } }) {
   const [answer, setAnswer] = useState<"kept" | "dismissed" | null>(null);
   const [pending, start] = useTransition();
-  // Say "Remembered." only once it is saved, so leaving the page straight away can't lose it.
-  const decide = (keep: boolean) =>
+  // "No thanks" hides the card at once. "Remembered." shows only once it is saved, so leaving the
+  // page straight away can't lose it.
+  const decide = (keep: boolean) => {
+    if (!keep) setAnswer("dismissed");
     start(async () => {
       await decideMemory(memory.id, keep);
-      setAnswer(keep ? "kept" : "dismissed");
+      if (keep) setAnswer("kept");
     });
+  };
 
   if (answer === "dismissed") return null;
   if (answer === "kept") {
