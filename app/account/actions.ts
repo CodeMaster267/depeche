@@ -103,5 +103,5 @@ export async function addDemoKey(_: AccountState, form: FormData): Promise<Accou
   const { error } = await supabaseAdmin().rpc("add_demo_key", { p_actor: me.userId, p_hash: demoKeyHash(word) });
   if (error) return { error: friendly(error) };
   revalidatePath("/account");
-  return { ok: "Added. It works once." };
+  return { ok: "Added." };
 }

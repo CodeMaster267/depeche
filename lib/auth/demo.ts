@@ -28,6 +28,12 @@ export function demoKeyHash(word: string): string {
   return createHmac("sha256", cachedKey).update(normalDemoKey(word)).digest("hex");
 }
 
+/** A keyed hash of the random id this browser keeps for demo keys, so the raw id isn't stored. */
+export function demoDeviceHash(device: string): string {
+  demoKeyHash("");
+  return createHmac("sha256", cachedKey!).update(`device:${device}`).digest("hex");
+}
+
 /** Marks a new sign-in session of the owner's as a demo, and forgets demos that have ended. */
 export async function markDemoSession(userId: string, sessionId: string): Promise<void> {
   const admin = supabaseAdmin();

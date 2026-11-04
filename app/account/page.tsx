@@ -111,14 +111,14 @@ export default async function Account() {
           <Section title="Demo keys">
             <p className="text-[15px] text-mute">
               Someone who isn&apos;t signed in can type a demo key under &ldquo;Have a demo key?&rdquo; to use your account
-              once, for up to 12 hours. They can&apos;t open this page, your family&apos;s API keys or members, or Health. To
+              until they close the tab (12 hours at most). Each key works once on each device; they aren&apos;t told that. They can&apos;t open this page, your family&apos;s API keys or members, or Health. To
               end a demo early, use Sign out everywhere.
             </p>
             {(demoKeys ?? []).length ? (
               <ul className="flex flex-col gap-1 text-[15px]" data-testid="demo-keys">
                 {(demoKeys ?? []).map((k, i) => (
                   <li key={k.id}>
-                    Key {i + 1}: {k.used_at ? `used ${when(k.used_at)}` : "not used yet"}
+                    Key {i + 1}: {k.used_at ? `first used ${when(k.used_at)}` : "not used yet"}
                   </li>
                 ))}
               </ul>

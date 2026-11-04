@@ -60,6 +60,22 @@ describe("demo keys", () => {
     expect(row.used).toBe(true);
   });
 
+  it("work once on each device, and each device's uses are counted separately", async () => {
+    const [{ id: k }] = await sr<{ id: string }>("select add_demo_key($1, $2) as id", [P.hasan, H2]);
+    expect(k).toBeTruthy();
+    const D1 = "d".repeat(64);
+    const D2 = "e".repeat(64);
+    expect(await sr("select use_demo_key_on_device($1, $2) as ok", [H2, D1])).toEqual([{ ok: true }]);
+    expect(await sr("select use_demo_key_on_device($1, $2) as ok", [H2, D1])).toEqual([{ ok: false }]);
+    expect(await sr("select use_demo_key_on_device($1, $2) as ok", [H2, D2])).toEqual([{ ok: true }]);
+    expect(await sr("select use_demo_key_on_device($1, $2) as ok", ["c".repeat(64), D2])).toEqual([{ ok: false }]);
+    expect(await sr("select use_demo_key_on_device($1, $2) as ok", [H2, "short"])).toEqual([{ ok: false }]);
+    for (const who of [P.hasan, P.amir, null]) {
+      await expect(rows(db, who, "select * from public.demo_key_uses")).rejects.toThrow(/permission denied/);
+      await expect(rows(db, who, "select use_demo_key_on_device($1, $2)", [H2, "f".repeat(64)])).rejects.toThrow(/permission denied/);
+    }
+  });
+
   it("can't be re-added once used", async () => {
     await expect(sr("select add_demo_key($1, $2)", [P.hasan, H1])).rejects.toThrow(/already added/);
   });
