@@ -1,12 +1,15 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { Button, Field, GoogleMark, Kept, Notice, keepOnError } from "@/components/ui";
 import { EmailCodeForm } from "@/components/EmailCodeForm";
 import { sendEmailLink, signInWithGoogle, signInWithPassword } from "./actions";
+import { clearDrafts } from "@/lib/chat/composer";
 
 /** Email link first, Google second, username and password one tap away (as in the approved design). */
 export function SignInForms() {
+  // Signed out: unsent drafts from the last person on this device go too.
+  useEffect(() => clearDrafts(), []);
   const [mode, setMode] = useState<"email" | "password">("email");
   const [emailState, emailAction, emailPending] = useActionState(keepOnError(sendEmailLink), undefined);
   const [pwState, pwAction, pwPending] = useActionState(keepOnError(signInWithPassword), undefined);

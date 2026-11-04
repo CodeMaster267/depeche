@@ -3,7 +3,7 @@ import { getMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
-import { MAX_SEARCHES, canLookUp, estimateCost, findModel, searchCost } from "@/lib/ai/models";
+import { MAX_SEARCHES, canLookUp, canThinkHarder, estimateCost, findModel, searchCost } from "@/lib/ai/models";
 import { ProviderError, fakeAi, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
 import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOfferChatSearch } from "@/lib/chat/search";
 import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions, type RememberedFact } from "@/lib/chat/memory";
@@ -60,6 +60,8 @@ type Body = {
   quote?: unknown;
   /** One of two or three models answering the same question side by side: the group and its place. */
   compare?: { id?: unknown; slot?: unknown };
+  /** "Think harder": the model's highest usual reasoning effort, where it takes one. */
+  harder?: boolean;
 };
 
 /** The most turns a temporary chat sends back with each message. */
@@ -197,6 +199,8 @@ export async function POST(req: NextRequest) {
   // The monthly limit is a hard one: reserve the most this reply could cost before anything is
   // spent, counting other replies still being written. The reply is then kept short enough to fit.
   const search = body.search === true;
+  // Thinking harder costs more output, which stays within the same spending hold.
+  const harder = body.harder === true && canThinkHarder(model);
   // What the person asked Depeche to remember. Their own rows only, read as them. A temporary chat
   // neither uses nor suggests memories.
   const { data: remembered } = temporary
@@ -494,7 +498,7 @@ export async function POST(req: NextRequest) {
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch, cacheKey: finalChatId ?? undefined })) {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch, cacheKey: finalChatId ?? undefined, harder })) {
           if (ev.type !== "thinking") clock.stopped();
           if (ev.type === "thinking") {
             clock.thinking();
@@ -574,6 +578,7 @@ export async function POST(req: NextRequest) {
           ...(usage.cacheRead ? { cached: usage.cacheRead } : {}),
           ...(estimated ? { estimated } : {}),
         },
+        ...(harder ? { harder: true } : {}),
         ...(reasoning.trim() ? { reasoning, thoughtMs: clock.ms } : {}),
         ...(queries.length ? { queries } : {}),
         ...(lookups.length ? { lookups } : {}),
