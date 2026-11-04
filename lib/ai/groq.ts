@@ -34,7 +34,7 @@ export const GROQ_VISION_MODEL = VISION_MODEL;
 
 export async function* groqReply(req: ReplyRequest): AsyncGenerator<StreamEvent> {
   let model = req.model;
-  const { apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT } = req;
+  const { apiKey, system, turns, signal, search, think = true, maxOutput = MAX_OUTPUT } = req;
   const pictures = (turns.at(-1)?.files ?? []).filter((f) => f.mime.startsWith("image/"));
   // Only Qwen can see pictures, so it answers a message that has some.
   const vision = findModel(VISION_MODEL);
@@ -59,7 +59,7 @@ export async function* groqReply(req: ReplyRequest): AsyncGenerator<StreamEvent>
         stream: true,
         stream_options: { include_usage: true },
         ...(maxTokens ? { max_completion_tokens: maxTokens } : {}),
-        ...reasoningOptions(model, !!search),
+        ...reasoningOptions(model, !!search, think),
         ...(search && canBrowse(model) ? { tools: [{ type: "browser_search" }] as never, tool_choice: "auto" as const } : {}),
       },
       { signal },
@@ -93,7 +93,8 @@ export async function* groqReply(req: ReplyRequest): AsyncGenerator<StreamEvent>
   let searches = 0;
   for await (const chunk of stream) {
     const choice = chunk.choices?.[0];
-    const delta = choice?.delta as { content?: string | null; executed_tools?: GroqTool[] } | undefined;
+    const delta = choice?.delta as { content?: string | null; reasoning?: string | null; executed_tools?: GroqTool[] } | undefined;
+    if (delta?.reasoning) yield { type: "thinking", text: delta.reasoning };
     for (const tool of delta?.executed_tools ?? []) {
       const ev = groqTool(tool, seenTools, sources);
       if (ev.searched) {
@@ -133,9 +134,14 @@ function canBrowse(model: Model): boolean {
   return model.id.startsWith("openai/gpt-oss");
 }
 
-/** Reasoning stays out of the reply text. Groq advises low effort when browsing. */
-function reasoningOptions(model: Model, search: boolean): object {
-  return canBrowse(model) ? { include_reasoning: false, reasoning_effort: search ? "low" : "medium" } : { reasoning_format: "hidden" };
+/**
+ * Reasoning comes in its own field, never inside the reply text, and is shown collapsed. Groq
+ * advises low effort when browsing.
+ */
+function reasoningOptions(model: Model, search: boolean, think: boolean): object {
+  return canBrowse(model)
+    ? { include_reasoning: think, reasoning_effort: search ? "low" : "medium" }
+    : { reasoning_format: think ? "parsed" : "hidden" };
 }
 
 function errorText(e: unknown): string {
