@@ -607,7 +607,8 @@ body {
 }
 .ripple-field[data-ripple="ready"],
 .ripple-field[data-ripple="moving"],
-.ripple-field[data-ripple="drifting"] {
+.ripple-field[data-ripple="drifting"],
+.ripple-field[data-ripple="still"] {
   opacity: 1;
 }
 

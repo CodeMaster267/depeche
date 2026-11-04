@@ -5,6 +5,7 @@ import { letterflip, rippleMode, type RippleMode } from "@/lib/ripple/letterflip
 
 /** What the field repeats: the wordmark, lowercase, as a faint wall of type. */
 const WORDS = "depeche  depeche   depeche  depeche    depeche   depeche ";
+const START_AFTER_MS = 1200;
 
 /**
  * The letterflip ripple behind a page (sign-in, empty new chat). With a mouse it follows the
@@ -28,8 +29,18 @@ export function RippleField({ clear, className = "absolute inset-0" }: { clear?:
   }, []);
 
   useEffect(() => {
-    if (!mode || !canvas.current) return;
-    return letterflip(canvas.current, { text: WORDS, clearSelector: clear, mode }) ?? undefined;
+    const el = canvas.current;
+    if (!mode || !el) return;
+    // Start once the page has settled, so setting up WebGL never competes with the page itself
+    // loading or with someone's first tap. The field fades in, so the wait isn't visible.
+    let stop: (() => void) | null | undefined;
+    const timer = window.setTimeout(() => {
+      stop = letterflip(el, { text: WORDS, clearSelector: clear, mode });
+    }, START_AFTER_MS);
+    return () => {
+      clearTimeout(timer);
+      stop?.();
+    };
   }, [mode, clear]);
 
   if (!mode) return null;

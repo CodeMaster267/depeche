@@ -28,6 +28,7 @@ const FONT_PX = 13;
 const LINE = 20; // letter row height, CSS px
 const FEATHER = 36; // soft edge round areas kept clear of letters, CSS px
 const MAX_CLEAR = 4;
+const SLOW_KEY = "depeche-ripple-slow";
 const STANDINS = "abcdeghknopqsuvxyz0123456789^][_/\\<>=+*#%&?!:;.";
 const RED = [1, 0x1e / 255, 0x3c / 255];
 const CYAN = [0, 0xe5 / 255, 1];
@@ -482,8 +483,32 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
   }));
   let t0 = 0;
   let visible = true;
+  let slow = (() => {
+    try {
+      return sessionStorage.getItem(SLOW_KEY) === "1";
+    } catch {
+      return false;
+    }
+  })();
+  // A device that can't keep up (no real GPU, or a struggling one) gets a still field instead of
+  // a page that stutters: if frames arrive slower than about 22 a second while drifting, stop, and
+  // remember it for the rest of the visit.
+  let lastFrame = 0, gapAvg = 16, frames = 0;
   const drift = (now: number) => {
     raf = requestAnimationFrame(drift);
+    if (lastFrame) {
+      gapAvg += (Math.min(now - lastFrame, 500) - gapAvg) * 0.1;
+      if (++frames > 10 && gapAvg > 45) {
+        try {
+          sessionStorage.setItem(SLOW_KEY, "1");
+        } catch {}
+        pauseDrift();
+        canvas.dataset.ripple = "still";
+        slow = true;
+        return;
+      }
+    }
+    lastFrame = now;
     if (now - lastStep < 33) return;
     lastStep = now;
     const t = (now - t0) / 1000;
@@ -506,6 +531,13 @@ export function letterflip(canvas: HTMLCanvasElement, opts: LetterflipOptions): 
   };
   const startDrift = () => {
     if (raf || stopped || !ready || !visible) return;
+    if (slow) {
+      canvas.dataset.ripple = "still";
+      return;
+    }
+    lastFrame = 0;
+    frames = 0;
+    canvas.dataset.drifted = "1";
     if (!t0) t0 = performance.now();
     canvas.dataset.ripple = "drifting";
     raf = requestAnimationFrame(drift);

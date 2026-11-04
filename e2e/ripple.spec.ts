@@ -5,13 +5,19 @@ import { OWNER, noSidewaysScroll, signInWithPassword, watchErrors } from "./help
 const isDesktop = (page: Page) => (page.viewportSize()?.width ?? 0) >= 900;
 
 /** On a touch screen the field drifts by itself, without anyone touching it. */
-async function expectDrifting(page: Page) {
+async function expectDrifting(page: Page, first = true) {
   const field = page.getByTestId("ripple");
   await expect(field).toHaveCount(1);
   await expect(field).toHaveAttribute("data-mode", "ambient");
   await expect(field).toHaveAttribute("aria-hidden", "true");
   expect(await field.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe("none");
-  if (await canRun(page)) await expect(field).toHaveAttribute("data-ripple", "drifting");
+  if (await canRun(page)) {
+    // It starts drifting. Where the browser can't keep up (CI has no GPU), it settles into a still
+    // field rather than slowing the page down.
+    // (Once a page found it too slow, later pages in the same visit start still.)
+    if (first) await expect(field).toHaveAttribute("data-drifted", "1");
+    await expect(field).toHaveAttribute("data-ripple", /^(drifting|still)$/);
+  }
 }
 
 /** The field needs WebGL2 with renderable half-float textures; without it the page stays plain. */
@@ -24,9 +30,11 @@ async function canRun(page: Page) {
 
 /** Sweeps the mouse across the left side of the screen, like someone reaching for the form. */
 async function sweep(page: Page) {
-  await page.mouse.move(120, 650);
+  const box = (await page.getByTestId("ripple").boundingBox())!;
+  const x = box.x + 40, y = box.y + Math.min(box.height - 40, 600);
+  await page.mouse.move(x, y);
   for (let i = 0; i <= 30; i++) {
-    await page.mouse.move(120 + i * 10, 650 - i * 12);
+    await page.mouse.move(x + i * 10, y - i * 12);
     await page.waitForTimeout(16);
   }
 }
@@ -80,7 +88,7 @@ test("new chat: the field sits behind an empty chat, clear of the greeting", asy
   await expect(hi).toBeVisible();
   const field = page.getByTestId("ripple");
   if (isDesktop(page)) await expect(field).toHaveAttribute("data-mode", "mouse");
-  else await expectDrifting(page);
+  else await expectDrifting(page, false);
   // The field stays inside the conversation area: the composer and header sit outside it.
   const box = (await field.boundingBox())!;
   const composer = (await page.locator("textarea").last().boundingBox())!;
