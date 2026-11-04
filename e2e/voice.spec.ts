@@ -191,11 +191,13 @@ test("the languages you speak can be picked", async ({ page }) => {
   await ready(page);
   await page.getByRole("button", { name: "Voice chat" }).click();
   const dialog = page.getByRole("dialog", { name: "Voice chat" });
+  // English, with Arabic and Urdu expected too, unless the person picks otherwise.
+  await expect(dialog.getByRole("button", { name: "Languages: English + Arabic + Urdu" })).toBeVisible();
   await dialog.getByRole("button", { name: /^Languages:/ }).click();
-  await dialog.getByRole("group", { name: "Languages you speak" }).getByRole("button", { name: "Urdu" }).click();
-  await expect(dialog.getByRole("button", { name: /^Languages:.*Urdu/ })).toBeVisible();
+  await dialog.getByRole("group", { name: "Languages you speak" }).getByRole("button", { name: "Arabic" }).click();
+  await expect(dialog.getByRole("button", { name: "Languages: English + Urdu" })).toBeVisible();
   // The next turn listens for both languages.
-  const sent = page.waitForRequest((r) => r.url().endsWith("/api/voice/live") && (r.headers()["x-languages"] ?? "").includes("ur"));
+  const sent = page.waitForRequest((r) => r.url().endsWith("/api/voice/live") && r.headers()["x-languages"] === "en,ur");
   await expect(sent).resolves.toBeTruthy();
   await dialog.getByRole("button", { name: "End voice chat" }).click();
 });

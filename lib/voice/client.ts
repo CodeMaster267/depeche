@@ -278,6 +278,7 @@ export function encodeWav(chunks: Float32Array[], length: number, rate: number):
 }
 
 const LANGUAGES_KEY = "depeche:voice-languages";
+const DEFAULT_EXTRA = ["ar", "ur"];
 
 /** The languages this person speaks, main one first: their choice, or the device's languages. */
 export function voiceLanguages(): string[] {
@@ -286,7 +287,9 @@ export function voiceLanguages(): string[] {
     if (Array.isArray(saved) && saved.length && saved.every((l) => typeof l === "string")) return saved.slice(0, 4);
   } catch {}
   const device = (navigator.languages?.length ? navigator.languages : [navigator.language || "en"]).map((l) => l.slice(0, 2).toLowerCase());
-  return [...new Set(device)].slice(0, 4);
+  // The families using Depeche often slip some Arabic or Urdu into English, so both are expected
+  // unless the person picks otherwise.
+  return [...new Set([...device, ...DEFAULT_EXTRA])].slice(0, 4);
 }
 
 export function saveVoiceLanguages(languages: string[]) {
