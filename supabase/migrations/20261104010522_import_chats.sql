@@ -101,7 +101,8 @@ create function public.import_chats(p_owner uuid, p_chats jsonb) returns jsonb
                  nullif(left(e.v->>'model', 100), '') as model, (e.v->>'created_at')::timestamptz as at
           from jsonb_array_elements(ch->'messages') with ordinality as e (v, ord)
           where e.v->>'role' in ('user', 'assistant') and coalesce(e.v->>'text', '') <> ''
-        ) s;
+        ) s
+        order by s.ord; -- each message after its parent, which messages_parent_check looks for
 
       used := used + size;
       made := made + 1;
