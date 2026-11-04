@@ -3,6 +3,7 @@ import OpenAI, { toFile } from "openai";
 import { GoogleGenAI, Modality, ThinkingLevel } from "@google/genai";
 import { fakeAi } from "@/lib/ai/providers";
 import type { Provider } from "@/lib/ai/models";
+import { providerFileName } from "@/lib/voice/notes";
 
 /**
  * Speech in and out, on the family's own keys.
@@ -108,6 +109,15 @@ export const MAX_SPEAK_CHARS = 4_000;
 
 export type Transcript = { text: string; model: string; cost: number; input: number; output: number };
 
+/**
+ * A recording in any format the providers take (a voice note, say), with its length in seconds.
+ * Dictation sends plain WAV bytes instead.
+ */
+export type Recording = { bytes: Uint8Array; mime: string; seconds: number };
+
+/** Above this, Gemini is sent the recording through its file store: a request can't pass 20 MB. */
+const GOOGLE_INLINE_BYTES = 12 * 1024 * 1024;
+
 /** Seconds of audio in a 16-bit mono WAV file, read from its header. */
 export function wavSeconds(wav: Uint8Array): number {
   if (wav.length < 44) return 0;
@@ -144,9 +154,19 @@ export function languageHint(languages: string[]): string {
  * voice settings. Without them, a model guesses from the sound alone and, on a short or noisy clip,
  * can pick a language nobody spoke.
  */
-export async function transcribe(provider: Provider, apiKey: string, wav: Uint8Array, signal: AbortSignal, languages: string[] = []): Promise<Transcript> {
+export async function transcribe(
+  provider: Provider,
+  apiKey: string,
+  audio: Uint8Array | Recording,
+  signal: AbortSignal,
+  languages: string[] = [],
+): Promise<Transcript> {
   const hint = languageHint(languages);
-  const seconds = wavSeconds(wav);
+  // A voice note can be half an hour long, so it gets more time and room than dictation.
+  const note = !(audio instanceof Uint8Array);
+  const wav = note ? audio.bytes : audio;
+  const mime = note ? audio.mime : "audio/wav";
+  const seconds = note ? audio.seconds : wavSeconds(wav);
   if (fakeAi()) {
     // Tests: a fixed sentence, so a voice turn can be followed end to end.
     return { text: "What is the quadratic formula?", model: "fake", cost: 0, input: 0, output: 0 };
@@ -154,7 +174,7 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
   if (provider === "openai") {
     const client = new OpenAI({ apiKey, maxRetries: 1 });
     const res = await client.audio.transcriptions.create(
-      { file: await toFile(wav, "speech.wav", { type: "audio/wav" }), model: VOICE.transcribe.openai.model, ...(hint ? { prompt: hint } : {}) },
+      { file: await toFile(wav, note ? providerFileName(mime) : "speech.wav", { type: mime }), model: VOICE.transcribe.openai.model, ...(hint ? { prompt: hint } : {}) },
       { signal },
     );
     return {
@@ -168,6 +188,16 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
   if (provider === "google") {
     const ai = new GoogleGenAI({ apiKey });
     const g = VOICE.transcribe.google;
+    // A big recording goes through Gemini's file store (free; Google deletes it within two days).
+    let sound: { inlineData: { mimeType: string; data: string } } | { fileData: { mimeType: string; fileUri: string } };
+    let stored: string | undefined;
+    if (wav.length > GOOGLE_INLINE_BYTES) {
+      const file = await ai.files.upload({ file: new Blob([wav as BlobPart], { type: mime }), config: { mimeType: mime, abortSignal: signal } });
+      stored = file.name;
+      sound = { fileData: { mimeType: mime, fileUri: file.uri! } };
+    } else {
+      sound = { inlineData: { mimeType: mime, data: Buffer.from(wav).toString("base64") } };
+    }
     const ask = (model: string, minimal: boolean) =>
       ai.models.generateContent({
         model,
@@ -175,16 +205,17 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
           {
             role: "user",
             parts: [
-              { inlineData: { mimeType: "audio/wav", data: Buffer.from(wav).toString("base64") } },
+              sound,
               {
-                text: `Transcribe this recording exactly as spoken, with normal punctuation. ${hint} If languages are mixed, write each part in the language and script it was spoken in; never translate. Reply with only the words said. If nobody speaks, reply with nothing.`,
+                text: `Transcribe this recording exactly as spoken, with normal punctuation.${note ? " Start a new paragraph when the speaker or the topic changes." : ""} ${hint} If languages are mixed, write each part in the language and script it was spoken in; never translate. Reply with only the words said. If nobody speaks, reply with nothing.`,
               },
             ],
           },
         ],
         config: {
-          abortSignal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]),
-          maxOutputTokens: 2_000,
+          abortSignal: AbortSignal.any([signal, AbortSignal.timeout(note ? 240_000 : 12_000)]),
+          // Half an hour of talking is about 5,000 words.
+          maxOutputTokens: note ? 16_000 : 2_000,
           // No time spent thinking: this is copying words down, not reasoning.
           ...(minimal ? { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } } : {}),
         },
@@ -210,6 +241,7 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
         if (signal.aborted) throw e;
       }
     }
+    if (stored) ai.files.delete({ name: stored }).catch(() => {});
     if (!res) throw lastError;
     console.log("[voice] transcribed with", model, "in", Date.now() - started, "ms");
     const text = (res.text ?? "").trim();
