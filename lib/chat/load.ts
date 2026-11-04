@@ -66,7 +66,7 @@ export async function loadChat(
   const db = await supabaseServer();
   const { data: chat } = await db
     .from("chats")
-    .select("id, title, model, pinned, updated_at, compaction")
+    .select("id, title, model, pinned, updated_at, archived_at, imported_from, created_at, compaction")
     .eq("id", chatId)
     .eq("owner_id", me.userId)
     .maybeSingle<ChatRow>();

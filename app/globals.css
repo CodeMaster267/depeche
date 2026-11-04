@@ -576,6 +576,27 @@ body {
 }
 
 /*
+ * Chat menus (components/chat/ChatMenu.tsx). The menu pops in quickly; under reduced motion it
+ * just appears. In the chat list the three dots are always there on touch screens, and appear on
+ * hover or keyboard focus with a mouse, so the list stays calm.
+ */
+.menu-pop { animation: menu-pop 140ms ease-out both; transform-origin: top right; }
+@keyframes menu-pop {
+  from { opacity: 0; transform: scale(0.96) translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu-pop { animation: none; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .chat-row .chat-more { opacity: 0; }
+  .chat-row:hover .chat-more,
+  .chat-row:focus-within .chat-more,
+  .chat-row[data-active] .chat-more,
+  .chat-row .chat-more[aria-expanded="true"] { opacity: 1; }
+}
+
+/*
  * The small buttons under your own messages (edit, versions). Always shown on touch screens; with a
  * mouse or trackpad they appear when the message is hovered or focused, unless there are versions.
  */
