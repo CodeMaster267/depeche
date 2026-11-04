@@ -12,9 +12,11 @@ import { cleanSpec, cleanText, textsOf, type Spec } from "./spec";
  * anyone sees it. Nothing the model writes is ever run.
  */
 
-/** Strongest first. Hasan asked for "a bigger model" for every build. */
-export const BUILDERS = [
-  "claude-fable-5-1",
+/** My look builds use only these, in this order (Hasan, 2026-11-04: "opus, argon, or sol. Not fable"). */
+export const BUILDERS = ["claude-opus-5-5", "gemini-4-argon", "gpt-6.1-sol"];
+
+/** Gadget changes: strongest first, never Fable. */
+export const GADGET_BUILDERS = [
   "gpt-6-astra",
   "claude-opus-5-5",
   "gemini-4-argon",
@@ -25,11 +27,17 @@ export const BUILDERS = [
   "gemini-3.8-flash",
 ];
 
+/** Said when the family has no key for any My look model. */
+export const NO_BUILDER = "My look needs Claude Opus 5.5, Gemini 4 Argon or GPT-6.1 Sol, and your family has no key for any of them.";
+
 /** The most a build's answer may be. A design is about 1,500 tokens; this leaves room. */
 export const BUILD_OUTPUT = 6_000;
 
-export function pickBuilder(keys: readonly { provider: string; models: readonly string[] | null }[]): Model | undefined {
-  for (const id of BUILDERS) {
+export function pickBuilder(
+  keys: readonly { provider: string; models: readonly string[] | null }[],
+  list: readonly string[] = BUILDERS,
+): Model | undefined {
+  for (const id of list) {
     const m = findModel(id);
     if (!m) continue;
     const key = keys.find((k) => k.provider === m.provider);

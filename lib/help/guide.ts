@@ -223,8 +223,9 @@ Voice works while the app is open; iPhones don't let websites listen in the back
     text: `
 [Skills](/skills) (your name at the bottom of the side menu → Skills) teach Depeche how to help with one kind of task, like a family budget or planning a
 wedding. Add a skill to "My skills" and your chats pick it up by themselves whenever a message is about it (or names it).
-- Make a skill: describe what it should help with; a model writes it and names it. Every skill is checked for safety
-  and goes in the Library for everyone on Depeche.
+- Make a skill: describe what it should help with; Claude Opus 5.5, Gemini 4 Argon or GPT-6.1 Sol writes it and names
+  it (it needs a family key for one of them, and costs about 10 to 20 cents). Every skill is checked for safety and goes
+  in the Library for everyone on Depeche.
 - Library: search everyone's skills and tap Add (or Remove) to choose which are yours.
 - Tap a skill to see its Instructions, any Files, and "Picked up when a message mentions" (the words that trigger it).
   If you made it, "Change this skill" lets you ask for changes or edit it yourself, and Delete takes it out of the
@@ -300,8 +301,8 @@ a new PIN in Account. "Turn off app lock" turns it off on all your devices.`,
     routes: ["/design"],
     text: `
 [My look](/design) (your name at the bottom of the side menu → My look, or Account → My look) lets you redesign your own Depeche: colours, fonts,
-layout, buttons and shortcuts. Describe the look you want and tap the button to build it; the strongest model your family
-has designs it. You see a preview and choose Keep or Undo. Only you see it. Earlier looks are listed so you can go back
+layout, buttons and shortcuts. Describe the look you want and tap the button to build it; Claude Opus 5.5 designs it, or Gemini 4 Argon
+or GPT-6.1 Sol if your family has no key for Opus (with none of the three, My look says so). You see a preview and choose Keep or Undo. Only you see it. Earlier looks are listed so you can go back
 to any of them for free. You get a set number of builds a month (your admin sets it); a failed build doesn't count.
 If a look ever makes Depeche hard to use, Safe mode (on the My look page) shows standard Depeche again.`,
   },
