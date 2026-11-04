@@ -17,8 +17,11 @@ export type Model = {
   /**
    * Dollars per million tokens. `long` is a dearer rate some providers charge for every token of a
    * request once its input reaches `from` tokens.
+   *
+   * `cache` prices input the provider served from, or wrote to, its prompt cache, as multiples of
+   * the input rate (long-context rate included). Without it, cached input is charged in full.
    */
-  price: { input: number; output: number; long?: { from: number; input: number; output: number } };
+  price: { input: number; output: number; long?: { from: number; input: number; output: number }; cache?: CachePrice };
   /**
    * Set for models that make and edit pictures instead of writing replies. Each message to one is
    * a description of the picture wanted; pictures attached to it are edited. `price` above is then
@@ -34,6 +37,16 @@ export type Model = {
  * `imageInput` and `textOutput` are per million tokens, for providers that report tokens.
  */
 export type ImagePricing = { hold: number; perInput: number; imageInput?: number; textOutput?: number; flat?: number };
+
+/**
+ * Prompt cache prices, as multiples of the input rate: `read` for input served from the cache,
+ * `write` for input stored in it (charged by Anthropic and by OpenAI's GPT-6 models; 1 when there
+ * is no write fee).
+ */
+export type CachePrice = { read: number; write: number };
+
+/** Input tokens of one request that the provider read from, or wrote to, its prompt cache. */
+export type CacheUse = { read?: number; write?: number };
 
 export const PROVIDERS: { id: Provider; name: string; keyUrl: string; keyHint: string }[] = [
   {
@@ -64,18 +77,27 @@ export const PROVIDERS: { id: Provider; name: string; keyUrl: string; keyHint: s
   },
 ];
 
+/*
+ * Prompt cache prices checked 4 Nov 2026. Anthropic (Depeche marks each Claude chat for caching)
+ * charges 1.25x input to write the cache for 5 minutes and reads at 0.1x (0.05x on Opus 5.5, 0.025x
+ * on Fable 5.1). OpenAI's GPT-6 models cache by themselves: writes 1.25x for 30 minutes, reads 0.1x
+ * (0.05x on Sol and Terra). Gemini, DeepSeek and Grok cache by themselves with no write fee; their
+ * reads are the listed cached-input prices divided by the input price. Groq's are left at full
+ * price (it's for testing only), which errs high.
+ */
 export const MODELS: Model[] = [
-  { id: "claude-sonnet-5-5", provider: "anthropic", name: "Claude Sonnet 5.5", short: "Sonnet 5.5", tags: ["Fast", "Smart"], price: { input: 2, output: 10 } },
-  { id: "claude-opus-5-5", provider: "anthropic", name: "Claude Opus 5.5", short: "Opus 5.5", tags: ["Deep reasoning"], price: { input: 4, output: 20 } },
-  { id: "claude-fable-5-1", provider: "anthropic", name: "Claude Fable 5.1", short: "Fable 5.1", tags: ["Most capable"], price: { input: 10, output: 50 } },
-  { id: "claude-haiku-5-5", provider: "anthropic", name: "Claude Haiku 5.5", short: "Haiku 5.5", tags: ["Fastest"], price: { input: 0.1, output: 0.5 } },
-  { id: "gpt-6.1-sol", provider: "openai", name: "GPT-6.1 Sol", short: "GPT-6.1 Sol", tags: ["Smart"], price: { input: 2, output: 10 } },
-  { id: "gpt-6-astra", provider: "openai", name: "GPT-6 Astra", short: "GPT-6 Astra", tags: ["Most capable"], price: { input: 10, output: 50 } },
-  { id: "gpt-6.1-terra", provider: "openai", name: "GPT-6.1 Terra", short: "GPT-6.1 Terra", tags: ["Fast"], price: { input: 1, output: 5 } },
-  { id: "gpt-6-luna", provider: "openai", name: "GPT-6 Luna", short: "GPT-6 Luna", tags: ["Fastest"], price: { input: 0.1, output: 0.5 } },
-  { id: "gemini-4-argon", provider: "google", name: "Gemini 4 Argon", short: "Gemini 4 Argon", tags: ["Most capable", "Long context"], price: { input: 4, output: 20 } },
-  { id: "gemini-3.8-flash", provider: "google", name: "Gemini 3.8 Flash", short: "Gemini 3.8 Flash", tags: ["Fast"], price: { input: 1.5, output: 7.5 } },
-  { id: "gemini-3.5-flash-lite", provider: "google", name: "Gemini 3.5 Flash-Lite", short: "Flash-Lite", tags: ["Fastest"], price: { input: 0.3, output: 2.5 } },
+  // Haiku 5.5's prices rise to $0.50 / $2.50 for requests with over 100,000 input tokens.
+  { id: "claude-sonnet-5-5", provider: "anthropic", name: "Claude Sonnet 5.5", short: "Sonnet 5.5", tags: ["Fast", "Smart"], price: { input: 2, output: 10, cache: { read: 0.1, write: 1.25 } } },
+  { id: "claude-opus-5-5", provider: "anthropic", name: "Claude Opus 5.5", short: "Opus 5.5", tags: ["Deep reasoning"], price: { input: 4, output: 20, cache: { read: 0.05, write: 1.25 } } },
+  { id: "claude-fable-5-1", provider: "anthropic", name: "Claude Fable 5.1", short: "Fable 5.1", tags: ["Most capable"], price: { input: 10, output: 50, cache: { read: 0.025, write: 1.25 } } },
+  { id: "claude-haiku-5-5", provider: "anthropic", name: "Claude Haiku 5.5", short: "Haiku 5.5", tags: ["Fastest"], price: { input: 0.1, output: 0.5, long: { from: 100_000, input: 0.5, output: 2.5 }, cache: { read: 0.1, write: 1.25 } } },
+  { id: "gpt-6.1-sol", provider: "openai", name: "GPT-6.1 Sol", short: "GPT-6.1 Sol", tags: ["Smart"], price: { input: 2, output: 10, cache: { read: 0.05, write: 1.25 } } },
+  { id: "gpt-6-astra", provider: "openai", name: "GPT-6 Astra", short: "GPT-6 Astra", tags: ["Most capable"], price: { input: 10, output: 50, cache: { read: 0.1, write: 1.25 } } },
+  { id: "gpt-6.1-terra", provider: "openai", name: "GPT-6.1 Terra", short: "GPT-6.1 Terra", tags: ["Fast"], price: { input: 1, output: 5, cache: { read: 0.05, write: 1.25 } } },
+  { id: "gpt-6-luna", provider: "openai", name: "GPT-6 Luna", short: "GPT-6 Luna", tags: ["Fastest"], price: { input: 0.1, output: 0.5, cache: { read: 0.1, write: 1.25 } } },
+  { id: "gemini-4-argon", provider: "google", name: "Gemini 4 Argon", short: "Gemini 4 Argon", tags: ["Most capable", "Long context"], price: { input: 4, output: 20, cache: { read: 0.05, write: 1 } } },
+  { id: "gemini-3.8-flash", provider: "google", name: "Gemini 3.8 Flash", short: "Gemini 3.8 Flash", tags: ["Fast"], price: { input: 1.5, output: 7.5, cache: { read: 0.1, write: 1 } } },
+  { id: "gemini-3.5-flash-lite", provider: "google", name: "Gemini 3.5 Flash-Lite", short: "Flash-Lite", tags: ["Fastest"], price: { input: 0.3, output: 2.5, cache: { read: 0.1, write: 1 } } },
   // Groq's free tier costs nothing but is rate-limited. Depeche can't tell a free key from a paid
   // one, so its paid prices are used and limits err high, as with free Gemini keys.
   { id: "openai/gpt-oss-120b", provider: "groq", name: "GPT-OSS 120B (Groq)", short: "GPT-OSS 120B", tags: ["Smart", "Free tier"], price: { input: 0.15, output: 0.6 } },
@@ -83,11 +105,11 @@ export const MODELS: Model[] = [
   { id: "qwen/qwen3.8-27b", provider: "groq", name: "Qwen 3.8 27B (Groq)", short: "Qwen 3.8 27B", tags: ["Preview", "Free tier"], price: { input: 0.8, output: 4 } },
   // DeepSeek charges double at busy times (weekday mornings UTC); the busy-time price is used so
   // limits err high. Flash sees pictures; Pro doesn't, so Flash answers messages with pictures.
-  { id: "deepseek-v4-pro", provider: "deepseek", name: "DeepSeek V4 Pro", short: "DeepSeek V4 Pro", tags: ["Smart", "Long context"], price: { input: 1.32, output: 3.96 } },
-  { id: "deepseek-flash", provider: "deepseek", name: "DeepSeek V4.1 Flash", short: "DeepSeek Flash", tags: ["Fast", "Long context"], price: { input: 0.3, output: 1.2 } },
+  { id: "deepseek-v4-pro", provider: "deepseek", name: "DeepSeek V4 Pro", short: "DeepSeek V4 Pro", tags: ["Smart", "Long context"], price: { input: 1.32, output: 3.96, cache: { read: 1 / 30, write: 1 } } },
+  { id: "deepseek-flash", provider: "deepseek", name: "DeepSeek V4.1 Flash", short: "DeepSeek Flash", tags: ["Fast", "Long context"], price: { input: 0.3, output: 1.2, cache: { read: 0.02, write: 1 } } },
   // xAI doubles every token's price once a request's input reaches 200,000 tokens.
-  { id: "grok-4.7", provider: "xai", name: "Grok 4.7", short: "Grok 4.7", tags: ["Most capable"], price: { input: 2, output: 6, long: { from: 200_000, input: 4, output: 12 } } },
-  { id: "grok-4.3", provider: "xai", name: "Grok 4.3", short: "Grok 4.3", tags: ["Fast", "Long context"], price: { input: 1.25, output: 2.5, long: { from: 200_000, input: 2.5, output: 5 } } },
+  { id: "grok-4.7", provider: "xai", name: "Grok 4.7", short: "Grok 4.7", tags: ["Most capable"], price: { input: 2, output: 6, long: { from: 200_000, input: 4, output: 12 }, cache: { read: 0.25, write: 1 } } },
+  { id: "grok-4.3", provider: "xai", name: "Grok 4.3", short: "Grok 4.3", tags: ["Fast", "Long context"], price: { input: 1.25, output: 2.5, long: { from: 200_000, input: 2.5, output: 5 }, cache: { read: 0.16, write: 1 } } },
 
   // Picture models (prices checked 4 Nov 2026). OpenAI's GPT Image 2.5: text $5, pictures in $8,
   // pictures out $30 per million tokens; a 1024px picture at the highest quality is about $0.21.
@@ -129,10 +151,22 @@ export function priceBand(m: Model): string {
   return blended < 10 ? "$" : blended < 40 ? "$$" : blended < 100 ? "$$$" : "$$$$";
 }
 
-/** Estimated cost of one reply, in dollars. */
-export function estimateCost(m: Model, inputTokens: number, outputTokens: number): number {
+/**
+ * Estimated cost of one reply, in dollars. `inputTokens` is all the input, cached or not; `cache`
+ * says how much of it was read from or written to the provider's prompt cache.
+ */
+export function estimateCost(m: Model, inputTokens: number, outputTokens: number, cache: CacheUse = {}): number {
   const p = priceFor(m, inputTokens);
-  return (inputTokens * p.input + outputTokens * p.output) / 1_000_000;
+  const read = Math.min(Math.max(0, cache.read ?? 0), inputTokens);
+  const write = Math.min(Math.max(0, cache.write ?? 0), inputTokens - read);
+  const rate = m.price.cache ?? { read: 1, write: 1 };
+  const input = (inputTokens - read - write) * p.input + read * p.input * rate.read + write * p.input * rate.write;
+  return (input + outputTokens * p.output) / 1_000_000;
+}
+
+/** The most one input token can cost: a cache write where that costs more than plain input. */
+export function worstInputRate(m: Model): number {
+  return Math.max(1, m.price.cache?.write ?? 1);
 }
 
 /** The price of a request with this much input: the long-context rate once it applies. */
