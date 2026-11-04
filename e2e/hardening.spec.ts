@@ -211,7 +211,7 @@ test.describe("privacy", () => {
     await expect(member.getByText("Type delete to confirm.")).toBeVisible();
     await member.getByLabel("Type delete to confirm").fill("delete");
     await member.getByRole("button", { name: "Delete all my chats and memories" }).click();
-    await expect(member.getByText("All your chats and memories are deleted.")).toBeVisible();
+    await expect(member.getByText("All your chats, memories and personal instructions are deleted.")).toBeVisible();
 
     const db = admin();
     expect((await db.from("chats").select("id").eq("owner_id", kai.id)).data).toEqual([]);
