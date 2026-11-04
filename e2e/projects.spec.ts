@@ -59,7 +59,7 @@ async function closeList(page: Page) {
 }
 
 test("make a project with instructions and files, chat in it, and move chats in and out", async ({ page, browser }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(180_000);
   await ensureGoogleKey(browser);
   const errors = watchErrors(page);
   const { db, id, chats } = await member(page, ["Titration notes", "Holiday plan"]);

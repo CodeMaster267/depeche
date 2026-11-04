@@ -69,11 +69,15 @@ test("rename, pin, archive, restore and delete from a chat's three dots in the l
 
   // Archive takes it out of the list and keeps it.
   await list.getByRole("button", { name: "Options for Trip to Lahore" }).click();
+  // The archive is saved by a request whose answer also redraws the page; let it finish before
+  // reloading, as Safari reports a request cut short by a reload as an error.
+  const archived = page.waitForResponse((r) => r.request().method() === "POST");
   await page.getByRole("menuitem", { name: "Archive" }).click();
   await expect(list.getByRole("link", { name: "Trip to Lahore" })).toHaveCount(0);
   await expect.poll(async () => (await db.from("chats").select("archived_at").eq("owner_id", id).eq("title", "Trip to Lahore").single()).data?.archived_at).not.toBeNull();
 
   // Still archived after a reload, and found under Archived chats, where it can be restored.
+  await (await archived).finished();
   await page.reload();
   list = await chatList(page);
   await expect(list.getByRole("link", { name: "Trip to Lahore" })).toHaveCount(0);
