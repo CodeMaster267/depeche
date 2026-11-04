@@ -108,7 +108,7 @@ export default async function Account() {
         </Section>
         <Section title="Delete">
           <p className="text-[15px] text-mute">
-            Permanently delete all your chats and memories. They&apos;re gone straight away, and out of Depeche&apos;s
+            Permanently delete all your chats, memories and personal instructions. They&apos;re gone straight away, and out of Depeche&apos;s
             backups within 30 days. Your spending history stays, without any chat in it.
           </p>
           <DeleteEverythingForm />
