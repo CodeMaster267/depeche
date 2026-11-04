@@ -30,11 +30,17 @@ async function canRun(page: Page) {
 
 /** Sweeps the mouse across the left side of the screen, like someone reaching for the form. */
 async function sweep(page: Page) {
+  // Note every state the field passes through, so a short ripple isn't missed between checks.
+  await page.getByTestId("ripple").evaluate((el) => {
+    const seen: string[] = [];
+    (window as unknown as { rippleSeen: string[] }).rippleSeen = seen;
+    new MutationObserver(() => seen.push(el.getAttribute("data-ripple") ?? "")).observe(el, { attributeFilter: ["data-ripple"] });
+  });
   const box = (await page.getByTestId("ripple").boundingBox())!;
   const x = box.x + 40, y = box.y + Math.min(box.height - 40, 600);
   await page.mouse.move(x, y);
   for (let i = 0; i <= 30; i++) {
-    await page.mouse.move(x + i * 10, y - i * 12);
+    await page.mouse.move(x + i * 16, y - i * 14);
     await page.waitForTimeout(16);
   }
 }
@@ -64,7 +70,7 @@ test("sign-in: the letterflip field ripples under a mouse on desktop and drifts 
   }
   await expect(field).toHaveAttribute("data-ripple", "ready");
   await sweep(page);
-  await expect(field).toHaveAttribute("data-ripple", "moving");
+  await expect.poll(() => page.evaluate(() => (window as unknown as { rippleSeen: string[] }).rippleSeen)).toContain("moving");
   // It stops itself once the ripple has faded, so an idle page costs nothing.
   await expect(field).toHaveAttribute("data-ripple", "ready", { timeout: 15_000 });
   // The form still works through it.
@@ -96,7 +102,7 @@ test("new chat: the field sits behind an empty chat, clear of the greeting", asy
   if (isDesktop(page) && (await canRun(page))) {
     await expect(field).toHaveAttribute("data-ripple", "ready");
     await sweep(page);
-    await expect(field).toHaveAttribute("data-ripple", "moving");
+    await expect.poll(() => page.evaluate(() => (window as unknown as { rippleSeen: string[] }).rippleSeen)).toContain("moving");
     await page.screenshot({ path: test.info().outputPath("new-chat-ripple.png") });
   }
   // The greeting stays on top of the field.
