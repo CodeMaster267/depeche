@@ -67,7 +67,7 @@ export function NewSkillForm({ ideas }: { ideas: string[] }) {
       <Button type="submit" disabled={busy || brief.trim().length < 8} aria-busy={busy || undefined}>
         {busy ? "Writing…" : "Make skill"}
       </Button>
-      <p className="text-[13px] text-mute">Uses your family&apos;s AI keys and counts toward your monthly limit, usually a cent or two.</p>
+      <p className="text-[13px] text-mute">Uses your family&apos;s AI keys and counts toward your monthly limit, usually 10 to 20 cents.</p>
     </form>
   );
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { screenRules } from "@/lib/skills/screen";
 import { chooseSkills, score, skillsPrompt, type UsableSkill } from "@/lib/skills/match";
 import { cleanDraft, fileName, skillName } from "@/lib/skills/skill";
@@ -103,5 +103,25 @@ describe("picking up skills", () => {
     expect(p.match(/<\/skill>/g)?.length).toBe(1);
     expect(p.match(/<\/skill_file>/g)?.length).toBe(1);
     expect(skillsPrompt("Amir", [])).toBe("");
+  });
+});
+
+vi.mock("server-only", () => ({}));
+const { pickModel, WRITERS, CHECKERS } = await import("@/lib/skills/write");
+
+describe("which models write and check skills", () => {
+  const all = [{ provider: "anthropic", models: null }, { provider: "google", models: null }, { provider: "openai", models: null }, { provider: "deepseek", models: null }, { provider: "xai", models: null }, { provider: "groq", models: null }];
+
+  it("only Opus 5.5, Argon or Sol, never Fable (Hasan)", () => {
+    expect(WRITERS).toEqual(["claude-opus-5-5", "gemini-4-argon", "gpt-6.1-sol"]);
+    expect(CHECKERS).toEqual(WRITERS);
+    expect(pickModel(WRITERS, all)?.id).toBe("claude-opus-5-5");
+    expect(pickModel(WRITERS, [{ provider: "anthropic", models: ["claude-fable-5-1", "claude-sonnet-5-5"] }, { provider: "openai", models: null }])?.id).toBe("gpt-6.1-sol");
+    expect(pickModel(WRITERS, [{ provider: "google", models: null }])?.id).toBe("gemini-4-argon");
+  });
+
+  it("no fallback to any other model", () => {
+    expect(pickModel(WRITERS, [{ provider: "deepseek", models: null }, { provider: "xai", models: null }, { provider: "groq", models: null }])).toBeUndefined();
+    expect(pickModel(WRITERS, [{ provider: "anthropic", models: ["claude-fable-5-1"] }])).toBeUndefined();
   });
 });

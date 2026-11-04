@@ -59,7 +59,10 @@ export async function runSkillJob(
   const writer = job.kind === "edit" ? null : pickModel(WRITERS, keys ?? []);
   const checker = pickModel(CHECKERS, keys ?? []);
   if ((job.kind !== "edit" && !writer) || !checker) {
-    return fail(400, me.profile.role === "admin" ? "Add an AI key in Family settings first." : "Your family admin hasn't added any AI keys yet.");
+    const need = "Skills are written by Claude Opus 5.5, Gemini 4 Argon or GPT-6.1 Sol";
+    return fail(400, me.profile.role === "admin"
+      ? `${need}. Add an Anthropic, Google or OpenAI key that can use one of them in Family settings first.`
+      : `${need}. Ask your family admin to add an Anthropic, Google or OpenAI key that can use one of them.`);
   }
   const writerKey = writer ? keyOf(writer.provider) : null;
   const checkerKey = keyOf(checker.provider);
