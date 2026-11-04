@@ -13,6 +13,9 @@ export function EmailCodeForm({ email, children, onStartOver }: { email: string;
   return (
     <form action={action} className="flex flex-col gap-3">
       <Notice>{children}</Notice>
+      <p className="px-1 text-[14px] text-mute" data-testid="check-spam">
+        Not there after a minute? Look in your spam or junk folder too.
+      </p>
       <input type="hidden" name="email" value={email} />
       <Field label="Code from the email" name="code" inputMode="numeric" autoComplete="one-time-code" maxLength={10} required />
       {state?.error ? <Notice tone="error">{state.error}</Notice> : null}

@@ -23,7 +23,7 @@ type Input = { role: "user" | "assistant"; content: string | Content[] };
 /** xAI takes JPEG and PNG pictures of up to 20 MB. */
 const PICTURE_TYPES = new Set(["image/jpeg", "image/jpg", "image/png"]);
 
-export async function* xaiReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT }: ReplyRequest): AsyncGenerator<StreamEvent> {
+export async function* xaiReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
   // Tests point this at a local stand-in; never on Vercel.
   const baseURL = (!process.env.VERCEL && process.env.DEPECHE_XAI_URL) || "https://api.x.ai/v1";
   const client = new OpenAI({ apiKey, baseURL, maxRetries: 0 });
@@ -35,6 +35,8 @@ export async function* xaiReply({ model, apiKey, system, turns, signal, search, 
       max_output_tokens: maxOutput,
       store: false,
       stream: true,
+      // Grok caches prompts by itself; the same key for a chat sends it where its cache is.
+      ...(cacheKey ? { prompt_cache_key: cacheKey } : {}),
       ...(search ? { tools: [{ type: "web_search" }] as never } : {}),
     },
     { signal },
@@ -102,6 +104,7 @@ type XaiItem = {
 };
 type XaiUsage = {
   input_tokens?: number;
+  input_tokens_details?: { cached_tokens?: number };
   output_tokens?: number;
   total_tokens?: number;
   output_tokens_details?: { reasoning_tokens?: number };
@@ -117,12 +120,14 @@ type XaiResponse = {
 
 /**
  * Tokens used. Reasoning is billed as output; the total is used too, so reasoning is counted
- * whether or not xAI includes it in output_tokens.
+ * whether or not xAI includes it in output_tokens. Grok caches repeated prompts by itself; the
+ * cached part of the input is billed lower.
  */
-export function responseUsage(u: XaiUsage | undefined): { input: number; output: number } {
+export function responseUsage(u: XaiUsage | undefined): { input: number; output: number; cacheRead?: number } {
   const input = u?.input_tokens ?? 0;
   const output = Math.max(u?.output_tokens ?? 0, (u?.total_tokens ?? 0) - input);
-  return { input, output };
+  const cacheRead = Math.min(Math.max(0, u?.input_tokens_details?.cached_tokens ?? 0), input);
+  return cacheRead ? { input, output, cacheRead } : { input, output };
 }
 
 /** Searches xAI says it billed, in whichever usage field it reports them. */
