@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
-import { saveFile } from "@/components/markdown/FileCard";
+import { saveFile } from "@/lib/docs/save";
 import { listCanvases, saveCanvas } from "@/app/c/canvas";
 import {
   canvasBlocks,

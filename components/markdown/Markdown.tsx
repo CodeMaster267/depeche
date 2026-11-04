@@ -9,6 +9,8 @@ import rehypeHighlight from "rehype-highlight";
 import "katex/dist/katex.min.css";
 import { Mermaid } from "./Mermaid";
 import { FileCard } from "./FileCard";
+import { Chart } from "./Chart";
+import { RunCode, Runner, type RunContext } from "./RunCode";
 import { fileFromLang } from "@/lib/docs/kinds";
 import { canvasFromLang } from "@/lib/canvas";
 import { CanvasCard } from "@/components/chat/Canvas";
@@ -16,14 +18,15 @@ import { normaliseMaths } from "@/lib/markdown";
 
 /**
  * Renders a model's reply: GitHub-flavoured Markdown (tables, task lists, footnotes as sources),
- * LaTeX maths in every common delimiter, highlighted code with Copy, Mermaid diagrams and images.
+ * LaTeX maths in every common delimiter, highlighted code with Copy, Mermaid diagrams, charts
+ * (```chart), Python that runs in a sandbox (```python) and images.
  *
  * Raw HTML in a reply is shown as text, never run: react-markdown escapes it and drops unsafe
  * link schemes. If anything in a reply can't be rendered, the plain text is shown instead.
  */
 const Streaming = createContext(false);
 
-type HastNode = { type: string; value?: string; children?: HastNode[]; properties?: { className?: unknown } };
+type HastNode = { type: string; value?: string; children?: HastNode[]; properties?: { className?: unknown }; data?: { meta?: unknown } };
 const textOf = (n?: HastNode): string => (n?.type === "text" ? (n.value ?? "") : (n?.children ?? []).map(textOf).join(""));
 
 function CodeBlock({ node, children }: { node?: HastNode; children?: ReactNode }) {
@@ -37,8 +40,30 @@ function CodeBlock({ node, children }: { node?: HastNode; children?: ReactNode }
     .find((c) => c.startsWith("language-"))
     ?.slice(9);
   const raw = textOf(code).replace(/\n$/, "");
+  const meta = typeof (code as HastNode | undefined)?.data?.meta === "string" ? String((code as HastNode).data!.meta) : "";
 
   if (lang === "mermaid" && !streaming) return <Mermaid source={raw} />;
+  // A chart the model described (```chart with JSON), drawn once the reply is complete.
+  if (lang === "chart") {
+    return streaming ? (
+      <div className="md-diagram">
+        <div className="md-code-bar">
+          <span>Chart</span>
+        </div>
+        <div className="md-diagram-svg text-[13px] text-mute">Drawing…</div>
+      </div>
+    ) : (
+      <Chart source={raw} />
+    );
+  }
+  // Python that can run in the browser; ```python run starts by itself.
+  if (lang === "python" || lang === "py") {
+    return (
+      <RunCode code={raw} lang="python" auto={/(^|\s)run(\s|$)/.test(meta)} streaming={streaming}>
+        {children}
+      </RunCode>
+    );
+  }
   // A file the model made, written as ```file:Name.ext.
   const file = fileFromLang(lang);
   if (file) return <FileCard name={file.name} kind={file.kind} content={raw} streaming={streaming} />;
@@ -115,9 +140,10 @@ class Fallback extends Component<{ text: string; children: ReactNode }, { failed
   }
 }
 
-export const Markdown = memo(function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+export const Markdown = memo(function Markdown({ text, streaming = false, run = null }: { text: string; streaming?: boolean; run?: RunContext | null }) {
   return (
     <Fallback text={text}>
+      <Runner.Provider value={run}>
       <Streaming.Provider value={streaming}>
         <div className="md">
           <ReactMarkdown
@@ -130,6 +156,7 @@ export const Markdown = memo(function Markdown({ text, streaming = false }: { te
           </ReactMarkdown>
         </div>
       </Streaming.Provider>
+      </Runner.Provider>
     </Fallback>
   );
 });

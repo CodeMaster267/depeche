@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
+import type { RunContext } from "@/components/markdown/RunCode";
 import { canSearch, findModel, type Model } from "@/lib/ai/models";
 import { latestLeaf, pathTo, titleFrom, versionsOf, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
@@ -74,6 +75,7 @@ export function ChatApp({
     initialChat?.model && initialShell.modelIds.includes(initialChat.model) ? initialChat.model : initialShell.defaultModel,
   );
   const [picking, setPicking] = useState(false);
+  const [fresh, setFresh] = useState<Set<string>>(() => new Set());
   const [drawer, setDrawer] = useState(false);
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
@@ -309,6 +311,8 @@ export function ChatApp({
               setTree((list) => list.map((m) => (m.id === replyId ? saved : m)));
               if (follow) setLeaf(saved.id);
               else setLeaf((l) => (l === replyId ? saved.id : l));
+              // Code in a reply that just arrived may run by itself.
+              setFresh((f) => new Set(f).add(saved.id));
               setShell((s) => ({ ...s, spent: s.spent + Number(saved.content.cost ?? 0) }));
             } else patchReply((m) => ({ ...m, streaming: false, status: "failed", content: { ...m.content, error: ev.error } }));
           }
@@ -406,6 +410,18 @@ export function ChatApp({
     pinnedToBottom.current = false;
     setLeaf(latestLeaf(tree, id));
   };
+
+  // Code in replies can open this chat's files and send its results back as a message.
+  const sendRef = useRef(sendText);
+  sendRef.current = sendText;
+  const fileKey = messages.flatMap((m) => (m.role === "user" ? (m.content.files ?? []).map((f) => f.path) : [])).join("|");
+  const runContexts = useMemo(() => {
+    const files = messages.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : []));
+    const onSend = (t: string) => sendRef.current(t);
+    return { fresh: { files, autoRun: true, onSend } as RunContext, old: { files, autoRun: false, onSend } as RunContext };
+    // The files only change when fileKey does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileKey]);
 
   /** Continue the conversation from one model's answer, and keep using that model. */
   const choose = (reply: MessageRow) => {
@@ -615,6 +631,8 @@ export function ChatApp({
                       message={r}
                       canRegenerate={!busy && !!r.parent_id && !r.parent_id.startsWith("local-")}
                       onRegenerate={() => retryCompared(r)}
+                      // Side-by-side answers don't start code by themselves; each has a Run button.
+                      run={runContexts.old}
                       // Follow-ups carry on from the picked answer, so only it offers them.
                       followUps={!busy && r.id === m.id && m.id === messages.at(-1)?.id ? r.content.followups : undefined}
                       onFollowUp={(q) => sendText(q)}
@@ -625,6 +643,7 @@ export function ChatApp({
                 <CanvasMessage.Provider key={m.id} value={m.id.startsWith("local-") ? null : m.id}>
                   <Reply
                     message={m}
+                    run={fresh.has(m.id) ? runContexts.fresh : runContexts.old}
                     canRegenerate={!busy && !!m.parent_id && !m.parent_id.startsWith("local-")}
                     onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
                     versions={<ReplyVersions message={m} tree={tree} busy={busy} onPick={showVersion} />}
@@ -751,6 +770,7 @@ function Reply({
   followUps,
   onFollowUp,
   versions,
+  run,
 }: {
   message: Live;
   canRegenerate: boolean;
@@ -759,6 +779,8 @@ function Reply({
   onFollowUp: (q: string) => void;
   /** "‹ 1/2 ›" when this reply has other versions. */
   versions?: ReactNode;
+  /** Lets Python in the reply open this chat's files and send its results. */
+  run: RunContext;
 }) {
   const [copied, setCopied] = useState(false);
   const [source, setSource] = useState(false);
@@ -770,7 +792,7 @@ function Reply({
       {text ? (
         // Text selected in here can be asked about (see AskAboutSelection).
         <div data-reply-text className="contents">
-          <Markdown text={text} streaming={m.streaming} />
+          <Markdown text={text} streaming={m.streaming} run={run} />
         </div>
       ) : null}
       {m.streaming && !m.searchingNow && !m.thinkingNow ? (
