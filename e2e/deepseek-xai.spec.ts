@@ -43,7 +43,7 @@ test.describe("DeepSeek and Grok", () => {
     await expect(page.getByRole("heading", { name: "Hi, Hasan." })).toBeVisible();
     await page.goto("/family");
     await addKey(page, "deepseek", "DeepSeek", /No web search/, "Can use DeepSeek V4 Pro, DeepSeek Flash");
-    await addKey(page, "xai", "xAI (Grok)", /Grok can search the web/, "Can use Grok 4.7, Grok 4.3");
+    await addKey(page, "xai", "xAI (Grok)", /Grok can search the web/, "Can use Grok 4.7, Grok 4.3, Grok Imagine");
     await page.goto("/");
   });
 
