@@ -176,6 +176,16 @@ function excelDate(serial: number, withTime: boolean): string {
 
 /** A spreadsheet: each sheet as CSV under its name. */
 function xlsx(bytes: Uint8Array): string {
+  const out: string[] = [];
+  for (const sheet of xlsxSheets(bytes, MAX_TEXT)) out.push(`## Sheet: ${sheet.name}\n\n${sheet.csv || "(empty)"}`);
+  return out.join("\n\n");
+}
+
+/**
+ * Each sheet of a spreadsheet as CSV, stopping once `limit` characters have been read. Also used
+ * in the browser, so code the person runs can open .xlsx files with pandas.
+ */
+export function xlsxSheets(bytes: Uint8Array, limit = Infinity): { name: string; csv: string }[] {
   const parts = unzip(
     bytes,
     (n) => n === "xl/workbook.xml" || n === "xl/_rels/workbook.xml.rels" || n === "xl/sharedStrings.xml" || n === "xl/styles.xml" || /^xl\/worksheets\/[^/]+\.xml$/.test(n),
@@ -210,7 +220,7 @@ function xlsx(bytes: Uint8Array): string {
     return { name: attr(m[1], "name"), xml: parts[path] ?? "" };
   });
 
-  const out: string[] = [];
+  const out: { name: string; csv: string }[] = [];
   let length = 0;
   for (const sheet of sheets) {
     const rows: string[][] = [];
@@ -237,11 +247,11 @@ function xlsx(bytes: Uint8Array): string {
     // Trailing empty rows are left out.
     while (rows.length && !rows.at(-1)!.some(Boolean)) rows.pop();
     const csv = rows.map((r) => r.map(csvField).join(",")).join("\n");
-    out.push(`## Sheet: ${sheet.name}\n\n${csv || "(empty)"}`);
+    out.push({ name: sheet.name, csv });
     length += csv.length;
-    if (length > MAX_TEXT) break;
+    if (length > limit) break;
   }
-  return out.join("\n\n");
+  return out;
 }
 
 /** A presentation: each slide's text, then its speaker notes. */

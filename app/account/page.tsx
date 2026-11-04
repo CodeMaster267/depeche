@@ -7,6 +7,8 @@ import { supabaseServer } from "@/lib/supabase/server";
 import { describeLog, when, type LogRow } from "@/lib/family/log";
 import { signOut } from "@/app/sign-in/actions";
 import { signOutEverywhere } from "./actions";
+import { lockSession } from "@/lib/lock/server";
+import { AppLock } from "./lock";
 import { ExportButton } from "@/components/ExportButton";
 import { vapidKeys } from "@/lib/push/server";
 import { NotificationsToggle } from "./Notifications";
@@ -31,6 +33,12 @@ export default async function Account() {
     db.from("profiles").select("id, display_name").returns<{ id: string; display_name: string }[]>(),
   ]);
   const { data: prefs } = await db.from("profiles").select("keep_chats").eq("id", me.userId).maybeSingle<{ keep_chats: boolean }>();
+  const lock = await lockSession();
+  const { data: passkeys } = await db
+    .from("lock_passkeys")
+    .select("id, label, created_at, last_used_at")
+    .order("created_at")
+    .returns<{ id: string; label: string; created_at: string; last_used_at: string | null }[]>();
   const names = new Map((people ?? []).map((p) => [p.id, p.display_name]));
 
   return (
@@ -60,6 +68,14 @@ export default async function Account() {
         </Section>
         <Section title="Notifications">
           <NotificationsToggle publicKey={vapidKeys()?.publicKey ?? null} />
+        </Section>
+        <Section title="App lock">
+          <AppLock
+            on={Boolean(lock?.meta)}
+            timeout={lock?.meta?.t ?? 300}
+            needsCurrent={Boolean(lock?.meta) && !lock?.fresh}
+            passkeys={passkeys ?? []}
+          />
         </Section>
         <Section title="Old chats">
           <KeepChatsToggle keep={prefs?.keep_chats ?? false} />
