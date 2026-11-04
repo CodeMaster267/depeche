@@ -37,6 +37,8 @@ export type ChatRow = {
   updated_at: string;
   /** Set while the chat is archived: out of the list and kept, until restored or written in. */
   archived_at?: string | null;
+  /** The project (folder) the chat is kept in, if any. */
+  project_id?: string | null;
 };
 
 /**

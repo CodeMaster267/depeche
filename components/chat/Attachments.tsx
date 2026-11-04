@@ -61,6 +61,32 @@ async function prepareImage(file: File): Promise<Blob> {
 
 const safeName = (name: string) => name.normalize("NFKD").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "").slice(-80) || "file";
 
+/**
+ * Uploads one picked file to the person's own private folder, as the type Depeche reads it as (a .md
+ * file becomes plain text, say). Photos are resized first. Used for messages and project files.
+ */
+export async function uploadFile(
+  userId: string,
+  file: File,
+  type: string,
+  id: string = crypto.randomUUID(),
+  shownName: string = file.name || "Pasted image",
+): Promise<FileRef | { error: string }> {
+  try {
+    const prepared = type.startsWith("image/") ? await prepareImage(file) : file;
+    const blob = prepared.type === type ? prepared : new Blob([prepared], { type });
+    if (blob.size > MAX_FILE_BYTES) return { error: "Over 10 MB" };
+    let name = shownName;
+    if (type === "image/jpeg" && prepared !== file) name = name.replace(/\.\w+$/, "") + ".jpg";
+    const path = `${userId}/${id}/${safeName(name)}`;
+    const { error } = await supabaseBrowser().storage.from(UPLOAD_BUCKET).upload(path, blob, { contentType: type, upsert: false });
+    if (error) throw error;
+    return { path, name, mime: type, size: blob.size };
+  } catch {
+    return { error: "Upload failed" };
+  }
+}
+
 /** Files picked for the next message: each uploads straight to your own private folder. */
 export function useAttachments(userId: string) {
   const [items, setItems] = useState<Pending[]>([]);
@@ -93,23 +119,9 @@ export function useAttachments(userId: string) {
     await Promise.all(
       entries.map(async ({ item, file, type }) => {
         if (!type) return;
-        try {
-          const prepared = type.startsWith("image/") ? await prepareImage(file) : file;
-          // Stored under the type Depeche reads it as (a .md file becomes plain text, say).
-          const blob = prepared.type === type ? prepared : new Blob([prepared], { type });
-          if (blob.size > MAX_FILE_BYTES) {
-            patch(item.id, { status: "error", error: "Over 10 MB" });
-            return;
-          }
-          let name = item.name;
-          if (type === "image/jpeg" && prepared !== file) name = name.replace(/\.\w+$/, "") + ".jpg";
-          const path = `${userId}/${item.id}/${safeName(name)}`;
-          const { error } = await supabaseBrowser().storage.from(UPLOAD_BUCKET).upload(path, blob, { contentType: type, upsert: false });
-          if (error) throw error;
-          patch(item.id, { status: "ready", size: blob.size, name, ref: { path, name, mime: type, size: blob.size } });
-        } catch {
-          patch(item.id, { status: "error", error: "Upload failed" });
-        }
+        const done = await uploadFile(userId, file, type, item.id, item.name);
+        if ("error" in done) patch(item.id, { status: "error", error: done.error });
+        else patch(item.id, { status: "ready", size: done.size, name: done.name, ref: done });
       }),
     );
     return skipped;

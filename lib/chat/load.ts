@@ -6,12 +6,15 @@ import { chooseDefault, modelsFor } from "@/lib/ai/models";
 import { after } from "next/server";
 import { refreshKeyModels, staleKeys, type KeyModels } from "@/lib/ai/key-models";
 import { activePath, type ChatRow, type MessageRow } from "@/lib/chat/thread";
+import type { ProjectDetail, ProjectRow } from "@/lib/chat/projects";
 
 export type Shell = {
   userId: string;
   name: string;
   isAdmin: boolean;
   chats: ChatRow[];
+  /** Your projects (folders), most recently used first. */
+  projects: ProjectRow[];
   modelIds: string[];
   defaultModel: string | null;
   spent: number;
@@ -21,11 +24,11 @@ export type Shell = {
 /** Everything the chat screen needs around the conversation: your chats, models and spending. */
 export async function loadShell(me: Me): Promise<Shell> {
   const db = await supabaseServer();
-  const [{ data: chats }, { data: providers }, { data: spent }] = await Promise.all([
+  const [{ data: chats }, { data: providers }, { data: spent }, { data: projects }] = await Promise.all([
     // Admins can read their members' chat titles, so ask only for your own.
     db
       .from("chats")
-      .select("id, title, model, pinned, updated_at")
+      .select("id, title, model, pinned, updated_at, project_id")
       .eq("owner_id", me.userId)
       .is("archived_at", null)
       .order("updated_at", { ascending: false })
@@ -33,6 +36,13 @@ export async function loadShell(me: Me): Promise<Shell> {
       .returns<ChatRow[]>(),
     db.rpc("family_models"),
     supabaseAdmin().rpc("month_spend", { p_person: me.userId }),
+    db
+      .from("projects")
+      .select("id, name, updated_at")
+      .eq("owner_id", me.userId)
+      .order("updated_at", { ascending: false })
+      .limit(200)
+      .returns<ProjectRow[]>(),
   ]);
   const keys = (providers as KeyModels[] | null) ?? [];
   const models = modelsFor(keys);
@@ -45,6 +55,7 @@ export async function loadShell(me: Me): Promise<Shell> {
     name: me.profile.display_name,
     isAdmin: me.profile.role === "admin",
     chats: chats ?? [],
+    projects: projects ?? [],
     modelIds: models.map((m) => m.id),
     defaultModel: chooseDefault(models, last?.last_model)?.id ?? null,
     spent: Number(spent ?? 0),
@@ -58,7 +69,7 @@ export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow;
   const db = await supabaseServer();
   const { data: chat } = await db
     .from("chats")
-    .select("id, title, model, pinned, updated_at, archived_at")
+    .select("id, title, model, pinned, updated_at, archived_at, project_id")
     .eq("id", chatId)
     .eq("owner_id", me.userId)
     .maybeSingle<ChatRow>();
@@ -86,4 +97,27 @@ export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow;
     }
   }
   return { chat, messages: path };
+}
+
+/** One of your projects with its instructions and files, or null if it isn't yours. */
+export async function loadProject(me: Me, projectId: string): Promise<ProjectDetail | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(projectId)) return null;
+  const db = await supabaseServer();
+  const [{ data: project }, { data: files }] = await Promise.all([
+    db
+      .from("projects")
+      .select("id, name, instructions, updated_at")
+      .eq("id", projectId)
+      .eq("owner_id", me.userId)
+      .maybeSingle<Omit<ProjectDetail, "files">>(),
+    db
+      .from("project_files")
+      .select("id, path, name, mime, size")
+      .eq("project_id", projectId)
+      .eq("owner_id", me.userId)
+      .order("created_at")
+      .returns<ProjectDetail["files"]>(),
+  ]);
+  if (!project) return null;
+  return { ...project, files: files ?? [] };
 }

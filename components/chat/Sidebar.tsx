@@ -7,8 +7,13 @@ import { NavLink } from "@/components/Press";
 import { GlassCode } from "@/components/Glass";
 import { listArchived } from "@/app/c/actions";
 import type { ChatRow } from "@/lib/chat/thread";
+import type { ProjectRow } from "@/lib/chat/projects";
 import { ChatMenu } from "./ChatMenu";
-import { ArchiveIcon, BackIcon, CloseIcon, PlusIcon, SearchIcon } from "./icons";
+import { NewProjectSheet } from "./Projects";
+import { ArchiveIcon, BackIcon, CloseIcon, FolderIcon, FolderPlusIcon, PlusIcon, SearchIcon } from "./icons";
+
+/** Projects shown before "Show all". */
+const FEW_PROJECTS = 5;
 
 function group(chats: ChatRow[]) {
   const startOfToday = new Date();
@@ -32,7 +37,10 @@ function group(chats: ChatRow[]) {
 /** Your chats, newest first, plus the way to your account and (for admins) family settings. */
 export function Sidebar({
   chats,
+  projects,
   activeId,
+  activeProjectId,
+  onOpenProject,
   name,
   isAdmin,
   spent,
@@ -44,7 +52,11 @@ export function Sidebar({
   onChatDeleted,
 }: {
   chats: ChatRow[];
+  projects: ProjectRow[];
   activeId: string | null;
+  /** The project open, or the project of the chat open. */
+  activeProjectId: string | null;
+  onOpenProject: (id: string) => void;
   name: string;
   isAdmin: boolean;
   spent: number;
@@ -61,12 +73,15 @@ export function Sidebar({
   // The archived chats, once the person opens them (fetched then, not with every page).
   const [archived, setArchived] = useState<ChatRow[] | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [allProjects, setAllProjects] = useState(false);
+  const [naming, setNaming] = useState(false);
   useEffect(() => {
     if (showArchived) listArchived().then(setArchived, () => setArchived([]));
   }, [showArchived]);
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    const list = showArchived ? (archived ?? []) : chats;
+    // Chats kept in a project are found in the project, and by searching.
+    const list = showArchived ? (archived ?? []) : needle ? chats : chats.filter((c) => !c.project_id);
     const found = needle ? list.filter((c) => c.title.toLowerCase().includes(needle)) : list;
     return showArchived ? (found.length ? ([["Archived", found]] as [string, ChatRow[]][]) : []) : group(found);
   }, [chats, archived, showArchived, q]);
@@ -75,6 +90,9 @@ export function Sidebar({
     if (showArchived) setArchived((list) => (list ?? []).flatMap((c) => (c.id !== next.id ? [c] : next.archived_at ? [next] : [])));
   };
   const share = cap > 0 ? Math.min(1, spent / cap) : 1;
+  const needle = q.trim().toLowerCase();
+  const foundProjects = needle ? projects.filter((p) => p.name.toLowerCase().includes(needle)) : projects;
+  const shownProjects = allProjects || needle ? foundProjects : foundProjects.slice(0, FEW_PROJECTS);
 
   return (
     <nav aria-label="Chats" className="flex h-full flex-col gap-4 px-4" style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}>
@@ -123,6 +141,53 @@ export function Sidebar({
       ) : null}
 
       <div className="-mx-1 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1">
+        {!showArchived ? (
+          <div role="group" className="mb-4" aria-label="Projects">
+            <h3 className="px-3 pb-1.5 pt-2 text-[12px] font-semibold uppercase tracking-[0.1em] text-mute">Projects</h3>
+            <ul>
+              {!needle ? (
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setNaming(true)}
+                    className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[16px] hover:bg-soft"
+                  >
+                    <FolderPlusIcon className="shrink-0" />
+                    <span>New project</span>
+                  </button>
+                </li>
+              ) : null}
+              {shownProjects.map((p) => (
+                <li key={p.id}>
+                  <Link
+                    href={`/p/${p.id}`}
+                    prefetch={false}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onOpenProject(p.id);
+                    }}
+                    aria-current={p.id === activeProjectId && !activeId ? "page" : undefined}
+                    className={`flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[16px] ${p.id === activeProjectId ? "bg-soft font-medium" : "hover:bg-soft"}`}
+                  >
+                    <FolderIcon className="shrink-0 text-mute" />
+                    <span className="min-w-0 truncate">{p.name}</span>
+                  </Link>
+                </li>
+              ))}
+              {!needle && projects.length > FEW_PROJECTS ? (
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setAllProjects((a) => !a)}
+                    className="w-full rounded-xl px-3 py-2 text-left text-[15px] text-mute hover:bg-soft"
+                  >
+                    {allProjects ? "Show fewer" : `Show all ${projects.length}`}
+                  </button>
+                </li>
+              ) : null}
+            </ul>
+          </div>
+        ) : null}
         {shown.map(([label, list]) => (
           <section key={label} className="mb-4">
             <h3 className="px-3 pb-1.5 pt-2 text-[12px] font-semibold uppercase tracking-[0.1em] text-mute">{label}</h3>
@@ -163,7 +228,7 @@ export function Sidebar({
           ) : null
         ) : (
           <>
-            {!chats.length ? <p className="px-3 text-[15px] text-mute">Your chats will appear here.</p> : null}
+            {!chats.some((c) => !c.project_id) && !needle ? <p className="px-3 text-[15px] text-mute">Your chats will appear here.</p> : null}
             <button
               type="button"
               onClick={() => setShowArchived(true)}
@@ -201,6 +266,7 @@ export function Sidebar({
           </div>
         </div>
       </div>
+      {naming ? <NewProjectSheet onClose={() => setNaming(false)} onCreated={onNavigate} /> : null}
     </nav>
   );
 }

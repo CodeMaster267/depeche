@@ -861,7 +861,16 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     : "";
   // "make files" makes it write files to download, to test generated documents.
   const made = q.includes("make files") ? FAKE_FILES : "";
-  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
+  // "project" makes it repeat what the chat's project gave it, to test projects reach the model.
+  const instructions = /<project_instructions>\n([\s\S]*?)\n<\/project_instructions>/.exec(system)?.[1];
+  const projectFiles = [
+    ...[...(/<project_files>([\s\S]*?)<\/project_files>/.exec(system)?.[1] ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1]),
+    ...(turns[0]?.files ?? []).map((f) => f.name),
+  ];
+  const fromProject = q.includes("project")
+    ? `Project instructions: ${instructions ?? "none"}. Project files: ${projectFiles.join(", ") || "none"}.\n\n`
+    : "";
+  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + fromProject + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

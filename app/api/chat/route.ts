@@ -9,6 +9,7 @@ import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOffer
 import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
 import { MAX_FILES_PER_MESSAGE, OFFICE_TYPES, UPLOAD_BUCKET, isFileRef, readAsText, type FileRef } from "@/lib/chat/files";
 import { documentText } from "@/lib/docs/read";
+import { projectContext, projectInstructions, type ProjectContext } from "@/lib/chat/project-context";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
@@ -29,6 +30,8 @@ type Body = {
   search?: boolean;
   /** Sent from voice chat: the reply will be read aloud. */
   voice?: boolean;
+  /** Start the new chat inside this project of yours. */
+  projectId?: string | null;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -69,6 +72,7 @@ export async function POST(req: NextRequest) {
   if (!body.regenerate && !UUID.test(body.clientRequestId ?? "")) return fail(400, "Something went wrong. Try again.");
   if (body.chatId && !UUID.test(body.chatId)) return fail(404, "That chat doesn't exist.");
   if (body.regenerate && !UUID.test(body.regenerate)) return fail(404, "That message doesn't exist.");
+  if (body.projectId && !UUID.test(body.projectId)) return fail(404, "That project doesn't exist.");
 
   const db = await supabaseServer();
   const admin = supabaseAdmin();
@@ -91,9 +95,17 @@ export async function POST(req: NextRequest) {
   // The chat: an existing one of yours, or (once the spending hold is in place) a new one.
   let chatId = body.chatId ?? null;
   let all: MessageRow[] = [];
+  // A chat in a project brings the project's instructions and files.
+  let projectId: string | null = chatId ? null : (body.projectId ?? null);
   if (chatId) {
-    const { data: chat } = await db.from("chats").select("id").eq("id", chatId).eq("owner_id", me.userId).maybeSingle();
+    const { data: chat } = await db
+      .from("chats")
+      .select("id, project_id")
+      .eq("id", chatId)
+      .eq("owner_id", me.userId)
+      .maybeSingle<{ id: string; project_id: string | null }>();
     if (!chat) return fail(404, "That chat doesn't exist.");
+    projectId = chat.project_id;
     const { data: existing } = await db
       .from("messages")
       .select("id, chat_id, parent_id, role, content, status, model, created_at")
@@ -117,10 +129,16 @@ export async function POST(req: NextRequest) {
     .order("updated_at", { ascending: false })
     .limit(MEMORY_PROMPT_LIMIT)
     .returns<{ content: string }[]>();
+  let project: ProjectContext | null = null;
+  if (projectId) {
+    project = await projectContext(db, me.userId, projectId);
+    if (!project && !chatId) return fail(404, "That project doesn't exist.");
+  }
   const system = systemPrompt(
     me.profile.display_name,
     Boolean(body.voice),
     (remembered ?? []).map((m) => m.content),
+    project,
   );
   let historyChars = 0;
   const seen = [system, text];
@@ -133,7 +151,7 @@ export async function POST(req: NextRequest) {
   // Attached files count too: text files as text, images and PDFs by size, erring high.
   let fileTokens = 0;
   let binaryBytes = 0;
-  for (const f of [...fileRefs, ...all.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : []))]) {
+  for (const f of [...fileRefs, ...all.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : [])), ...(project?.binaries ?? [])]) {
     if (!isFileRef(f, me.userId)) continue;
     if (f.mime === "text/plain") fileTokens += Math.ceil(Math.min(f.size, 200_000) / 2);
     // Word, Excel and PowerPoint files are zipped, so their text can be several times their size.
@@ -182,7 +200,12 @@ export async function POST(req: NextRequest) {
   if (!chatId) {
     const { data: chat, error } = await db
       .from("chats")
-      .insert({ owner_id: me.userId, title: titleFrom(text || fileRefs[0]?.name || ""), model: model.id })
+      .insert({
+        owner_id: me.userId,
+        title: titleFrom(text || fileRefs[0]?.name || ""),
+        model: model.id,
+        ...(projectId && project ? { project_id: projectId } : {}),
+      })
       .select("id")
       .single<{ id: string }>();
     if (error || !chat) {
@@ -278,6 +301,18 @@ export async function POST(req: NextRequest) {
     } else turns.unshift({ role: m.role as Turn["role"], text: t, files: attached.length ? attached : undefined });
   }
   while (turns[0]?.role === "assistant") turns.shift();
+  // The project's photos and PDFs go with the first message the model sees, within the same budget.
+  if (project?.binaries.length && turns[0]) {
+    const extra: TurnFile[] = [];
+    for (const f of project.binaries) {
+      if (fileBudget - f.size <= 0) continue;
+      const { data: blob } = await storage.download(f.path);
+      if (!blob) continue;
+      fileBudget -= f.size;
+      extra.push({ name: f.name, mime: f.mime, data: Buffer.from(await blob.arrayBuffer()).toString("base64") });
+    }
+    if (extra.length) turns[0] = { ...turns[0], files: [...extra, ...(turns[0].files ?? [])] };
+  }
   // The question itself is in front of the model, so a lookup searches everything before it.
   const earlier = path.filter((m) => m.id !== question.id);
   const chatSearch =
@@ -453,8 +488,8 @@ const FILE_INSTRUCTIONS = [
   "Use a short file name without spaces. If the file contains ``` fences, open and close the file block with ```` instead. Only make a file when one is wanted, and keep remarks outside the block.",
 ].join(" ");
 
-function systemPrompt(name: string, voice: boolean, memories: string[]): string {
-  return [
+function systemPrompt(name: string, voice: boolean, memories: string[], project: ProjectContext | null): string {
+  const base = [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
@@ -466,4 +501,5 @@ function systemPrompt(name: string, voice: boolean, memories: string[]): string 
   ]
     .filter(Boolean)
     .join(" ");
+  return project ? `${base}\n\n${projectInstructions(project)}` : base;
 }
