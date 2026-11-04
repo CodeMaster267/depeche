@@ -59,6 +59,8 @@ test("download everything gives a zip of your own chats, files and memories, and
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page).toHaveURL(/\/c\//);
   await expect(page.getByTestId("reply").last()).toContainText("I can see dot.png.", { timeout: 15_000 });
+  // The reply is saved just before the stream ends; export reads what's saved, so wait for the end.
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0, { timeout: 15_000 });
 
   // One chat, as Markdown, from the chat's menu.
   await page.getByRole("button", { name: "Chat options" }).click();
