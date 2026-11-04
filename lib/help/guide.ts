@@ -301,8 +301,8 @@ a new PIN in Account. "Turn off app lock" turns it off on all your devices.`,
     routes: ["/design"],
     text: `
 [My look](/design) (your name at the bottom of the side menu → My look, or Account → My look) lets you redesign your own Depeche: colours, fonts,
-layout, buttons and shortcuts. Describe the look you want and tap the button to build it; the strongest model your family
-has designs it. You see a preview and choose Keep or Undo. Only you see it. Earlier looks are listed so you can go back
+layout, buttons and shortcuts. Describe the look you want and tap the button to build it; Claude Opus 5.5 designs it, or Gemini 4 Argon
+or GPT-6.1 Sol if your family has no key for Opus (with none of the three, My look says so). You see a preview and choose Keep or Undo. Only you see it. Earlier looks are listed so you can go back
 to any of them for free. You get a set number of builds a month (your admin sets it); a failed build doesn't count.
 If a look ever makes Depeche hard to use, Safe mode (on the My look page) shows standard Depeche again.`,
   },

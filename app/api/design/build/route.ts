@@ -6,7 +6,7 @@ import { estimateCost } from "@/lib/ai/models";
 import { ProviderError } from "@/lib/ai/providers";
 import { inputTokensUpperBound } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
-import { BUILD_OUTPUT, buildDesign, flaggedByModeration, pickBuilder } from "@/lib/design/build";
+import { BUILD_OUTPUT, NO_BUILDER, buildDesign, flaggedByModeration, pickBuilder } from "@/lib/design/build";
 import { builderSystem } from "@/lib/design/prompt";
 import { NOT_FRIENDLY, familyFriendly } from "@/lib/design/friendly";
 import { buildMeter, designsOffEverywhere, familyDesignsEnabled } from "@/lib/design/load";
@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
     .eq("family_id", me.profile.family_id)
     .returns<{ provider: string; models: string[] | null; ciphertext: string }[]>();
   const model = pickBuilder(keys ?? []);
-  if (!model) return fail(400, me.profile.role === "admin" ? "Add an AI key in Family settings first." : "Your family admin hasn't added any AI keys yet.");
+  if (!model) return fail(400, `${NO_BUILDER} ${me.profile.role === "admin" ? "Add one in Family settings." : "Ask your family admin to add one."}`);
   const keyOf = (provider: string) => {
     const row = (keys ?? []).find((k) => k.provider === provider);
     if (!row) return null;
