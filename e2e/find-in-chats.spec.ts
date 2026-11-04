@@ -100,3 +100,41 @@ test("a family admin's search never finds a member's messages", async ({ page })
   await expect(nav.getByText(`No chats or messages match “${word}”.`)).toBeVisible();
   await expect(nav.getByTestId("message-hit")).toHaveCount(0);
 });
+
+test("a match in an earlier version of a message opens that version", async ({ page }) => {
+  const db = admin();
+  const email = uniqueEmail("versions");
+  const { data: user } = await db.auth.admin.createUser({ email, password: "member-password-123", email_confirm: true });
+  const me = user.user!.id;
+  const { data: owner } = await db.from("profiles").select("family_id").eq("is_app_owner", true).single();
+  await db.from("profiles").insert({ id: me, family_id: owner!.family_id, display_name: "Versions" });
+  const word = `Wombat${Date.now().toString(36)}`;
+  const chat = randomUUID();
+  const [q1, old, a1, edited, a2] = [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+  const at = (s: number) => new Date(Date.now() - 600_000 + s * 1000).toISOString();
+  await db.from("chats").insert({ id: chat, owner_id: me, title: "Animals", updated_at: at(9) });
+  expect(
+    (
+      await db.from("messages").insert([
+        { id: q1, chat_id: chat, owner_id: me, parent_id: null, role: "user", content: { text: "Tell me about animals." }, created_at: at(1) },
+        { id: a1, chat_id: chat, owner_id: me, parent_id: q1, role: "assistant", content: { text: "Sure." }, created_at: at(2) },
+        // The first version of the question, later edited.
+        { id: old, chat_id: chat, owner_id: me, parent_id: a1, role: "user", content: { text: `What does a ${word} eat?` }, created_at: at(3) },
+        { id: edited, chat_id: chat, owner_id: me, parent_id: a1, role: "user", content: { text: "What does a koala eat?" }, created_at: at(4) },
+        { id: a2, chat_id: chat, owner_id: me, parent_id: edited, role: "assistant", content: { text: "Eucalyptus." }, created_at: at(5) },
+      ])
+    ).error,
+  ).toBeNull();
+
+  await signInWithPassword(page, email, "member-password-123");
+  await expect(page.getByRole("heading", { name: "Hi, Versions." })).toBeVisible();
+  if ((page.viewportSize()?.width ?? 1000) < 768) await page.getByRole("button", { name: "Open menu" }).click();
+  const nav = page.getByRole("navigation", { name: "Chats" }).last();
+  await nav.getByLabel("Search chats").fill(word);
+  await nav.getByTestId("message-hit").click();
+  await expect(page).toHaveURL(new RegExp(`/c/${chat}$`));
+  const found = page.locator(`[data-message-id="${old}"] [data-testid="user-message"]`);
+  await expect(found).toHaveText(`What does a ${word} eat?`);
+  await expect(found).toBeInViewport();
+  await expect(page.getByText("What does a koala eat?")).toHaveCount(0);
+});
