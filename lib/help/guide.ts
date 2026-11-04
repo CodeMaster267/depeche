@@ -69,9 +69,16 @@ naming the page you're on to switch). "Ask Concierge", under your chats, opens t
     title: "Attaching files, web search, deep research",
     text: `
 The buttons next to the message box:
-- Paperclip ("Attach photos or files"): photos, PDFs, Word, Excel, PowerPoint, and text or code files. Up to 5 files a
-  message and 10 MB each. You can also paste or drag files in. Word, Excel and PowerPoint files are read by Depeche and
-  sent as text; photos and PDFs go to the model as they are. Uploaded files are deleted after 3 days without use.
+- Paperclip ("Attach"): opens a menu with three choices.
+  - "Photos and files": photos, PDFs, Word, Excel, PowerPoint, and text or code files. Up to 5 files a message and
+    10 MB each. You can also paste or drag files in. Word, Excel and PowerPoint files are read by Depeche and sent as
+    text; photos and PDFs go to the model as they are. Uploaded files are deleted after 3 days without use.
+  - "Scan pages": opens the camera (a file picker on a computer). Depeche finds the page's edges; drag the round corners
+    if they're off, then pick Clean, B&W or Original and tap Keep. Add more pages with "Add page", tap a page to crop,
+    rotate, move or delete it, name the PDF, then tap Attach (or Save PDF to keep it). It all happens on your device.
+  - "Voice note or recording": pick a recording (iPhone voice memos, WhatsApp voice notes, mp3 and others, up to 30
+    minutes and 25 MB). Depeche writes it out with your family's OpenAI or Google key and attaches the words as
+    "<name> transcript.txt"; the recording itself is deleted straight away.
 - Globe ("Search the web"): when it's on, the model searches the web when it needs to and shows its sources. Each search
   has a small fee. DeepSeek models can't search, so the globe is greyed out for them.
 - Deep research (the magnifier with lines): for this one message, the model runs several web searches and writes a long
