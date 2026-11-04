@@ -10,7 +10,7 @@ import { CreateFamilyForm, InviteForm, MemberRow, ProviderKeyRow, RevokeButton }
 
 export const metadata: Metadata = { title: "Family · Depeche" };
 
-type Member = { id: string; display_name: string; username: string | null; role: string; monthly_cap_usd: string; share_titles: boolean };
+type Member = { id: string; display_name: string; username: string | null; role: string; monthly_cap_usd: string; no_spend_limit: boolean; share_titles: boolean };
 type Invite = { id: string; family_id: string; email: string; role: string; expires_at: string; accepted_at: string | null };
 
 /**
@@ -31,7 +31,7 @@ export default async function Family() {
     supabase.from("families").select("name").eq("id", me.profile.family_id).single<{ name: string }>(),
     supabase
       .from("profiles")
-      .select("id, display_name, username, role, monthly_cap_usd, share_titles")
+      .select("id, display_name, username, role, monthly_cap_usd, no_spend_limit, share_titles")
       .eq("family_id", me.profile.family_id)
       .order("created_at")
       .returns<Member[]>(),
