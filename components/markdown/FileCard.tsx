@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { KINDS, alternatives, withKind, type Built, type DocKind } from "@/lib/docs/kinds";
 import { sizeLabel } from "@/lib/chat/files";
+import { saveFile } from "@/lib/docs/save";
 
 /**
  * A file the model made: a ```file:Name.ext block in its reply, shown as a card with Download.
@@ -12,27 +13,7 @@ import { sizeLabel } from "@/lib/chat/files";
  */
 const load = () => import("@/lib/docs/write");
 
-async function save(built: Built, name: string) {
-  const file = new File([built.blob], name, { type: built.blob.type.split(";")[0] });
-  // Phones and tablets get the share sheet: Save to Files, AirDrop, Mail, open in Word and so on.
-  if (matchMedia("(pointer: coarse)").matches && navigator.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file] });
-      return;
-    } catch (e) {
-      if ((e as Error).name === "AbortError") return; // they closed the sheet
-    }
-  }
-  const url = URL.createObjectURL(file);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.rel = "noopener";
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
+const save = (built: Built, name: string) => saveFile(built.blob, name);
 
 export function FileCard({ name, kind, content, streaming }: { name: string; kind: DocKind; content: string; streaming: boolean }) {
   const [built, setBuilt] = useState<Built | null>(null);
