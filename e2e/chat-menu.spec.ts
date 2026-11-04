@@ -74,6 +74,8 @@ test("rename, pin, archive, restore and delete from a chat's three dots in the l
   await expect.poll(async () => (await db.from("chats").select("archived_at").eq("owner_id", id).eq("title", "Trip to Lahore").single()).data?.archived_at).not.toBeNull();
 
   // Still archived after a reload, and found under Archived chats, where it can be restored.
+  // Let the archive request finish first: Safari reports a request cut off by a reload as "Load failed".
+  await page.waitForLoadState("networkidle");
   await page.reload();
   list = await chatList(page);
   await expect(list.getByRole("link", { name: "Trip to Lahore" })).toHaveCount(0);
