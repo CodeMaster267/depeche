@@ -12,6 +12,7 @@ import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/vo
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
 import { ACCEPT, AttachmentTray, MessageFiles, useAttachments, type Pending } from "./Attachments";
+import { AskAboutSelection, CostButton, FollowUps, QuoteChip, QuoteLine } from "./Extras";
 import { ModelPicker } from "./ModelPicker";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
@@ -42,6 +43,8 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // The part of an answer the next message asks about, picked by selecting it.
+  const [quote, setQuote] = useState<string | null>(null);
   // Web search is on unless this person turned it off on this device.
   const [search, setSearch] = useState(true);
   useEffect(() => {
@@ -114,7 +117,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     rememberModel(id).catch(() => {});
   };
 
-  async function run(body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean }, optimistic: Live[]) {
+  async function run(body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean; quote?: string }, optimistic: Live[]) {
     if (!model) return;
     setBanner(null);
     setBusy(true);
@@ -149,6 +152,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
         // Nothing was sent: take the message back off the screen and return it to the box.
         setMessages((list) => list.filter((m) => m.id !== replyId && !optimistic.some((o) => o.id === m.id)));
         if (body.text) setDraft(body.text);
+        if (body.quote) setQuote(body.quote);
         setBanner(error ?? "Couldn't send that. Try again.");
         if (res.status === 409) sync();
         return;
@@ -252,22 +256,23 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     const text = draft.trim();
     if ((!text && !attachments.ready) || attachments.uploading || busy || !model) return;
     setDraft("");
-    sendText(text, false, attachments.take());
+    setQuote(null);
+    sendText(text, false, attachments.take(), quote ?? undefined);
   };
 
-  const sendText = (text: string, voice = false, files: FileRef[] = []) => {
+  const sendText = (text: string, voice = false, files: FileRef[] = [], quote?: string) => {
     if ((!text && !files.length) || busy || !model) return;
     const mine: Live = {
       id: draftId(),
       chat_id: chat?.id ?? "",
       parent_id: null,
       role: "user",
-      content: files.length ? { text, files } : { text },
+      content: { text, ...(files.length ? { files } : {}), ...(quote ? { quote } : {}) },
       status: "completed",
       model: null,
       created_at: new Date().toISOString(),
     };
-    run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}) }, [mine]);
+    run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}), ...(quote ? { quote } : {}) }, [mine]);
   };
 
   const regenerate = (questionId: string) => {
@@ -360,6 +365,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             {messages.map((m) =>
               m.role === "user" ? (
                 <div key={m.id} className="flex flex-col items-end gap-2">
+                  {m.content.quote ? <QuoteLine quote={m.content.quote} /> : null}
                   {m.content.files?.length ? <MessageFiles files={m.content.files} /> : null}
                   {m.content.text ? (
                     <div
@@ -376,6 +382,9 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
                   message={m}
                   canRegenerate={!busy && !!lastUser && m.parent_id === lastUser.id}
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
+                  // Suggested follow-ups only under the newest answer, once it's finished.
+                  followUps={!busy && m.id === messages.at(-1)?.id ? m.content.followups : undefined}
+                  onFollowUp={(q) => sendText(q)}
                 />
               ),
             )}
@@ -389,6 +398,8 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             </p>
           ) : null}
           <Composer
+            quote={quote}
+            onClearQuote={() => setQuote(null)}
             attachments={attachments.items}
             onAttach={async (files) => {
               const skipped = await attachments.add(files);
@@ -420,6 +431,13 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
         </div>
       </div>
 
+      <AskAboutSelection
+        scroller={scroller}
+        onAsk={(text) => {
+          setQuote(text);
+          document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Depeche"]')?.focus();
+        }}
+      />
       {voiceOpen ? (
         <VoiceMode
           messages={messages}
@@ -435,14 +453,30 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   );
 }
 
-function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; canRegenerate: boolean; onRegenerate: () => void }) {
+function Reply({
+  message: m,
+  canRegenerate,
+  onRegenerate,
+  followUps,
+  onFollowUp,
+}: {
+  message: Live;
+  canRegenerate: boolean;
+  onRegenerate: () => void;
+  followUps?: string[];
+  onFollowUp: (q: string) => void;
+}) {
   const [copied, setCopied] = useState(false);
   const info = findModel(m.model);
   const text = m.content.text ?? "";
-  const cost = m.content.cost;
   return (
     <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
-      {text ? <Markdown text={text} streaming={m.streaming} /> : null}
+      {text ? (
+        // Text selected in here can be asked about (see AskAboutSelection).
+        <div data-reply-text className="contents">
+          <Markdown text={text} streaming={m.streaming} />
+        </div>
+      ) : null}
       {m.streaming && m.searchingNow ? <Searching queries={m.queries ?? []} where={m.searchingWhere} /> : null}
       {m.streaming && !m.searchingNow ? (
         <span aria-label="Writing" className="block h-6">
@@ -453,6 +487,7 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
       {!m.streaming && m.content.suggestions ? <SearchSuggestions html={m.content.suggestions} /> : null}
       {m.content.notice ? <p className="text-[14px] text-mute">{m.content.notice}</p> : null}
       {!m.streaming && m.memory ? <MemorySuggestion key={m.memory.id} memory={m.memory} /> : null}
+      {!m.streaming && followUps?.length ? <FollowUps questions={followUps} onAsk={onFollowUp} /> : null}
       {m.status === "stopped" ? <p className="text-[14px] text-mute">Stopped.</p> : null}
       {m.status === "failed" ? (
         <p role="alert" className="rounded-2xl border border-fg px-4 py-3 text-[15px]">
@@ -484,9 +519,14 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
             {text ? <ReadAloudButton text={text} /> : null}
             {copied ? <span className="text-[13px]">Copied</span> : null}
           </span>
-          <span className="font-mono text-[12px]">
+          <span className="flex items-center gap-1 font-mono text-[12px]">
             {info?.short ?? m.model}
-            {typeof cost === "number" && cost > 0 ? ` · $${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}` : ""}
+            {typeof m.content.cost === "number" && (m.content.cost > 0 || m.content.usage) ? (
+              <>
+                <span aria-hidden>{" · "}</span>
+                <CostButton content={m.content} />
+              </>
+            ) : null}
           </span>
         </div>
       ) : null}
@@ -495,6 +535,8 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
 }
 
 function Composer({
+  quote,
+  onClearQuote,
   attachments,
   onAttach,
   onRemoveAttachment,
@@ -513,6 +555,8 @@ function Composer({
   onDictated,
   onVoiceError,
 }: {
+  quote: string | null;
+  onClearQuote: () => void;
   search: boolean;
   searchable: boolean;
   onToggleSearch: () => void;
@@ -561,6 +605,7 @@ function Composer({
         onAttach([...e.dataTransfer.files]);
       }}
     >
+      {quote ? <QuoteChip quote={quote} onClear={onClearQuote} /> : null}
       <AttachmentTray items={attachments} onRemove={onRemoveAttachment} />
       <div className="flex items-end gap-1">
         <input

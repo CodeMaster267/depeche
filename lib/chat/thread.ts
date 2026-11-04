@@ -21,6 +21,12 @@ export type MessageRow = {
     searches?: number;
     /** Google's "Search suggestions" chips (its own HTML), shown in a sandbox as Google requires. */
     suggestions?: string;
+    /** On a question: the part of an earlier answer it asks about (selected by the person). */
+    quote?: string;
+    /** On a reply: questions the person might ask next, shown as buttons under the newest answer. */
+    followups?: string[];
+    /** On a reply: the tokens it used (estimated when the reply was stopped). */
+    usage?: { input: number; output: number; estimated?: boolean };
   };
   status: "pending" | "streaming" | "completed" | "failed" | "stopped";
   model: string | null;
