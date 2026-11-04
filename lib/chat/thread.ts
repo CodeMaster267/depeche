@@ -21,6 +21,8 @@ export type MessageRow = {
     searches?: number;
     /** Google's "Search suggestions" chips (its own HTML), shown in a sandbox as Google requires. */
     suggestions?: string;
+    /** Set when two or three models answered the same question side by side (see lib/chat/compare.ts). */
+    compare?: { id: string; slot: number };
   };
   status: "pending" | "streaming" | "completed" | "failed" | "stopped";
   model: string | null;
