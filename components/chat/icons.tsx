@@ -106,6 +106,33 @@ export const FileIcon = (p: P) => (
     <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5" />
   </svg>
 );
+export const ScanIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 8V5.5A1.5 1.5 0 015.5 4H8M16 4h2.5A1.5 1.5 0 0120 5.5V8M20 16v2.5a1.5 1.5 0 01-1.5 1.5H16M8 20H5.5A1.5 1.5 0 014 18.5V16M7.5 12h9" />
+  </svg>
+);
+export const PhotoIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <rect x="3.5" y="5" width="17" height="14" rx="2" />
+    <path d="M3.5 16l5-5 4 4 2.5-2.5 5 5M15.5 9.5h.01" />
+  </svg>
+);
+export const WaveIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2" />
+  </svg>
+);
+export const RotateIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M20 12a8 8 0 11-2.4-5.7M20 4v4.5h-4.5" />
+  </svg>
+);
+export const CameraIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 8.5A1.5 1.5 0 015.5 7h2.2l1.6-2h5.4l1.6 2h2.2A1.5 1.5 0 0120 8.5v9a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5z" />
+    <circle cx="12" cy="13" r="3.5" />
+  </svg>
+);
 export const DownloadIcon = (p: P) => (
   <svg {...base} {...p}>
     <path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14" />
