@@ -259,6 +259,7 @@ export function Sidebar({
               <NavLink href="/assistants">Assistants</NavLink>
               {isAdmin ? <NavLink href="/health">Health</NavLink> : null}
               <NavLink href="/memory">Memory</NavLink>
+              <NavLink href="/skills">Skills</NavLink>
               <NavLink href="/account">Account</NavLink>
               <NavLink href="/design">My look</NavLink>
               <span data-part="report-link" className="contents">
