@@ -31,11 +31,9 @@ export function compactOverride(): number | undefined {
 
 /**
  * Who writes summaries: the cheapest model of the chat's own provider that the family's key can
- * use, so the chat never goes to a provider the person didn't choose. Groq is for testing only and
- * its free tier can't read a long chat, so Groq chats are never summarised.
+ * use, so the chat never goes to a provider the person didn't choose. Picture models never write them.
  */
 export function summariserFor(chatModel: Model, keyModels: readonly string[] | null): Model | undefined {
-  if (chatModel.provider === "groq") return undefined;
   return MODELS.filter((m) => m.provider === chatModel.provider && !m.image && (!keyModels?.length || keyModels.includes(m.id)))
     .sort((a, b) => a.price.input + a.price.output * 0.1 - (b.price.input + b.price.output * 0.1))[0];
 }

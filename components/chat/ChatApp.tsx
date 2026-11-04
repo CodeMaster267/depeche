@@ -22,6 +22,7 @@ import { Compare } from "./Compare";
 import { comparedWith } from "@/lib/chat/compare";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
+import { Waiting } from "./Waiting";
 import { CanvasIcon, CanvasMessage, CanvasOpener, CanvasPane, useCanvas } from "./Canvas";
 import { ChatMenu } from "./ChatMenu";
 import { DeletionNotice } from "./DeletionNotice";
@@ -69,6 +70,7 @@ export function ChatApp({
   messages: initial,
   all: initialAll,
   summaries: initialSummaries = [],
+  focus,
 }: {
   shell: Shell;
   chat: ChatRow | null;
@@ -76,6 +78,8 @@ export function ChatApp({
   /** Every version of every message; the screen shows one path through them. */
   all?: MessageRow[];
   summaries?: SummaryRow[];
+  /** A message to scroll to and mark, when the chat was opened from a search result. */
+  focus?: string | null;
 }) {
   const router = useRouter();
   const [shell, setShell] = useState(initialShell);
@@ -86,7 +90,12 @@ export function ChatApp({
   // Edits and regenerations sit beside the originals, so a chat is a tree. `leaf` is where the
   // conversation on screen ends; flipping a version moves it.
   const [tree, setTree] = useState<Live[]>(initialAll ?? initial);
-  const [leaf, setLeaf] = useState<string | null>(initial.at(-1)?.id ?? null);
+  // Opened from a search result on an earlier version: show that version's conversation.
+  const [leaf, setLeaf] = useState<string | null>(() =>
+    focus && !initial.some((m) => m.id === focus) && initialAll?.some((m) => m.id === focus)
+      ? latestLeaf(initialAll, focus)
+      : (initial.at(-1)?.id ?? null),
+  );
   const messages = useMemo(() => pathTo(tree, leaf), [tree, leaf]);
   const [modelId, setModelId] = useState<string | null>(
     initialChat?.model && initialShell.modelIds.includes(initialChat.model) ? initialChat.model : initialShell.defaultModel,
@@ -141,7 +150,7 @@ export function ChatApp({
 
   const model = findModel(modelId);
   const selected = model;
-  // DeepSeek and some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
+  // DeepSeek can't search the web, so the globe is shown off and greyed out while one is picked.
   const searchable = canSearch(model);
   // Picture models make or edit a picture from each message.
   const imaging = !!model?.image;
@@ -155,14 +164,30 @@ export function ChatApp({
   useEffect(() => setEditLast(true), [lastPicture?.path]);
   const editing = imaging && editLast && lastPicture && !attachments.items.some((x) => x.ref?.path === lastPicture.path) ? lastPicture : undefined;
   const noModels = shell.modelIds.length === 0;
-  // Listening needs a provider that understands audio (Groq, OpenAI or Google); Claude has none.
-  const canListen = shell.modelIds.some((id) => ["groq", "openai", "google"].includes(findModel(id)?.provider ?? ""));
+  // Listening needs a provider that understands audio (Google or OpenAI); Claude has none.
+  const canListen = shell.modelIds.some((id) => ["google", "openai"].includes(findModel(id)?.provider ?? ""));
 
   // Keep the newest text in view while a reply streams, unless the person scrolled up to read.
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  // Opened from a search result: show that message instead of the end of the chat, marked for a
+  // moment (an earlier version is switched to above).
+  const [found, setFound] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (!focus) return;
+    const el = scroller.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(focus)}"]`);
+    if (!el) return;
+    pinnedToBottom.current = false;
+    el.scrollIntoView({ block: "center" });
+    setFound(focus);
+    const t = setTimeout(() => setFound(null), 2600);
+    // Don't jump again on a reload.
+    window.history.replaceState(window.history.state, "", window.location.pathname);
+    return () => clearTimeout(t);
+  }, [focus]);
 
   // Another device may have added chats or replies: catch up whenever the app comes back.
   const sync = useCallback(async () => {
@@ -817,6 +842,7 @@ export function ChatApp({
                 <div key={m.id} className="flex flex-col">
                   <UserMessage
                     message={m}
+                    found={found === m.id}
                     versions={versionsOf(tree, m)}
                     busy={busy || research.running}
                     onEdit={(text) => edit(m, text)}
@@ -858,6 +884,7 @@ export function ChatApp({
                 <CanvasMessage.Provider key={m.id} value={m.id.startsWith("local-") ? null : m.id}>
                 <Reply
                   message={m}
+                  found={found === m.id}
                   onEdit={pictureModels.length ? (f) => editPicture(f, m.model) : undefined}
                   run={fresh.has(m.id) ? runContexts.fresh : runContexts.old}
                   canRegenerate={!busy && !!m.parent_id && !m.parent_id.startsWith("local-")}
@@ -1010,6 +1037,7 @@ function stopThinking(m: Live): Live {
 
 function Reply({
   message: m,
+  found,
   canRegenerate,
   onRegenerate,
   onEdit,
@@ -1019,6 +1047,8 @@ function Reply({
   run,
 }: {
   message: Live;
+  /** Opened from a search result: marked for a moment. */
+  found?: boolean;
   canRegenerate: boolean;
   onRegenerate: () => void;
   onEdit?: (f: FileRef) => void;
@@ -1034,7 +1064,13 @@ function Reply({
   const info = findModel(m.model);
   const text = m.content.text ?? "";
   return (
-    <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
+    <article
+      data-testid="reply"
+      data-message-id={m.id}
+      data-found={found || undefined}
+      aria-busy={m.streaming || undefined}
+      className="found-mark flex flex-col gap-3"
+    >
       <Activity message={m} />
       {m.content.files?.length ? <ReplyPictures files={m.content.files} onEdit={onEdit} /> : null}
       {text ? (
@@ -1045,9 +1081,13 @@ function Reply({
       ) : null}
       {m.streaming && m.making ? <MakingPicture editing={m.editing} /> : null}
       {m.streaming && !m.searchingNow && !m.thinkingNow && !m.making ? (
-        <span aria-label="Writing" className="block h-6">
-          <span className="stream-cursor" />
-        </span>
+        text ? (
+          <span aria-label="Writing" className="block h-6">
+            <span className="stream-cursor" />
+          </span>
+        ) : (
+          <Waiting model={info?.short ?? m.model ?? "the model"} />
+        )
       ) : null}
       {!m.streaming && m.content.suggestions ? <SearchSuggestions html={m.content.suggestions} /> : null}
       {m.content.notice ? <p className="text-[14px] text-mute">{m.content.notice}</p> : null}
@@ -1223,7 +1263,7 @@ function Composer({
           onClick={() => picker.current?.click()}
           disabled={disabled}
           aria-label="Attach photos or files"
-          className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
+          className="press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
         >
           <PaperclipIcon />
         </button>
@@ -1234,7 +1274,7 @@ function Composer({
           aria-pressed={search}
           aria-label="Search the web"
           title={!searchable ? "This model can't search the web" : search ? "Web search on: the model searches when it needs to" : "Web search off"}
-          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${search ? "text-fg" : "text-faint"}`}
+          className={`press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${search ? "text-fg" : "text-faint"}`}
         >
           {search ? <GlobeIcon /> : <GlobeOffIcon />}
         </button>
@@ -1245,7 +1285,7 @@ function Composer({
           aria-pressed={deep}
           aria-label="Deep research"
           title={!deepable ? "This model can't do deep research" : deep ? "Deep research on for this message" : "Deep research: a long report with sources"}
-          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${deep ? "bg-inv text-on-inv" : "text-faint hover:text-fg"}`}
+          className={`press flex h-11 w-11 max-sm:w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${deep ? "bg-inv text-on-inv" : "text-faint hover:text-fg"}`}
         >
           <ResearchIcon />
         </button>
@@ -1270,7 +1310,7 @@ function Composer({
           placeholder={hint}
           aria-label="Message Depeche"
           disabled={disabled}
-          className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
+          className="composer-input max-h-[220px] min-h-[44px] min-w-0 flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
         />
         {voice ? <DictateButton onText={onDictated} onError={onVoiceError} disabled={disabled} /> : null}
         {busy ? (
