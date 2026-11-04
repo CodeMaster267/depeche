@@ -143,6 +143,9 @@ export async function compactChat(opts: {
   let used = writer;
   let input = 0;
   let output = 0;
+  // Parts of the input the provider read from or wrote to its cache (OpenAI caches on its own;
+  // summary requests never ask Claude to cache, since each one is sent once).
+  const cache = { read: 0, write: 0 };
   let result: { summary: string; facts: string[] } | null = null;
   try {
     const ask = async (turns: Turn[]) => {
@@ -152,6 +155,8 @@ export async function compactChat(opts: {
         else if (ev.type === "usage") {
           input += ev.input;
           output += ev.output;
+          cache.read += ev.cacheRead ?? 0;
+          cache.write += ev.cacheWrite ?? 0;
         } else if (ev.type === "model") used = MODELS.find((m) => m.id === ev.id) ?? used;
       }
       return reply;
@@ -179,10 +184,10 @@ export async function compactChat(opts: {
       result = previous;
     }
   } catch (e) {
-    await settle(admin, hold.hold_id, used, input, output);
+    await settle(admin, hold.hold_id, used, input, output, cache);
     return { skipped: e instanceof Error ? e.message : "the summary failed" };
   }
-  const cost = await settle(admin, hold.hold_id, used, input, output);
+  const cost = await settle(admin, hold.hold_id, used, input, output, cache);
   if (!result) return { skipped: "the summary failed" };
 
   const { data: saved, error } = await admin
@@ -218,8 +223,15 @@ export async function compactChat(opts: {
   return { skipped: "couldn't save the summary" };
 }
 
-async function settle(admin: ReturnType<typeof supabaseAdmin>, hold: string, model: Model, input: number, output: number) {
-  const cost = estimateCost(model, input, output);
+async function settle(
+  admin: ReturnType<typeof supabaseAdmin>,
+  hold: string,
+  model: Model,
+  input: number,
+  output: number,
+  cache: { read: number; write: number },
+) {
+  const cost = estimateCost(model, input, output, cache);
   await admin.rpc("settle_spend", {
     p_hold: hold,
     p_message: null,

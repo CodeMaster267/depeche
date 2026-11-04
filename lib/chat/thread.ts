@@ -26,7 +26,8 @@ export type MessageRow = {
     /** On a reply: questions the person might ask next, shown as buttons under the newest answer. */
     followups?: string[];
     /** On a reply: the tokens it used (estimated when the reply was stopped). */
-    usage?: { input: number; output: number; estimated?: boolean };
+    /** Tokens used; `cached` is the part of the input read back from the provider's prompt cache. */
+    usage?: { input: number; output: number; cached?: number; estimated?: boolean };
     /** The model's reasoning, or its provider's summary of it, shown collapsed above the reply. */
     reasoning?: string;
     /** How long the model thought, in milliseconds. */
