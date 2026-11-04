@@ -574,3 +574,12 @@ body {
   .voice-orb { transition: opacity 200ms ease; transform: none !important; }
   .voice-orb-speaking, .voice-orb-busy, .voice-dots { animation: none; }
 }
+
+/*
+ * The small buttons under your own messages (edit, versions). Always shown on touch screens; with a
+ * mouse or trackpad they appear when the message is hovered or focused, unless there are versions.
+ */
+@media (hover: hover) and (pointer: fine) {
+  .msg-row:not(:hover):not(:focus-within) .msg-tools[data-idle] { opacity: 0; }
+}
+.msg-tools { transition: opacity 150ms ease; }
