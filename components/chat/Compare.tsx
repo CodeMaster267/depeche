@@ -64,7 +64,12 @@ export function Compare<T extends MessageRow & { streaming?: boolean }>({
 
   return (
     <section data-testid="compare" aria-label={`Answers from ${replies.length} models`} className="flex flex-col gap-3">
-      <div role="tablist" aria-label="Answers" className="flex flex-wrap items-center gap-1.5">
+      <div
+        role="tablist"
+        aria-label="Answers"
+        className="-mx-5 flex items-center gap-1.5 overflow-x-auto px-5 md:mx-0 md:px-0"
+        style={{ scrollbarWidth: "none" }}
+      >
         {replies.map((m, i) => {
           const name = findModel(m.model)?.short ?? m.model ?? "Model";
           const chosen = m.id === chosenId;
@@ -76,7 +81,7 @@ export function Compare<T extends MessageRow & { streaming?: boolean }>({
               aria-selected={i === shown}
               aria-label={`${name}${chosen ? ", continuing with this" : ""}`}
               onClick={() => goTo(i)}
-              className={`press flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[14px] transition-colors ${
+              className={`press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-[14px] transition-colors ${
                 i === shown ? "border-fg bg-inv text-on-inv" : "border-line text-mute"
               }`}
             >
