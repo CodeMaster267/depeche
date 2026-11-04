@@ -7,8 +7,8 @@ import type { Provider } from "@/lib/ai/models";
 /**
  * Speech in and out, on the family's own keys.
  *
- * Listening (speech to text) needs a provider that understands audio: OpenAI's transcription model
- * if the family has an OpenAI key, otherwise Gemini Flash (works on free Google keys). Anthropic
+ * Listening (speech to text) needs a provider that understands audio: Gemini Flash-Lite first (it
+ * works on free Google keys, so it usually costs nothing), then OpenAI's transcription model. Anthropic
  * has no audio input, so a Claude-only family can't use the mic.
  *
  * Speaking (text to speech) prefers Gemini's speech model (also free on free keys), then OpenAI's.
@@ -19,8 +19,6 @@ import type { Provider } from "@/lib/ai/models";
  */
 export const VOICE = {
   transcribe: {
-    // Groq's Whisper: free tier on Groq keys, and fast. $0.04 an audio hour on paid keys.
-    groq: { model: "whisper-large-v3-turbo", perMinute: 0.04 / 60 },
     openai: { model: "gpt-transcribe", perMinute: 0.0045 },
     // Audio input is estimated at 32 tokens a second at twice Flash's text price, to err high.
     // Flash-Lite first: writing out speech needs no deep model, and it answers in a second or two.
@@ -91,16 +89,15 @@ export function liveSeconds(reported: unknown): number {
   return Math.min(VOICE.live.maxSeconds, Math.max(1, Math.ceil(n)));
 }
 
-/** Which provider listens and which speaks, given the providers a family has keys for. */
 /**
  * Which providers can listen and speak, best first, given the providers a family has keys for.
- * Listening prefers Groq's free Whisper. If one fails (a used-up free quota, say), the next is
- * tried. Groq's own speech voice is left out for now: it is a preview limited to 200 characters.
+ * Both prefer Gemini, which is free on free Google keys. If one fails (a used-up free quota, say),
+ * the next is tried.
  */
 export function voiceProviders(providers: readonly string[]): { listen: Provider[]; speak: Provider[] } {
   const has = (p: Provider) => providers.includes(p);
   return {
-    listen: (["groq", "openai", "google"] as const).filter(has),
+    listen: (["google", "openai"] as const).filter(has),
     speak: (["google", "openai"] as const).filter(has),
   };
 }
@@ -144,7 +141,7 @@ export function languageHint(languages: string[]): string {
 
 /**
  * `languages` are the languages the person speaks (two-letter codes, like "en" and "ur"), from the
- * voice settings. Without them, Whisper guesses from the sound alone and, on a short or noisy clip,
+ * voice settings. Without them, a model guesses from the sound alone and, on a short or noisy clip,
  * can pick a language nobody spoke.
  */
 export async function transcribe(provider: Provider, apiKey: string, wav: Uint8Array, signal: AbortSignal, languages: string[] = []): Promise<Transcript> {
@@ -153,36 +150,6 @@ export async function transcribe(provider: Provider, apiKey: string, wav: Uint8A
   if (fakeAi()) {
     // Tests: a fixed sentence, so a voice turn can be followed end to end.
     return { text: "What is the quadratic formula?", model: "fake", cost: 0, input: 0, output: 0 };
-  }
-  if (provider === "groq") {
-    // Groq speaks OpenAI's API, so the same client works with Groq's address.
-    const client = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1", maxRetries: 0, timeout: 15_000 });
-    const g = VOICE.transcribe.groq;
-    const ask = (language?: string) =>
-      client.audio.transcriptions.create(
-        {
-          file: new File([wav as BlobPart], "speech.wav", { type: "audio/wav" }),
-          model: g.model,
-          response_format: "verbose_json",
-          ...(hint ? { prompt: hint } : {}),
-          ...(language ? { language } : {}),
-        },
-        { signal },
-      ) as Promise<{ text: string; language?: string }>;
-    let res = await ask();
-    // Whisper names the language it heard. If that's none the person speaks, it misheard noise
-    // as another language: ask again, held to their main language.
-    const heard = (res.language ?? "").toLowerCase();
-    const known = languages.map((l) => languageName(l).toLowerCase());
-    if (heard && known.length && !known.includes(heard) && !languages.includes(heard)) res = await ask(languages[0]);
-    return {
-      text: res.text.trim(),
-      model: g.model,
-      // Groq bills at least 10 seconds a request.
-      cost: (Math.max(10, seconds) / 60) * g.perMinute,
-      input: Math.ceil(seconds * 32),
-      output: Math.ceil(res.text.length / 4),
-    };
   }
   if (provider === "openai") {
     const client = new OpenAI({ apiKey, maxRetries: 1 });

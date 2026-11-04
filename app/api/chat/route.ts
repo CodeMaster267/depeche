@@ -6,7 +6,7 @@ import { decryptSecret, fromBytea } from "@/lib/crypto";
 import { MAX_SEARCHES, canLookUp, estimateCost, findModel, searchCost } from "@/lib/ai/models";
 import { ProviderError, fakeAi, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
 import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOfferChatSearch } from "@/lib/chat/search";
-import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
+import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions, type RememberedFact } from "@/lib/chat/memory";
 import { personalInstructions, type PersonalInstructions } from "@/lib/chat/instructions";
 import { MAX_FILES_PER_MESSAGE, OFFICE_TYPES, UPLOAD_BUCKET, isFileRef, readAsText, type FileRef } from "@/lib/chat/files";
 import { documentText } from "@/lib/docs/read";
@@ -187,15 +187,15 @@ export async function POST(req: NextRequest) {
   // What the person asked Depeche to remember. Their own rows only, read as them. A temporary chat
   // neither uses nor suggests memories.
   const { data: remembered } = temporary
-    ? { data: [] }
+    ? { data: [] as RememberedFact[] }
     : await db
         .from("memories")
-        .select("content")
+        .select("content, about")
         .eq("owner_id", me.userId)
         .eq("status", "active")
         .order("updated_at", { ascending: false })
         .limit(MEMORY_PROMPT_LIMIT)
-        .returns<{ content: string }[]>();
+        .returns<RememberedFact[]>();
   // Their personal instructions ("About you", "How should Depeche answer"), also read as them.
   const { data: instructions } = await db
     .from("personal_instructions")
@@ -208,7 +208,7 @@ export async function POST(req: NextRequest) {
   const system = systemPrompt(
     me.profile.display_name,
     Boolean(body.voice),
-    (remembered ?? []).map((m) => m.content),
+    remembered ?? [],
     instructions,
     canvas,
     temporary,
@@ -690,7 +690,7 @@ function canvasPrompt(name: string, c: OpenCanvas): string {
   ].join("\n");
 }
 
-function systemPrompt(name: string, voice: boolean, memories: string[], instructions: PersonalInstructions | null, canvas: OpenCanvas | null = null, temporary = false): string {
+function systemPrompt(name: string, voice: boolean, memories: RememberedFact[], instructions: PersonalInstructions | null, canvas: OpenCanvas | null = null, temporary = false): string {
   return [
     `You are a helpful assistant inside Depeche, a private chat app for a family and friends. You're talking with ${name}.`,
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,

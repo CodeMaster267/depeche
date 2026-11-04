@@ -5,7 +5,6 @@ import { FunctionCallingConfigMode, GoogleGenAI, type Part } from "@google/genai
 import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canLookUp, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
 import { MAX_OUTPUT } from "@/lib/ai/budget";
 import { CHAT_SEARCH_TOOL, MAX_CHAT_SEARCHES, type ChatSearch } from "@/lib/chat/search";
-import { GROQ_VISION_MODEL, groqReply } from "@/lib/ai/groq";
 import { DEEPSEEK_VISION_MODEL, deepseekReply } from "@/lib/ai/deepseek";
 import { xaiReply } from "@/lib/ai/xai";
 import type { Source } from "@/lib/chat/thread";
@@ -54,7 +53,7 @@ export type ReplyRequest = {
   maxOutput?: number;
   /**
    * Lets the model look up the exact wording of earlier messages in this chat ("search this
-   * chat"), offered when some of them are summarised or left out. Not on Groq (test-only).
+   * chat"), offered when some of them are summarised or left out.
    */
   chatSearch?: ChatSearch;
   /** Ask for the model's reasoning. Turned off for a model that turns out not to offer it. */
@@ -80,10 +79,6 @@ const BUSY_FALLBACK: Record<string, string> = {
   "gemini-3.8-flash": "gemini-3.5-flash-lite",
   "gemini-4-argon": "gemini-3.8-flash",
   "gemini-3.5-flash-lite": "gemini-3.8-flash",
-  // Groq's free-tier limits are per model, so a sibling model can answer when one is used up.
-  "openai/gpt-oss-120b": "openai/gpt-oss-20b",
-  "openai/gpt-oss-20b": "openai/gpt-oss-120b",
-  "qwen/qwen3.8-27b": "openai/gpt-oss-120b",
   // DeepSeek often says its servers are busy at peak times.
   "deepseek-v4-pro": "deepseek-flash",
   "deepseek-flash": "deepseek-v4-pro",
@@ -94,15 +89,9 @@ const BUSY_FALLBACK: Record<string, string> = {
 /** Every model that might answer when this one is chosen, so a spending hold covers the dearest. */
 export function modelsThatMayAnswer(model: Model): Model[] {
   const backup = findModel(BUSY_FALLBACK[model.id]);
-  // On Groq, Qwen answers messages with pictures; on DeepSeek, Flash does.
-  const vision =
-    model.provider === "groq" ? findModel(GROQ_VISION_MODEL) : model.provider === "deepseek" ? findModel(DEEPSEEK_VISION_MODEL) : undefined;
+  // On DeepSeek, Flash answers messages with pictures.
+  const vision = model.provider === "deepseek" ? findModel(DEEPSEEK_VISION_MODEL) : undefined;
   return [model, backup, vision].filter((m, i, all): m is Model => !!m && all.findIndex((x) => x?.id === m.id) === i);
-}
-
-/** Groq's free tier says "rate limit reached" (429) when a model's minute or day allowance is used up. */
-export function isRateLimited(e: unknown): boolean {
-  return status(e) === 429 || /rate limit/i.test(detail(e));
 }
 
 export function isBusy(e: unknown): boolean {
@@ -137,8 +126,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
     try {
       if (attempt.model.id !== req.model.id) {
         yield { type: "model", id: attempt.model.id };
-        const why = isRateLimited(lastError) ? "reached its free-tier limit" : "was busy";
-        yield { type: "notice", text: `${req.model.name} ${why}, so ${attempt.model.name} answered instead.` };
+        yield { type: "notice", text: `${req.model.name} was busy, so ${attempt.model.name} answered instead.` };
       }
       // Telling a model it can search without giving it the tool makes some reply with nothing.
       const lookup = canLookUp(attempt.model.provider) ? chatSearch : undefined;
@@ -150,13 +138,11 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
           ? anthropicReply(r)
           : r.model.provider === "openai"
             ? openaiReply(r)
-            : r.model.provider === "groq"
-              ? groqReply(r)
-              : r.model.provider === "deepseek"
-                ? deepseekReply(r)
-                : r.model.provider === "xai"
-                  ? xaiReply(r)
-                  : googleReply(r);
+            : r.model.provider === "deepseek"
+              ? deepseekReply(r)
+              : r.model.provider === "xai"
+                ? xaiReply(r)
+                : googleReply(r);
       for await (const ev of inner) {
         // Retrying after reasoning was shown would show it twice, so that counts as written too.
         if (ev.type === "text" || ev.type === "thinking") wrote = true;
@@ -184,19 +170,11 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
         continue;
       }
       // Some keys or models can't search (free tiers, older models): answer without it instead.
-      const groqLimit = attempt.model.provider === "groq" && isRateLimited(e);
-      if (search && !isBusy(e) && !groqLimit && status(e) !== 401) {
+      if (search && !isBusy(e) && status(e) !== 401) {
         search = false;
         console.error("[chat] search failed, answering without it", status(e), detail(e));
         yield { type: "notice", text: searchUnavailable(attempt.model.provider, e) };
         i--;
-        continue;
-      }
-      // A used-up Groq allowance won't come back in a few seconds: go straight to the sibling model.
-      if (groqLimit) {
-        const next = attempts.findIndex((a, j) => j > i && a.model.id !== attempt.model.id);
-        if (next < 0) break;
-        i = next - 1;
         continue;
       }
       // Other errors won't go away.
@@ -700,15 +678,6 @@ function friendlyError(provider: Provider, e: unknown): string {
     return `${name} didn't accept your family's key. Ask your family admin to check it in Family settings.`;
   if (provider === "google" && (code === 429 || /quota|rate limit|resource.?exhausted/i.test(msg)))
     return "Google's limit for this key is reached for now. Free keys allow only a few messages a minute and some models not at all. Wait a minute, or pick a Flash model.";
-  if (provider === "groq" && (code === 413 || /request too large/i.test(msg)))
-    return "This chat is too long for Groq's free tier, which takes only about 8,000 tokens (roughly 6,000 words) a minute. Start a new chat, or pick another model.";
-  if (provider === "groq" && (code === 429 || /rate limit/i.test(msg))) {
-    const wait = /try again in ([\d.]+)(m?s)/i.exec(msg);
-    const when = wait ? ` Try again in ${wait[2] === "ms" ? "a second" : `${Math.ceil(Number(wait[1]))} seconds`}.` : " Wait a minute and try again.";
-    return /per day|\(RPD\)|\(TPD\)/i.test(msg)
-      ? "Groq's free-tier allowance for today is used up on these models. Pick another model, or try again tomorrow."
-      : `Groq's free tier allows only so much a minute, and that's used up.${when}`;
-  }
   if (code === 429 || /quota|rate limit|credit|billing/i.test(msg))
     return `${name} says the key is out of credit or busy. Try again in a minute, or ask your family admin to check billing.`;
   if (isBusy(e)) return `${name}'s servers are very busy right now, even after a few tries. Wait a minute, or pick another model.`;
@@ -743,12 +712,12 @@ export async function listKeyModels(provider: Provider, key: string): Promise<st
       const res = await fetch("https://api.openai.com/v1/models", { signal, headers: { authorization: `Bearer ${key}` } });
       if (!res.ok) return res.status === 401 || res.status === 403 ? null : ours;
       for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
-    } else if (provider === "groq" || provider === "deepseek" || provider === "xai") {
-      const url = { groq: "https://api.groq.com/openai/v1/models", deepseek: "https://api.deepseek.com/models", xai: "https://api.x.ai/v1/models" }[provider];
+    } else if (provider === "deepseek" || provider === "xai") {
+      const url = { deepseek: "https://api.deepseek.com/models", xai: "https://api.x.ai/v1/models" }[provider];
       const res = await fetch(url, { signal, headers: { authorization: `Bearer ${key}` } });
       if (!res.ok) return res.status === 401 || res.status === 403 ? null : ours;
       for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
-    } else {
+    } else if (provider === "google") {
       let page = "";
       for (let i = 0; i < 5; i++) {
         const res = await fetch(
@@ -761,6 +730,9 @@ export async function listKeyModels(provider: Provider, key: string): Promise<st
         if (!body.nextPageToken) break;
         page = body.nextPageToken;
       }
+    } else {
+      // A provider Depeche no longer offers (an old Groq key, say).
+      return null;
     }
     // xAI and DeepSeek may list a model under a dated name (grok-4.3-0612) that its short name points to.
     const dated = provider === "xai" || provider === "deepseek";
@@ -924,14 +896,6 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     return;
   }
   // "busy" in the message makes the chosen model act overloaded, to test retries and the fallback.
-  // "ratelimit" makes a Groq model act as if its free-tier allowance is used up; "ratelimitall" does
-  // the same for the model that steps in, to test the fallback and the final error.
-  if (model.provider === "groq" && (q.includes("ratelimitall") || (chosen && q.includes("ratelimit")))) {
-    throw Object.assign(
-      new Error(`Rate limit reached for model \`${model.id}\` in organization \`org_test\` service tier \`on_demand\` on requests per minute (RPM): Limit 30, Used 30, Requested 1. Please try again in 2.5s.`),
-      { status: 429 },
-    );
-  }
   if (chosen && q.includes("busy")) throw Object.assign(new Error("This model is currently experiencing high demand."), { status: 503 });
   // "latest" with search on makes it search the web first, to test sources and search fees.
   if (search && q.includes("latest")) {

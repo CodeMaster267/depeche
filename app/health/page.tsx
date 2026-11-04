@@ -121,7 +121,8 @@ export default async function Health() {
           {keys.length ? (
             <ul className="flex flex-col divide-y divide-line rounded-2xl border border-line" data-testid="providers">
               {keys.map((k) => {
-                const name = PROVIDERS.find((p) => p.id === k.provider)?.name ?? k.provider;
+                // A key for a provider Depeche no longer offers (an old Groq key) is shown as unused.
+                const name = PROVIDERS.find((p) => p.id === k.provider)?.name ?? `${k.provider} (no longer used)`;
                 return (
                   <li key={k.provider} className="flex flex-col gap-0.5 px-4 py-3">
                     <span className="text-[17px]">{name}</span>
