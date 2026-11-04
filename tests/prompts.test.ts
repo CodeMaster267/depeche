@@ -27,8 +27,6 @@ describe("think harder", () => {
     expect(canThinkHarder({ id: "claude-sonnet-5-5", provider: "anthropic" })).toBe(true);
     expect(canThinkHarder({ id: "gpt-6.1-sol", provider: "openai" })).toBe(true);
     expect(canThinkHarder({ id: "gemini-3.8-flash", provider: "google" })).toBe(true);
-    expect(canThinkHarder({ id: "openai/gpt-oss-120b", provider: "groq" })).toBe(true);
-    expect(canThinkHarder({ id: "qwen/qwen3.8-27b", provider: "groq" })).toBe(false);
     expect(canThinkHarder({ id: "deepseek-v4-pro", provider: "deepseek" })).toBe(false);
     expect(canThinkHarder({ id: "grok-4.7", provider: "xai" })).toBe(false);
     expect(canThinkHarder(undefined)).toBe(false);

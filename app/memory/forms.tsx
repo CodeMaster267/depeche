@@ -1,31 +1,49 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useRef, useState, useTransition } from "react";
 import { Button, Notice } from "@/components/ui";
 import { MAX_MEMORY_CHARS } from "@/lib/chat/memory";
 import { MAX_INSTRUCTION_CHARS, type PersonalInstructions } from "@/lib/chat/instructions";
-import { addMemory, forgetAll, saveInstructions } from "./actions";
+import { forgetAll, rememberFact, saveInstructions, type MemoryOutcome } from "./actions";
+import { MemoryOutcomeView } from "@/components/chat/MemoryOutcome";
 
+/** "Teach Depeche": typed facts go through the same check as suggested ones. */
 export function AddMemoryForm() {
-  const [state, action, pending] = useActionState(addMemory, undefined);
+  const [outcome, setOutcome] = useState<MemoryOutcome | null>(null);
+  const [pending, start] = useTransition();
   const form = useRef<HTMLFormElement>(null);
-  useEffect(() => {
-    if (state?.ok) form.current?.reset();
-  }, [state]);
+  const submit = (data: FormData) =>
+    start(async () => {
+      const next = await rememberFact({ content: String(data.get("content") ?? ""), from: "page" });
+      setOutcome(next);
+      if (next.kind !== "error" && next.kind !== "conflict") form.current?.reset();
+    });
   return (
-    <form ref={form} action={action} className="flex flex-col gap-3">
+    <form ref={form} action={submit} className="flex flex-col gap-3">
       <label className="flex flex-col gap-2">
         <span className="text-[15px] font-medium">Add something</span>
         <textarea
           name="content"
           rows={2}
           maxLength={MAX_MEMORY_CHARS}
-          placeholder="For example: I'm vegetarian, and I like short answers."
+          placeholder="For example: I'm vegetarian, and my brother Ali is 19."
           className="resize-none rounded-2xl border border-line bg-bg px-4 py-3 text-[17px] outline-none placeholder:text-faint focus:border-fg"
         />
       </label>
-      {state?.error ? <Notice tone="error">{state.error}</Notice> : state?.ok ? <Notice>{state.ok}</Notice> : null}
-      <Button disabled={pending}>Remember</Button>
+      {outcome?.kind === "error" ? (
+        <Notice tone="error">{outcome.error}</Notice>
+      ) : outcome ? (
+        <MemoryOutcomeView
+          key={outcome.kind === "conflict" ? outcome.fact : outcome.kind}
+          outcome={outcome}
+          from="page"
+          onChange={(next) => {
+            setOutcome(next);
+            if (next && next.kind !== "error" && next.kind !== "conflict") form.current?.reset();
+          }}
+        />
+      ) : null}
+      <Button disabled={pending}>{pending ? "Checking…" : "Remember"}</Button>
     </form>
   );
 }
