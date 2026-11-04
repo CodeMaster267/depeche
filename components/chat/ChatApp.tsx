@@ -1001,7 +1001,9 @@ function Composer({
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
-  const { placeholder } = useLookTexts();
+  const look = useLookTexts();
+  // A look can reword the usual prompt; picture prompts stay as they are.
+  const hint = placeholder === "Message Depeche" && look.placeholder ? look.placeholder : placeholder;
   const [dragging, setDragging] = useState(false);
   useLayoutEffect(() => {
     const el = box.current;
@@ -1086,7 +1088,7 @@ function Composer({
             }
           }}
           rows={1}
-          placeholder={placeholder}
+          placeholder={hint}
           aria-label="Message Depeche"
           disabled={disabled}
           className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
