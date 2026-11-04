@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
 import { thoughtFor } from "@/lib/chat/activity";
@@ -39,13 +40,21 @@ export function Activity({ message: m }: { message: MessageRow & LiveActivity })
   const searched = searchingWeb || !!(queries.length || c.sources?.length || c.searches);
   const lookedBack = searchingChat || lookups.length > 0;
   const read = c.read ?? [];
-  if (!read.length && !reasoning && !m.thinkingNow && !searched && !lookedBack) return null;
+  const skills = c.skills ?? [];
+  if (!read.length && !skills.length && !reasoning && !m.thinkingNow && !searched && !lookedBack) return null;
   return (
     <div data-testid="activity" className="flex flex-col items-start gap-0.5">
       {read.map((name, i) => (
         <p key={`${i}-${name}`} data-testid="activity-read" className="flex min-w-0 max-w-full items-center gap-2 py-1 text-[15px] text-mute">
           <span className="min-w-0 truncate">
             {/\.(png|jpe?g|gif|webp|heic|heif|avif)$/i.test(name) ? "Viewed" : "Read"} {name}
+          </span>
+        </p>
+      ))}
+      {skills.map((s) => (
+        <p key={s.id} data-testid="activity-skill" className="flex min-w-0 max-w-full items-center gap-2 py-1 text-[15px] text-mute">
+          <span className="min-w-0 truncate">
+            Used the <Link href={`/skills/${s.id}`} className="underline underline-offset-4 hover:text-fg">{s.name}</Link> skill
           </span>
         </p>
       ))}

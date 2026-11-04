@@ -180,3 +180,8 @@ export const ChevronUpDownIcon = (p: P) => (
     <path d="m8 9 4-4 4 4M8 15l4 4 4-4" />
   </svg>
 );
+export const SkillsIcon = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M12 3.5l2.2 5.3 5.3 2.2-5.3 2.2L12 18.5l-2.2-5.3L4.5 11l5.3-2.2z" />
+  </svg>
+);

@@ -40,7 +40,7 @@ test("the account row opens a menu with your pages, and closes again", async ({ 
   await account.click();
   await expect(account).toHaveAttribute("aria-expanded", "true");
   const menu = page.getByRole("navigation", { name: "Your pages" });
-  for (const name of ["Memory", "My look", "Account", "Family", "Health", "Report a bug"]) {
+  for (const name of ["Memory", "Skills", "My look", "Account", "Family", "Health", "Report a bug"]) {
     await expect(menu.getByRole("link", { name, exact: true })).toBeVisible();
   }
   await expect(page.getByTestId("spending")).toBeVisible();

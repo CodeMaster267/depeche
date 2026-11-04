@@ -3,7 +3,7 @@
 import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { BrushIcon, BugIcon, ChevronUpDownIcon, MemoryIcon, PeopleIcon, PersonIcon, PulseIcon } from "./icons";
+import { BrushIcon, BugIcon, ChevronUpDownIcon, MemoryIcon, PeopleIcon, SkillsIcon, PersonIcon, PulseIcon } from "./icons";
 
 /** A thin bar under the row while its page loads, like the header links. */
 function Pending() {
@@ -29,7 +29,7 @@ function Item({ href, icon, children, onGo }: { href: string; icon: ReactNode; c
 
 /**
  * The foot of the chats list: one quiet row with your initial, your name and what you've spent this
- * month. Tapping it opens a small menu above it with your pages (Memory, My look, Account), the
+ * month. Tapping it opens a small menu above it with your pages (Memory, Skills, My look, Account), the
  * family pages for admins, and Report a bug. Replaces the wall of pill buttons that used to sit
  * beside the name.
  */
@@ -89,6 +89,9 @@ export function AccountMenu({
           <nav aria-label="Your pages" className="flex flex-col">
             <Item href="/memory" icon={<MemoryIcon />} onGo={go}>
               Memory
+            </Item>
+            <Item href="/skills" icon={<SkillsIcon />} onGo={go}>
+              Skills
             </Item>
             <Item href="/design" icon={<BrushIcon />} onGo={go}>
               My look
