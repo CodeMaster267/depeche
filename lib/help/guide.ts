@@ -69,9 +69,16 @@ naming the page you're on to switch). "Ask Concierge", under your chats, opens t
     title: "Attaching files, web search, deep research",
     text: `
 The buttons next to the message box:
-- Paperclip ("Attach photos or files"): photos, PDFs, Word, Excel, PowerPoint, and text or code files. Up to 5 files a
-  message and 10 MB each. You can also paste or drag files in. Word, Excel and PowerPoint files are read by Depeche and
-  sent as text; photos and PDFs go to the model as they are. Uploaded files are deleted after 3 days without use.
+- Paperclip ("Attach"): opens a menu with three choices.
+  - "Photos and files": photos, PDFs, Word, Excel, PowerPoint, and text or code files. Up to 5 files a message and
+    10 MB each. You can also paste or drag files in. Word, Excel and PowerPoint files are read by Depeche and sent as
+    text; photos and PDFs go to the model as they are. Uploaded files are deleted after 3 days without use.
+  - "Scan pages": opens the camera (a file picker on a computer). Depeche finds the page's edges; drag the round corners
+    if they're off, then pick Clean, B&W or Original and tap Keep. Add more pages with "Add page", tap a page to crop,
+    rotate, move or delete it, name the PDF, then tap Attach (or Save PDF to keep it). It all happens on your device.
+  - "Voice note or recording": pick a recording (iPhone voice memos, WhatsApp voice notes, mp3 and others, up to 30
+    minutes and 25 MB). Depeche writes it out with your family's OpenAI or Google key and attaches the words as
+    "<name> transcript.txt"; the recording itself is deleted straight away.
 - Globe ("Search the web"): when it's on, the model searches the web when it needs to and shows its sources. Each search
   has a small fee. DeepSeek models can't search, so the globe is greyed out for them.
 - Deep research (the magnifier with lines): for this one message, the model runs several web searches and writes a long
@@ -132,6 +139,21 @@ Voice works while the app is open; iPhones don't let websites listen in the back
 - Chats you haven't used for a month are deleted with their files, archived ones too. Pinned chats are always kept. To
   keep everything, turn on "Keep all my chats" in [Account → Old chats](/account#old-chats). When chats are about to be
   deleted, a line at the top of the chat screen says so, with "Keep" to save them.`,
+  },
+  {
+    id: "temporary-and-sharing",
+    title: "Temporary chats and sharing a chat",
+    routes: ["/s/[token]"],
+    text: `
+- Temporary chat: on a new, empty chat, tap the dashed speech bubble at the top right (it shows "Temporary" when on).
+  Nothing in it is saved: it isn't added to your chats, no memories are used or suggested, and it's gone once you leave,
+  reload or tap New chat. Its cost still counts toward your monthly limit. Pictures and deep research need a normal chat.
+  You can also open depai.vercel.app/?temporary to start one straight away.
+- Share a chat: open the chat's three dots (in the chat list or at the top of the chat) and tap Share, then "Create link".
+  Anyone with the link can read a copy of the chat as it is at that moment, without signing in; they can't write in it.
+  Attached files show by name only. Messages you send later aren't in the copy until you tap "Update to now" (the link
+  stays the same). "Copy link" copies it, "Send…" opens your phone's share sheet, and "Stop sharing" makes the link stop
+  working at once. Deleting the chat deletes its link too. Shared pages are hidden from search engines.`,
   },
   {
     id: "skills",
