@@ -23,6 +23,12 @@ export type MessageRow = {
     suggestions?: string;
     /** Set on a deep research report: what was researched. */
     research?: { title: string; questions: string[]; sources: number };
+    /** On a question: the part of an earlier answer it asks about (selected by the person). */
+    quote?: string;
+    /** On a reply: questions the person might ask next, shown as buttons under the newest answer. */
+    followups?: string[];
+    /** On a reply: the tokens it used (estimated when the reply was stopped). */
+    usage?: { input: number; output: number; estimated?: boolean };
     /** The model's reasoning, or its provider's summary of it, shown collapsed above the reply. */
     reasoning?: string;
     /** How long the model thought, in milliseconds. */
