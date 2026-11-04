@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Wordmark } from "@/components/Wordmark";
-import { NavLink } from "@/components/Press";
 import { GlassCode } from "@/components/Glass";
 import { listArchived } from "@/app/c/actions";
 import type { ChatRow } from "@/lib/chat/thread";
+import { searchChats } from "@/app/c/actions";
+import { marked, type ChatHit } from "@/lib/chat/find";
 import { ChatMenu } from "./ChatMenu";
+import { AccountMenu } from "./AccountMenu";
 import { ArchiveIcon, BackIcon, CloseIcon, PlusIcon, SearchIcon } from "./icons";
 import { Shortcuts } from "@/components/design/Look";
 
@@ -76,11 +78,19 @@ export function Sidebar({
     const found = needle ? list.filter((c) => c.title.toLowerCase().includes(needle)) : list;
     return showArchived ? (found.length ? ([["Archived", found]] as [string, ChatRow[]][]) : []) : group(found);
   }, [chats, archived, showArchived, q]);
+  // Words inside messages (your own chats only, never archived ones). Chats whose title matched are
+  // already listed above; the rest show the message that matched.
+  const needle = showArchived ? "" : q.trim().toLowerCase();
+  const inMessages = useMessageSearch(needle ? q : "");
+  const byId = useMemo(() => new Map(chats.map((c) => [c.id, c])), [chats]);
+  const titled = needle ? shown.reduce((n, [, l]) => n + l.length, 0) : 0;
+  const hits = needle
+    ? (inMessages.hits ?? []).filter((h) => byId.has(h.chatId) && !byId.get(h.chatId)!.title.toLowerCase().includes(needle))
+    : [];
   const change = (next: ChatRow) => {
     onChatChange(next);
     if (showArchived) setArchived((list) => (list ?? []).flatMap((c) => (c.id !== next.id ? [c] : next.archived_at ? [next] : [])));
   };
-  const share = noLimit ? 0 : cap > 0 ? Math.min(1, spent / cap) : 1;
 
   return (
     <nav aria-label="Chats" data-part="sidebar" className="flex h-full flex-col gap-4 px-4" style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}>
@@ -163,6 +173,49 @@ export function Sidebar({
             </ul>
           </section>
         ))}
+        {hits.length ? (
+          <section className="mb-4" aria-label="Found in messages">
+            <h3 className="px-3 pb-1.5 pt-2 text-[12px] font-semibold uppercase tracking-[0.1em] text-mute">In messages</h3>
+            <ul>
+              {hits.map((h) => (
+                <li key={h.chatId}>
+                  <Link
+                    href={`/c/${h.chatId}?m=${h.messageId}`}
+                    prefetch={false}
+                    onClick={onNavigate}
+                    data-testid="message-hit"
+                    aria-current={h.chatId === activeId ? "page" : undefined}
+                    className={`block rounded-xl px-3 py-2.5 ${h.chatId === activeId ? "bg-soft" : "hover:bg-soft"}`}
+                  >
+                    <span className="block truncate text-[16px] font-medium">{byId.get(h.chatId)?.title}</span>
+                    <span className="mt-0.5 line-clamp-2 break-words text-[14px] leading-snug text-mute">
+                      {h.role === "assistant" ? "Reply: " : "You: "}
+                      {marked(h.snippet, inMessages.query).map((p, i) =>
+                        p.hit ? (
+                          <mark key={i} className="bg-transparent font-semibold text-fg">
+                            {p.text}
+                          </mark>
+                        ) : (
+                          <span key={i}>{p.text}</span>
+                        ),
+                      )}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        {needle && inMessages.busy && !hits.length ? (
+          <p role="status" className="px-3 text-[15px] text-mute">
+            Searching messages…
+          </p>
+        ) : null}
+        {needle && !inMessages.busy && !titled && !hits.length ? (
+          <p role="status" className="px-3 text-[15px] text-mute">
+            {inMessages.failed ? "Couldn't search messages just now. Try again in a moment." : `No chats or messages match “${q.trim()}”.`}
+          </p>
+        ) : null}
         {showArchived ? (
           archived && !archived.length ? (
             <p className="px-3 pt-2 text-[15px] text-mute">No archived chats. Archive a chat from its three dots to put it away here; chats you haven&apos;t used for a month are still deleted, unless you keep all your chats in Account.</p>
@@ -185,37 +238,42 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="flex flex-col gap-3 border-t border-line pb-4 pt-4" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
-        <div className="flex items-center gap-3 px-2">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-inv text-[15px] font-semibold text-on-inv">
-            {name.slice(0, 1).toUpperCase()}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[16px]">{name}</span>
-            <span className="mt-1 flex flex-wrap gap-2 whitespace-nowrap text-[14px]">
-              {isAdmin ? <NavLink href="/family">Family</NavLink> : null}
-              {isAdmin ? <NavLink href="/health">Health</NavLink> : null}
-              <NavLink href="/memory">Memory</NavLink>
-              <NavLink href="/skills">Skills</NavLink>
-              <NavLink href="/account">Account</NavLink>
-              <NavLink href="/design">My look</NavLink>
-              <NavLink href="/gadgets">Gadgets</NavLink>
-              <span data-part="report-link" className="contents">
-                <NavLink href={`/report?from=${encodeURIComponent(activeId ? `/c/${activeId}` : "/")}`}>Report a bug</NavLink>
-              </span>
-            </span>
-          </span>
-        </div>
-        <div className="px-2" data-testid="spending" data-part="spending">
-          <div className="h-1 overflow-hidden rounded-full bg-line">
-            <div className="h-full bg-fg" style={{ width: `${share * 100}%` }} />
-          </div>
-          <div className="mt-1.5 flex justify-between font-mono text-[12px] text-mute">
-            <span>${spent.toFixed(2)} this month</span>
-            <span>{noLimit ? "no limit" : `limit $${cap.toFixed(0)}`}</span>
-          </div>
-        </div>
-      </div>
+      <AccountMenu
+        name={name}
+        isAdmin={isAdmin}
+        spent={spent}
+        cap={cap}
+        noLimit={noLimit}
+        reportFrom={activeId ? `/c/${activeId}` : "/"}
+        onNavigate={onNavigate}
+      />
     </nav>
   );
+}
+
+/**
+ * Words inside your messages, found on the server a moment after you stop typing. Only the latest
+ * search's answer is shown, so a slow earlier one can't replace it.
+ */
+function useMessageSearch(q: string) {
+  const query = q.replace(/\s+/g, " ").trim();
+  const [state, setState] = useState<{ query: string; hits: ChatHit[] | null; failed: boolean }>({ query: "", hits: null, failed: false });
+  const latest = useRef("");
+  useEffect(() => {
+    latest.current = query;
+    if (query.length < 2) return;
+    const t = setTimeout(async () => {
+      try {
+        const hits = await searchChats(query);
+        if (latest.current === query) setState({ query, hits, failed: false });
+      } catch {
+        if (latest.current === query) setState({ query, hits: [], failed: true });
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query]);
+  const searching = query.length >= 2;
+  const current = searching && state.query === query;
+  // While the next answer is on its way, the last one stays up (marked with its own words).
+  return { query: state.query, hits: searching ? state.hits : null, failed: current && state.failed, busy: searching && !current };
 }

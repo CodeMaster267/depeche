@@ -178,5 +178,8 @@ test("an admin can take away someone's monthly limit, and put it back", async ({
   await expect(page.getByRole("heading", { name: "Hi, Omar." })).toBeVisible();
   const open = page.getByRole("button", { name: "Open menu" });
   if (await open.isVisible()) await open.click();
+  const account = page.getByRole("button", { name: /account menu/ }).filter({ visible: true });
+  await expect(account).toContainText("no limit");
+  await account.click();
   await expect(page.getByTestId("spending").filter({ visible: true })).toContainText("no limit");
 });

@@ -1,14 +1,18 @@
 import Link from "next/link";
 import { Wordmark } from "@/components/Wordmark";
 import { NavLink } from "@/components/Press";
+import { PagesMenu } from "@/components/PagesMenu";
 import { PersonalLook } from "@/components/design/PersonalLook";
 import { Shortcuts } from "@/components/design/Look";
 
-/** Three links fit beside the wordmark on a phone with slightly narrower pills. */
-const PILL = "max-sm:px-2.5!";
 
 /** Top bar for signed-in pages. The wordmark stays clean here; the glitch is for the title card. */
 export function AppHeader({ isAdmin }: { isAdmin: boolean }) {
+  const pages = [
+    ...(isAdmin ? [{ href: "/family", label: "Family" }, { href: "/health", label: "Health" }] : []),
+    { href: "/memory", label: "Memory" },
+    { href: "/account", label: "Account" },
+  ];
   return (
     <PersonalLook>
     <header
@@ -21,10 +25,15 @@ export function AppHeader({ isAdmin }: { isAdmin: boolean }) {
       </Link>
       <nav className="flex min-w-0 items-center gap-1 text-[14px] sm:gap-2 sm:text-[15px]">
         <Shortcuts place="header" isAdmin={isAdmin} className="max-sm:hidden" />
-        {isAdmin ? <NavLink href="/family" className={PILL}>Family</NavLink> : null}
-        {isAdmin ? <NavLink href="/health" className={PILL}>Health</NavLink> : null}
-        <NavLink href="/memory" className={PILL}>Memory</NavLink>
-        <NavLink href="/account" className={PILL}>Account</NavLink>
+        {/* A wrapper hides the pills on phones: .nav-pill's own display would beat a class on the link. */}
+        <span className="hidden items-center gap-2 sm:flex">
+          {pages.map((p) => (
+            <NavLink key={p.href} href={p.href}>
+              {p.label}
+            </NavLink>
+          ))}
+        </span>
+        <PagesMenu pages={pages} />
       </nav>
     </header>
     </PersonalLook>
