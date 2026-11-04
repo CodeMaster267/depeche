@@ -22,6 +22,8 @@ export async function GET(req: NextRequest) {
   const admin = supabaseAdmin();
   const { data: chats, error: chatError } = await admin.rpc("expire_old_chats");
   if (chatError) return NextResponse.json({ error: chatError.message }, { status: 500 });
+  // Leftover "away" marks for notifications (see lib/push/notify.ts).
+  await admin.rpc("expire_push_away");
   let files = 0;
   for (let round = 0; round < 10; round++) {
     const { data, error } = await admin.rpc("expired_uploads", { p_limit: 500 });

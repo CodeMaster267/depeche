@@ -3,11 +3,12 @@ import { ChatApp } from "@/components/chat/ChatApp";
 import { isConfigured } from "@/lib/config";
 import { requireMe } from "@/lib/auth/session";
 import { loadShell } from "@/lib/chat/load";
+import { PersonalLook } from "@/components/design/PersonalLook";
 
 export const dynamic = "force-dynamic";
 
 /** Home is a new chat. */
-export default async function Home() {
+export default async function Home({ searchParams }: { searchParams: Promise<{ new?: string }> }) {
   if (!isConfigured()) {
     // Before Supabase is connected, show the title card so a fresh deployment visibly works.
     return (
@@ -25,5 +26,11 @@ export default async function Home() {
 
   const me = await requireMe();
   const shell = await loadShell(me);
-  return <ChatApp key="new" shell={shell} chat={null} messages={[]} />;
+  // "New chat" from a chat begun on this screen adds ?new=… so the screen starts over.
+  const { new: fresh } = await searchParams;
+  return (
+    <PersonalLook>
+      <ChatApp key={`new-${String(fresh ?? "").slice(0, 20)}`} shell={shell} chat={null} messages={[]} />
+    </PersonalLook>
+  );
 }

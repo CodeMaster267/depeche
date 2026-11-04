@@ -1,4 +1,4 @@
-import { priceFor, type Model } from "@/lib/ai/models";
+import { priceFor, worstInputRate, type Model } from "@/lib/ai/models";
 
 /**
  * Hard spending caps. Before a reply starts, the server reserves the most it could cost, and the
@@ -36,10 +36,14 @@ export function inputTokensUpperBound(texts: readonly string[]): number {
  * it when it's busy, at the long-context rate if this much input reaches it. Google's models can
  * also think before answering, and thinking is billed as output on top of the reply's own limit,
  * so it is counted twice for Google. DeepSeek doesn't say whether its thinking counts within the
- * limit, so it is counted twice there too.
+ * limit, so it is counted twice there too. Input is held at the prompt cache's write price where
+ * that is dearer (Anthropic, OpenAI), since all of it might be written to the cache.
  */
 function worstPrices(models: readonly Model[], inputTokens: number) {
-  const prices = models.map((m) => ({ ...priceFor(m, inputTokens), twice: m.provider === "google" || m.provider === "deepseek" }));
+  const prices = models.map((m) => {
+    const p = priceFor(m, inputTokens);
+    return { input: p.input * worstInputRate(m), output: p.output, twice: m.provider === "google" || m.provider === "deepseek" };
+  });
   const input = Math.max(...prices.map((p) => p.input));
   const output = Math.max(...prices.map((p) => p.output * (p.twice ? 2 : 1)));
   return { input: input / 1_000_000, output: output / 1_000_000 };

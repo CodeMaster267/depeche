@@ -23,7 +23,13 @@ export type TurnFile = { name: string; mime: string; data: string };
 
 export type StreamEvent =
   | { type: "text"; text: string }
-  | { type: "usage"; input: number; output: number }
+  /** The model's reasoning (a summary, for providers that only share one), shown collapsed. */
+  | { type: "thinking"; text: string }
+  /**
+   * Tokens used. `input` is all of it; `cacheRead` and `cacheWrite` are the parts of it the provider
+   * served from, or stored in, its prompt cache, which are priced differently.
+   */
+  | { type: "usage"; input: number; output: number; cacheRead?: number; cacheWrite?: number }
   | { type: "notice"; text: string }
   /** Another model answered (the chosen one was busy). */
   | { type: "model"; id: string }
@@ -51,6 +57,15 @@ export type ReplyRequest = {
    * chat"), offered when some of them are summarised or left out. Not on Groq (test-only).
    */
   chatSearch?: ChatSearch;
+  /** Ask for the model's reasoning. Turned off for a model that turns out not to offer it. */
+  think?: boolean;
+  /**
+   * Turns on prompt caching where Depeche has to ask for it (Claude), and keeps each chat's cached
+   * prompt together and apart from other people's where the provider allows (OpenAI's and xAI's
+   * prompt_cache_key). The chat's id, never a name. Left out for one-off requests, which would pay
+   * to write a cache never read.
+   */
+  cacheKey?: string;
 };
 
 /** A provider error, worded for the person chatting. */
@@ -113,6 +128,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
   let lastError: unknown;
   let search = !!req.search && canSearch(req.model);
   let chatSearch = req.chatSearch;
+  let think = req.think !== false;
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
     if (attempt.wait) await pause(attempt.wait, req.signal);
@@ -127,7 +143,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       // Telling a model it can search without giving it the tool makes some reply with nothing.
       const lookup = canLookUp(attempt.model.provider) ? chatSearch : undefined;
       const system = [req.system, search ? SEARCH_HINT : "", lookup ? CHAT_SEARCH_HINT : ""].filter(Boolean).join(" ");
-      const r = { ...req, model: attempt.model, search, chatSearch: lookup, system };
+      const r = { ...req, model: attempt.model, search, chatSearch: lookup, think, system };
       const inner = fakeAi()
         ? fakeReply(r, attempt.model.id === req.model.id)
         : r.model.provider === "anthropic"
@@ -142,7 +158,8 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
                   ? xaiReply(r)
                   : googleReply(r);
       for await (const ev of inner) {
-        if (ev.type === "text") wrote = true;
+        // Retrying after reasoning was shown would show it twice, so that counts as written too.
+        if (ev.type === "text" || ev.type === "thinking") wrote = true;
         yield ev;
       }
       return;
@@ -151,6 +168,13 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       lastError = e;
       // Retrying after part of a reply was shown would repeat it.
       if (wrote) break;
+      // A model that doesn't share its reasoning answers without being asked to.
+      if (think && thinkingUnsupported(e)) {
+        think = false;
+        console.error("[chat] reasoning not offered, answering without it", status(e), detail(e));
+        i--;
+        continue;
+      }
       // If a provider won't take the chat-search tool (some can't mix it with their own web
       // search), answer without it rather than failing or dropping web search.
       if (chatSearch && canLookUp(attempt.model.provider) && status(e) === 400) {
@@ -180,6 +204,11 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
     }
   }
   throw new ProviderError(describe(req.model.provider, lastError));
+}
+
+/** A request refused because of the reasoning options (an older or smaller model). */
+export function thinkingUnsupported(e: unknown): boolean {
+  return status(e) === 400 && /thinking|reasoning|thought/i.test(detail(e));
 }
 
 const CHAT_SEARCH_HINT =
@@ -227,8 +256,8 @@ const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-
 /** Long searches can pause a Claude turn; it is continued this many times at most. */
 const MAX_CONTINUES = 3;
 
-async function* anthropicReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
-  const client = new Anthropic({ apiKey, maxRetries: 1 });
+async function* anthropicReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
+  const client = new Anthropic({ apiKey, maxRetries: 1, baseURL: testUrl("DEPECHE_ANTHROPIC_URL") });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
   const messages: Msg[] = turns.map((t) =>
@@ -254,6 +283,8 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
   ];
   let input = 0;
   let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
   let searches = 0;
   let lookups = 0;
   let wrote = false;
@@ -272,7 +303,13 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
         max_tokens: left,
         system,
         messages: messages as never,
+        // Claude caches the conversation so far (up to the newest message), so the next message in
+        // this chat, and each round of searching within this reply, reads it back at a tenth of the
+        // price or less. The cache lasts 5 minutes from its last use.
+        ...(cacheKey ? { cache_control: { type: "ephemeral" as const } } : {}),
         output_config: { effort: "medium" },
+        // Claude decides when to think; a summary of it is shown collapsed above the reply.
+        ...(think ? { thinking: { type: "adaptive" as const, display: "summarized" as const } } : {}),
         ...(tools.length ? { tools: tools as never } : {}),
         // Once the lookups are used up the tool stays defined (earlier rounds used it) but can't be called.
         ...(chatSearch && lookups >= MAX_CHAT_SEARCHES ? { tool_choice: { type: "none" as const } } : {}),
@@ -302,6 +339,8 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
           if (!roundText && wrote) yield { type: "text", text: "\n\n" };
           roundText = wrote = true;
           yield { type: "text", text: ev.delta.text };
+        } else if (ev.delta.type === "thinking_delta" && ev.delta.thinking) {
+          yield { type: "thinking", text: ev.delta.thinking };
         } else if (ev.delta.type === "input_json_delta" && queryJson.has(ev.index)) {
           queryJson.set(ev.index, queryJson.get(ev.index) + ev.delta.partial_json);
         } else if (ev.delta.type === "citations_delta" && ev.delta.citation.type === "web_search_result_location") {
@@ -336,6 +375,8 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
     const final = await stream.finalMessage();
     const u = final.usage;
     input += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    cacheRead += u.cache_read_input_tokens ?? 0;
+    cacheWrite += u.cache_creation_input_tokens ?? 0;
     output += u.output_tokens ?? 0;
     searches += u.server_tool_use?.web_search_requests ?? 0;
     if (final.stop_reason === "pause_turn" && continues < MAX_CONTINUES) {
@@ -369,11 +410,11 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
     if (sources.length) yield { type: "sources", sources };
     if (searches) yield { type: "searches", count: searches };
   }
-  yield { type: "usage", input, output };
+  yield { type: "usage", input, output, cacheRead, cacheWrite };
 }
 
-async function* openaiReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
-  const client = new OpenAI({ apiKey, maxRetries: 1 });
+async function* openaiReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch, cacheKey }: ReplyRequest): AsyncGenerator<StreamEvent> {
+  const client = new OpenAI({ apiKey, maxRetries: 1, baseURL: testUrl("DEPECHE_OPENAI_URL") });
   const input: unknown[] = turns.map((t) =>
     t.role === "user" && t.files?.length
       ? {
@@ -400,6 +441,8 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
   let lookups = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
   let wrote = false;
   for (let round = 0; ; round++) {
     // Every round counts toward the same reply length, so the whole reply stays within the hold.
@@ -416,8 +459,12 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
         max_output_tokens: Math.max(16, left),
         store: false,
         stream: true,
+        // OpenAI caches long prompts by itself; the key keeps each person's cache separate.
+        ...(cacheKey ? { prompt_cache_key: cacheKey } : {}),
         ...(tools.length ? { tools: tools as never } : {}),
         ...(search ? { max_tool_calls: MAX_SEARCHES } : {}),
+        // OpenAI shares a summary of its reasoning, not the reasoning itself.
+        ...(think ? { reasoning: { summary: "auto" as const } } : {}),
         // Nothing is stored at OpenAI, so the model's reasoning comes back encrypted to be handed
         // back after a lookup.
         ...(chatSearch
@@ -435,7 +482,9 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
         if (!roundText && wrote) yield { type: "text", text: "\n\n" };
         roundText = wrote = true;
         yield { type: "text", text: ev.delta };
-      } else if (ev.type === "response.output_item.added" && ev.item.type === "web_search_call") yield { type: "searching" };
+      } else if (ev.type === "response.reasoning_summary_text.delta") yield { type: "thinking", text: ev.delta };
+      else if (ev.type === "response.reasoning_summary_part.added" && ev.summary_index > 0) yield { type: "thinking", text: "\n\n" };
+      else if (ev.type === "response.output_item.added" && ev.item.type === "web_search_call") yield { type: "searching" };
       else if (ev.type === "response.output_item.done" && ev.item.type === "web_search_call") {
         const action = ev.item.action as { type?: string; query?: string; queries?: string[] } | undefined;
         if (action?.type === "search") {
@@ -458,6 +507,10 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
         searches += Math.max(roundSearches, billed);
         inputTokens += u?.input_tokens ?? 0;
         outputTokens += u?.output_tokens ?? 0;
+        // Both are part of input_tokens; reads don't include tokens charged as writes.
+        const details = u?.input_tokens_details as { cached_tokens?: number; cache_write_tokens?: number } | undefined;
+        cacheRead += details?.cached_tokens ?? 0;
+        cacheWrite += details?.cache_write_tokens ?? 0;
         produced = ev.response.output ?? [];
         if (ev.type === "response.incomplete") yield { type: "notice", text: "The reply was cut short." };
       } else if (ev.type === "response.failed") {
@@ -478,11 +531,12 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
   }
   if (sources.length) yield { type: "sources", sources };
   if (searches) yield { type: "searches", count: searches };
-  yield { type: "usage", input: inputTokens, output: outputTokens };
+  yield { type: "usage", input: inputTokens, output: outputTokens, cacheRead, cacheWrite };
 }
 
-async function* googleReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
-  const ai = new GoogleGenAI({ apiKey });
+async function* googleReply({ model, apiKey, system, turns, signal, search, think, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
+  const base = testUrl("DEPECHE_GOOGLE_URL");
+  const ai = new GoogleGenAI({ apiKey, ...(base ? { httpOptions: { baseUrl: base } } : {}) });
   type Content = { role: "user" | "model"; parts: Part[] };
   const contents: Content[] = turns.map((t) => ({
     role: t.role === "assistant" ? "model" : "user",
@@ -499,6 +553,8 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, maxO
   ];
   let input = 0;
   let output = 0;
+  // Gemini caches repeated prompts by itself ("implicit caching"), with no fee to write.
+  let cacheRead = 0;
   let lookups = 0;
   const sources: Source[] = [];
   const queries = new Set<string>();
@@ -519,6 +575,8 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, maxO
         systemInstruction: system,
         maxOutputTokens: left,
         abortSignal: signal,
+        // Gemini shares summaries of its thoughts when asked.
+        ...(think ? { thinkingConfig: { includeThoughts: true } } : {}),
         ...(tools.length ? { tools } : {}),
         ...(chatSearch && lookups >= MAX_CHAT_SEARCHES
           ? { toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.NONE } } }
@@ -530,9 +588,15 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, maxO
     let roundText = false;
     let roundInput = 0;
     let roundOutput = 0;
+    let roundCached = 0;
     for await (const chunk of stream) {
       const candidate = chunk.candidates?.[0];
       parts.push(...(candidate?.content?.parts ?? []));
+      const thought = candidate?.content?.parts
+        ?.filter((p) => p.text && p.thought)
+        .map((p) => p.text)
+        .join("");
+      if (thought) yield { type: "thinking", text: thought };
       const text = candidate?.content?.parts
         ?.filter((p) => p.text && !p.thought)
         .map((p) => p.text)
@@ -560,11 +624,13 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, maxO
       const u = chunk.usageMetadata;
       if (u) {
         roundInput = u.promptTokenCount ?? roundInput;
+        roundCached = u.cachedContentTokenCount ?? roundCached;
         roundOutput = (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0) || roundOutput;
       }
     }
     input += roundInput;
     output += roundOutput;
+    cacheRead += Math.min(roundCached, roundInput);
     const calls = parts.filter((p) => p.functionCall?.name === CHAT_SEARCH_TOOL.name);
     if (!chatSearch || !calls.length) break;
     // Gemini asked to look back through the chat: hand back its turn and the results.
@@ -583,16 +649,21 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, maxO
   // Google bills each search query the model runs.
   if (queries.size || sources.length) yield { type: "searches", count: Math.max(queries.size, 1) };
   if (suggestions) yield { type: "suggestions", html: suggestions.slice(0, 20_000) };
-  yield { type: "usage", input, output };
+  yield { type: "usage", input, output, cacheRead };
 }
 
-function status(e: unknown): number | undefined {
+/** Tests point a provider at a local stand-in through this variable; never on Vercel. */
+function testUrl(name: string): string | undefined {
+  return (!process.env.VERCEL && process.env[name]) || undefined;
+}
+
+export function status(e: unknown): number | undefined {
   const s = (e as { status?: unknown; code?: unknown })?.status ?? (e as { code?: unknown })?.code;
   return typeof s === "number" ? s : undefined;
 }
 
 /** The provider's own explanation, unwrapped from the JSON some SDKs nest it in. */
-function detail(e: unknown): string {
+export function detail(e: unknown): string {
   let msg = e instanceof Error ? e.message : String(e ?? "");
   for (let i = 0; i < 3; i++) {
     try {
@@ -609,7 +680,7 @@ function detail(e: unknown): string {
   return msg.replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
-function describe(provider: Provider, e: unknown): string {
+export function describe(provider: Provider, e: unknown): string {
   const text = friendlyError(provider, e);
   const said = detail(e);
   // Logged for debugging in Vercel; never includes the key.
@@ -747,6 +818,43 @@ Flights,240
 
 `.replaceAll("\\`", "`");
 
+const FAKE_CHARTS = String.raw`Here's a chart.
+
+\`\`\`chart
+{"type":"bar","title":"Spending by month","x":["Jan","Feb","Mar","Apr"],"series":[{"name":"Food","values":[320,290,350,310]},{"name":"Travel","values":[120,180,90,240]}],"format":{"prefix":"£"}}
+\`\`\`
+
+\`\`\`chart
+{"type":"pie","title":"Where it went","x":["Rent","Food","Fun"],"series":[{"values":[900,320,80]}]}
+\`\`\`
+
+`.replaceAll("\\`", "`");
+
+/** "analyse" makes it write Python that runs in the browser, reading the attached CSV if any. */
+const FAKE_ANALYSIS = String.raw`Here's the analysis.
+
+\`\`\`python run
+import pandas as pd
+df = pd.read_csv("{file}")
+print("Rows:", len(df))
+print("Total:", df["Amount"].sum())
+chart(df, x="Month", y=["Amount"], type="line", title="Amount by month")
+\`\`\`
+
+\`\`\`python run
+import matplotlib.pyplot as plt
+plt.plot([1, 2, 3], [2, 4, 1])
+plt.title("Matplotlib")
+plt.show()
+\`\`\`
+
+\`\`\`python run
+import js
+print(js.document.cookie)
+\`\`\`
+
+`.replaceAll("\\`", "`");
+
 const FAKE_REPLY = String.raw`Here's a worked answer to "{q}".
 
 ## The formula
@@ -851,6 +959,15 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     yield { type: "usage", input: 3000, output: 200 };
     return;
   }
+  // "think" makes it reason first ("think hard" slowly), as models that share their reasoning do.
+  if (q.includes("think")) {
+    const thought = "**Weighing the approach**\n\nThe person wants the quadratic formula, so I'll start from the discriminant.\n\n**Checking the roots**\n\nFor $2x^2 - 7x + 3 = 0$ the discriminant is 25, so the roots are 3 and 0.5.";
+    for (let i = 0; i < thought.length; i += 20) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      await new Promise((r) => setTimeout(r, q.includes("think hard") ? 150 : 10));
+      yield { type: "thinking", text: thought.slice(i, i + 20) };
+    }
+  }
   // Say which files arrived, so tests can check that attachments reach the model.
   const seen = [...(last?.files ?? []).map((f) => f.name), ...[...(last?.text ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1])];
   // "favourite colour" makes it suggest a memory, to test memory suggestions.
@@ -859,14 +976,52 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   const quoted = q.includes("quote")
     ? [...(last?.text ?? "").matchAll(/<file name="([^"]+)">\n([\s\S]*?)\n<\/file>/g)].map((m) => `${m[1]} says: ${m[2].replace(/\s+/g, " ").slice(0, 120)}\n\n`).join("")
     : "";
+  // "my instructions" makes it repeat the personal instructions it was given, to test they arrive.
+  const told = q.includes("my instructions")
+    ? [...system.matchAll(/<(about_me|how_to_answer)>\n([\s\S]*?)\n<\/\1>/g)].map((m) => `${m[1] === "about_me" ? "About you" : "How to answer"}: ${m[2]}\n\n`).join("") || "No personal instructions.\n\n"
+    : "";
   // "make files" makes it write files to download, to test generated documents.
-  const made = q.includes("make files") ? FAKE_FILES : "";
-  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
+  const made =
+    (q.includes("make files") ? FAKE_FILES : "") +
+    (q.includes("draw charts") ? FAKE_CHARTS : "") +
+    (q.includes("analyse") ? FAKE_ANALYSIS.replace("{file}", seen.find((n) => /\.(csv|txt)$/i.test(n)) ?? "data.csv") : "");
+  // "redesign" makes it write a design brief for a new look, to test personal designs.
+  if (q.includes("redesign") && system.includes("```design")) {
+    const brief = `Here's the brief for your new look.\n\n\`\`\`design\n${(last?.text ?? "").replace(/^.*?redesign:?\s*/i, "").slice(0, 300) || "A playful look"}\n\`\`\`\n\nTap Build to try it.`;
+    for (let i = 0; i < brief.length; i += 24) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      await new Promise((r) => setTimeout(r, 8));
+      yield { type: "text", text: brief.slice(i, i + 24) };
+    }
+    yield { type: "usage", input: 1200, output: 120 };
+    return;
+  }
+  // "next steps" makes it suggest follow-up questions, to test the follow-up buttons.
+  const followups = q.includes("next steps") ? "\n\n<followups>\n- How do I check the answer?\n2. What if a is zero?\n</followups>" : "";
+  // A question about part of an earlier answer says which part it was given, to test quoting.
+  const about = /^About this part of your earlier answer:\n> (.*)/.exec(last?.text ?? "");
+  const asked = about ? `You asked about "${about[1].slice(0, 60)}".\n\n` : "";
+  // "canvas" makes it write a canvas, or rewrite the open one (keeping the person's edits), to test the canvas.
+  if (q.includes("canvas")) {
+    const open = /\n(`{3,})canvas:(\S+)\n([\s\S]*?)\n\1(?:\n|$)/.exec(system);
+    const text = open
+      ? `I've tightened the canvas.\n\n${open[1]}canvas:${open[2]}\n${open[3]}\n\nRevised by the AI.\n${open[1]}\n\nDone.`
+      : "Here's a first draft in the canvas.\n\n```canvas:Wedding-speech\n# A toast\n\nThank you all for coming tonight.\n```\n\nTell me what to change.";
+    for (let i = 0; i < text.length; i += 24) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      await new Promise((r) => setTimeout(r, q.includes("slowly") ? 120 : 8));
+      yield { type: "text", text: text.slice(i, i + 24) };
+    }
+    yield { type: "usage", input: 900, output: 120 };
+    return;
+  }
+  const reply = asked + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + told + quoted + made + FAKE_REPLY.replace("{q}", q) + remember + followups;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     await new Promise((r) => setTimeout(r, slow ? 120 : 8));
     yield { type: "text", text: reply.slice(i, i + 24) };
   }
-  yield { type: "usage", input: 1200, output: 400 };
+  // "cached" makes it report most of the input as read from the prompt cache, to test cache prices.
+  yield { type: "usage", input: 1200, output: 400, ...(q.includes("cached") ? { cacheRead: 1000 } : {}) };
 }

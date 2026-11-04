@@ -2,15 +2,27 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
 import { listKeyModels } from "@/lib/ai/providers";
-import type { Provider } from "@/lib/ai/models";
+import { MODELS, type Provider } from "@/lib/ai/models";
 
 export type KeyModels = { provider: string; models: string[] | null; checked_at: string | null };
 
 const DAY = 86_400_000;
 
+/**
+ * Picture models were added around then. A key checked before it that lists none of them is asked
+ * again, so they show up without waiting a day.
+ */
+const IMAGES_ADDED = Date.parse("2026-11-04T06:00:00Z");
+const PICTURE_MODELS = MODELS.filter((m) => m.image);
+
 /** Keys whose usable models haven't been checked, or not for a day. */
 export function staleKeys(keys: KeyModels[]): KeyModels[] {
-  return keys.filter((k) => !k.checked_at || Date.now() - new Date(k.checked_at).getTime() > DAY);
+  return keys.filter((k) => {
+    if (!k.checked_at) return true;
+    const at = new Date(k.checked_at).getTime();
+    const before = at < IMAGES_ADDED && PICTURE_MODELS.some((m) => m.provider === k.provider) && !k.models?.some((id) => PICTURE_MODELS.some((m) => m.id === id));
+    return Date.now() - at > DAY || before;
+  });
 }
 
 /** Asks each provider again which models the family's keys can use, and records the answer. */
