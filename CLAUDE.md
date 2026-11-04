@@ -21,8 +21,9 @@ short version that matters when writing code.
 - **Messages are append-only.** Edits create a new message with `parent_id`; originals are kept.
   Compaction summaries will live in their own table and never replace messages.
 - **Sends are idempotent** via `(owner_id, client_request_id)`.
-- **Never execute model output** (HTML/JS) in the app origin. Future artifacts go in a sandbox on a
-  separate origin.
+- **Never execute model output** (HTML/JS) in the app origin. Gadgets (```widget:Title blocks) and
+  Python run in `sandbox="allow-scripts"` frames with an opaque origin and a no-network CSP
+  (`lib/widgets/frame.ts`, `lib/run/sandbox.ts`); never add `allow-same-origin` or open the network.
 - **$0 infrastructure.** Do not add paid services or features that need them without Hasan's explicit OK.
 
 ## Stack
