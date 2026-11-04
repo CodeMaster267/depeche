@@ -46,6 +46,8 @@ export type ExportData = {
   /** Documents and code written beside a chat, with every version. */
   canvases?: ExportCanvas[];
   canvasVersions?: ExportCanvasVersion[];
+  /** "About you" and "How should Depeche answer", when the person has written them. */
+  instructions?: { about_me: string; answer_style: string; enabled: boolean; updated_at: string } | null;
 };
 
 /** A downloaded upload, or null when it has already been deleted (files go after 3 idle days). */
@@ -129,6 +131,13 @@ export function memoriesMarkdown(memories: ExportMemory[]): string {
   return out.join("\n");
 }
 
+export function instructionsMarkdown(p: NonNullable<ExportData["instructions"]>): string {
+  const out = ["# Personal instructions", "", p.enabled ? "Used in every chat." : "Paused (not used in chats).", ""];
+  out.push("## About you", "", p.about_me.trim() || "Nothing written.", "");
+  out.push("## How should Depeche answer?", "", p.answer_style.trim() || "Nothing written.", "");
+  return out.join("\n");
+}
+
 function csvCell(v: unknown): string {
   const s = v == null ? "" : String(v);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -150,6 +159,7 @@ Everything here is yours and only yours: no one else's chats are in it.
   chats.json      every chat and every message, including earlier versions of edited replies
   memories.md     what Depeche remembers about you
   memories.json   the same, with dates and status
+  instructions.md your personal instructions (About you, How should Depeche answer), if any
   usage.csv       what each reply cost (estimates, in US dollars)
   profile.json    your name, username and settings
 `;
@@ -205,6 +215,7 @@ export function exportEntries(data: ExportData, files: FetchedFile[]): Record<st
   entries["chats.json"] = json(data.chats.map((c) => ({ ...c, messages: byChat.get(c.id) ?? [] })));
   entries["memories.json"] = json(data.memories);
   entries["memories.md"] = strToU8(memoriesMarkdown(data.memories));
+  if (data.instructions) entries["instructions.md"] = strToU8(instructionsMarkdown(data.instructions));
   entries["usage.csv"] = strToU8(usageCsv(data.usage));
   return entries;
 }
