@@ -594,6 +594,17 @@ body {
   .voice-orb-speaking, .voice-orb-busy, .voice-dots { animation: none; }
 }
 
+/* App lock: the PIN dots shake once after a wrong PIN. */
+@keyframes lock-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-10px); }
+  40%, 80% { transform: translateX(10px); }
+}
+.lock-shake { animation: lock-shake 0.36s ease-in-out; }
+@media (prefers-reduced-motion: reduce) {
+  .lock-shake { animation: none; }
+}
+
 /*
  * Chat menus (components/chat/ChatMenu.tsx). The menu pops in quickly; under reduced motion it
  * just appears. In the chat list the three dots are always there on touch screens, and appear on
