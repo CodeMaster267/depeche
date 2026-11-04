@@ -12,6 +12,7 @@ import { ChatMenu } from "./ChatMenu";
 import { AccountMenu } from "./AccountMenu";
 import { ArchiveIcon, BackIcon, CloseIcon, PlusIcon, SearchIcon } from "./icons";
 import { Shortcuts } from "@/components/design/Look";
+import { ConciergeButton } from "@/components/help/Concierge";
 
 function group(chats: ChatRow[]) {
   const startOfToday = new Date();
@@ -231,6 +232,7 @@ export function Sidebar({
               <ArchiveIcon />
               <span>Archived chats</span>
             </button>
+            <ConciergeButton variant="row" isAdmin={isAdmin} />
           </>
         )}
       </div>
