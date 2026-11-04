@@ -42,12 +42,12 @@ describe("the Concierge guide", () => {
     expect(missing, `Say what these sections are and where they are in lib/help/guide.ts`).toEqual([]);
   });
 
-  it("names every link in the side menu and the top bar", () => {
+  it("names every link in the account menu and the top bar", () => {
     const labels = new Set<string>();
-    for (const f of ["components/chat/Sidebar.tsx", "components/AppHeader.tsx"]) {
-      for (const m of readFileSync(join(ROOT, f), "utf8").matchAll(/<NavLink[^>]*>([^<{]+)<\/NavLink>/g)) labels.add(m[1].trim());
-    }
-    expect(labels.size).toBeGreaterThan(3);
+    const read = (f: string) => readFileSync(join(ROOT, f), "utf8");
+    for (const m of read("components/chat/AccountMenu.tsx").matchAll(/<Item href=[^\n]*?onGo=\{go\}>\s*([^<{]+?)\s*<\/Item>/g)) labels.add(m[1]);
+    for (const m of read("components/AppHeader.tsx").matchAll(/label: "([^"]+)"/g)) labels.add(m[1]);
+    expect(labels.size).toBeGreaterThan(5);
     expect([...labels].filter((l) => !guide.includes(l.toLowerCase()))).toEqual([]);
   });
 

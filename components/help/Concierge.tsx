@@ -70,8 +70,7 @@ export function ConciergeButton({ variant, isAdmin = false, onOpen }: { variant:
           onClick={show}
           aria-label="Ask Concierge"
           title="Concierge: ask how anything works"
-          // An admin's top bar is already full on a phone; they open Concierge from the side menu there.
-          className={`press glass flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${isAdmin ? "max-sm:hidden" : ""}`}
+          className="press glass flex h-9 w-9 shrink-0 items-center justify-center rounded-full"
         >
           <BellIcon className="h-[18px] w-[18px]" />
         </button>

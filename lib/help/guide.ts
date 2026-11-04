@@ -39,9 +39,10 @@ only if the member chooses, their chat titles; never what anyone writes. Hasan, 
 another family. Each message goes only to the AI company whose model you picked.
 
 The home screen is a new chat. On a phone, tap the menu button (three lines, top left) to open the side menu with your
-chats; on a computer the side menu is always on the left. At the bottom of the side menu is your name with links to
-Family and Health (admins only), Memory, Account, My look and Report a bug, and a bar showing what you have
-spent this month against your limit. "Ask Concierge", under your chats, opens this helper.`,
+chats; on a computer the side menu is always on the left. At the bottom of the side menu, tap your name to open the
+account menu: Memory, Skills, My look, Account, Family and Health (admins only), Report a bug, and a bar showing what you
+have spent this month against your limit. On settings pages the top bar links the same pages (on a phone, tap the pill
+naming the page you're on to switch). "Ask Concierge", under your chats, opens this helper.`,
   },
   {
     id: "chatting",
@@ -137,7 +138,7 @@ Voice works while the app is open; iPhones don't let websites listen in the back
     title: "Skills",
     routes: ["/skills", "/skills/[id]"],
     text: `
-[Skills](/skills) (side menu → Skills) teach Depeche how to help with one kind of task, like a family budget or planning a
+[Skills](/skills) (your name at the bottom of the side menu → Skills) teach Depeche how to help with one kind of task, like a family budget or planning a
 wedding. Add a skill to "My skills" and your chats pick it up by themselves whenever a message is about it (or names it).
 - Make a skill: describe what it should help with; a model writes it and names it. Every skill is checked for safety
   and goes in the Library for everyone on Depeche.
@@ -166,7 +167,7 @@ small fraction of the normal price (often a tenth or less).
     title: "Memory and personal instructions",
     routes: ["/memory"],
     text: `
-[Memory](/memory) (side menu → Memory) is what Depeche knows about you and how you like answers, used in every chat with
+[Memory](/memory) (tap your name at the bottom of the side menu → Memory) is what Depeche knows about you and how you like answers, used in every chat with
 every model. Only you can see it; your family admin can't.
 - Personal instructions: "About you" and "How should Depeche answer". Tap "Save instructions". Turn them off to pause
   them without deleting what you wrote.
@@ -180,7 +181,7 @@ Replies sometimes suggest something to remember; nothing is kept unless you tap 
     title: "Account settings",
     routes: ["/account", "/new-password"],
     text: `
-[Account](/account) (side menu → Account) has, from top to bottom:
+[Account](/account) (tap your name at the bottom of the side menu → Account) has, from top to bottom:
 - Sign out (top right).
 - You: your name and username (a username lets you sign in without typing your email).
 - Password: set one to sign in with your username or email and a password. Forgot it? Your family admin can give you a
@@ -214,7 +215,7 @@ a new PIN in Account. "Turn off app lock" turns it off on all your devices.`,
     title: "My look (redesign your Depeche)",
     routes: ["/design"],
     text: `
-[My look](/design) (side menu → My look, or Account → My look) lets you redesign your own Depeche: colours, fonts,
+[My look](/design) (your name at the bottom of the side menu → My look, or Account → My look) lets you redesign your own Depeche: colours, fonts,
 layout, buttons and shortcuts. Describe the look you want and tap the button to build it; the strongest model your family
 has designs it. You see a preview and choose Keep or Undo. Only you see it. Earlier looks are listed so you can go back
 to any of them for free. You get a set number of builds a month (your admin sets it); a failed build doesn't count.
@@ -224,8 +225,8 @@ If a look ever makes Depeche hard to use, Safe mode (on the My look page) shows 
     id: "spending",
     title: "Spending and limits",
     text: `
-Each person has a monthly spending limit in dollars, set by their family admin. The bar at the bottom of the side menu
-shows what you've spent this month and your limit. Tap the cost under any reply to see its tokens. When you reach the
+Each person has a monthly spending limit in dollars, set by their family admin. The account menu (tap your name at the bottom of the side
+menu) shows what you've spent this month and your limit. Tap the cost under any reply to see its tokens. When you reach the
 limit, Depeche stops sending until next month or until your admin raises it. Costs are estimates from token counts;
 each AI company's own bill is the final word. Cheaper models (marked $ in the picker) make your limit last longer.`,
   },
@@ -245,7 +246,7 @@ each AI company's own bill is the final word. Cheaper models (marked $ in the pi
     routes: ["/family"],
     admin: true,
     text: `
-[Family](/family) (side menu → Family; admins only) has:
+[Family](/family) (your name at the bottom of the side menu → Family; admins only) has:
 - AI providers: where API keys go. Each row is one company. To add a key: open the company's key page (the link in its
   row), create a key, copy it, paste it into the row, and tap "Save key". Depeche checks it, encrypts it, and shows only
   its last 4 characters from then on; it lists which models that key can use. "Replace" swaps it for a new key, "Remove"
@@ -279,7 +280,7 @@ each AI company's own bill is the final word. Cheaper models (marked $ in the pi
     routes: ["/health"],
     admin: true,
     text: `
-[Health](/health) (side menu → Health; admins only) shows whether anything needs attention: each AI key and how its
+[Health](/health) (your name at the bottom of the side menu → Health; admins only) shows whether anything needs attention: each AI key and how its
 replies went in the last day, family spending this month against everyone's limits, and backups. Hasan also sees the
 System section and "Database and sync" (whether the database answers and when it last synced). Counts and dates only, never what anyone wrote.`,
   },
@@ -288,7 +289,7 @@ System section and "Database and sync" (whether the database answers and when it
     title: "Reporting a bug",
     routes: ["/report"],
     text: `
-Side menu → Report a bug, or [Account → Something broken?](/report). Say what happened and what you expected. You can
+Your name at the bottom of the side menu → Report a bug, or [Account → Something broken?](/report). Say what happened and what you expected. You can
 send 3 a day. Your reports and where each one is (Sent, Being fixed, Fixed…) are listed on the same page. Claude reads new
 reports daily and fixes real bugs; Hasan checks anything uncertain.`,
   },
@@ -311,7 +312,7 @@ Chrome's menu → "Add to Home screen" or "Install app".`,
     routes: ["/help"],
     text: `
 Concierge answers questions about using Depeche. Open it from "Ask Concierge" in the side menu (under your chats, with a little bell), or the round bell button at
-the top right of settings pages like Account and Memory (on an admin's phone, only the side menu). It knows Depeche's features and your role and your family's keys, but not your chats or memories. It
+the top right of settings pages like Account and Memory. It knows Depeche's features and your role and your family's keys, but not your chats or memories. It
 uses Claude Haiku when your family has a Claude key, otherwise another cheap model, and counts toward your monthly limit
 like a chat (usually a fraction of a cent a question). The conversation isn't saved; it clears when you close the tab.`,
   },
