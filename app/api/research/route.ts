@@ -6,6 +6,7 @@ import { canSearch, findModel } from "@/lib/ai/models";
 import { allow } from "@/lib/rate-limit";
 import { MAX_MESSAGE_CHARS, activePath, pathTo, titleFrom, type MessageRow } from "@/lib/chat/thread";
 import { CONTEXT_CHARS } from "@/lib/research/prompts";
+import { personalInstructions, type PersonalInstructions } from "@/lib/chat/instructions";
 import { RUN_COLUMNS, advance } from "@/lib/research/run";
 
 // The first step runs after the reply below, within this request's own time limit.
@@ -106,9 +107,17 @@ export async function POST(req: NextRequest) {
     context = context ? `${line}\n\n${context}` : line;
   }
 
+  // Their personal instructions shape the report, as they shape every reply. Read as them.
+  const { data: personal } = await db
+    .from("personal_instructions")
+    .select("about_me, answer_style, enabled")
+    .eq("owner_id", me.userId)
+    .maybeSingle<PersonalInstructions>();
+  const instructions = personalInstructions(me.profile.display_name, personal).slice(0, 5_000);
+
   const { data: run, error: runError } = await admin
     .from("research_runs")
-    .insert({ owner_id: me.userId, chat_id: chatId, question_id: question.id, model: model.id, context })
+    .insert({ owner_id: me.userId, chat_id: chatId, question_id: question.id, model: model.id, context, instructions })
     .select(RUN_COLUMNS)
     .single();
   if (runError || !run) return fail(500, "Couldn't start the research. Try again.");

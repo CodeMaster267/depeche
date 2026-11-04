@@ -42,6 +42,7 @@ export type ResearchRun = {
   status: "running" | "done" | "failed" | "stopped";
   phase: "planning" | "researching" | "writing";
   context: string;
+  instructions: string;
   title: string | null;
   questions: string[];
   notes: Note[];
@@ -196,7 +197,7 @@ export async function advance(runId: string, origin: string): Promise<void> {
         more = true;
         break;
       }
-      const p = reportPrompt(request, run.context, run.title ?? "", run.notes, run.sources);
+      const p = reportPrompt(request, run.context, run.title ?? "", run.notes, run.sources, run.instructions);
       const user = run.draft ? `${p.user}\n\n${continuePrompt(run.draft)}` : p.user;
       const r = await callModel(admin, run, model, key, { system: p.system, user, search: false, maxOutput: REPORT_MAX_OUTPUT, deadline });
       calls++;

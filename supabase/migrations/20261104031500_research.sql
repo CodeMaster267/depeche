@@ -19,6 +19,8 @@ create table public.research_runs (
   phase         text not null default 'planning' check (phase in ('planning', 'researching', 'writing')),
   -- The last few messages before the question, so a follow-up in a chat makes sense.
   context       text not null default '' check (char_length(context) <= 20000),
+  -- The person's own instructions ("About you", "How should Depeche answer"), as given to the model.
+  instructions  text not null default '' check (char_length(instructions) <= 5000),
   title         text check (title is null or char_length(title) <= 200),
   questions     jsonb not null default '[]'::jsonb,
   notes         jsonb not null default '[]'::jsonb,

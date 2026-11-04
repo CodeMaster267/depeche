@@ -112,6 +112,7 @@ export function reportPrompt(
   title: string,
   notes: Note[],
   sources: Source[],
+  instructions = "",
 ): { system: string; user: string } {
   const list = sources.map((s, i) => `[${i + 1}] ${s.title} (${s.url})`).join("\n");
   const body = notes
@@ -128,7 +129,10 @@ export function reportPrompt(
         ? "Cite sources with their numbers from the source list as Markdown links, like [3](https://…), right after the claims they support. Only cite sources from the list, and never make up sources, facts or figures. Say where sources disagree or the evidence is thin. Don't add a source list at the end; the app shows one."
         : "No web sources could be found, so say plainly near the start that this report is from the model's own knowledge and may be out of date, and don't invent citations.",
       "Write in the language of the request.",
-    ].join(" "),
+      instructions,
+    ]
+      .filter(Boolean)
+      .join(" "),
     user: `${withContext(request, context)}\n\n${sources.length ? `Source list:\n${list}\n\n` : ""}Research notes:\n\n${body || "(No notes could be gathered.)"}`,
   };
 }

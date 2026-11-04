@@ -44,5 +44,6 @@ describe("deep research sources", () => {
     expect(p.user).toContain("Question: one");
     expect(p.user).not.toContain("Question: two");
     expect(reportPrompt("q", "", "T", [], []).system).toMatch(/own knowledge/);
+    expect(reportPrompt("q", "", "T", [], [], "<how_to_answer>\nBe brief\n</how_to_answer>").system).toContain("Be brief");
   });
 });
