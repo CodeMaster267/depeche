@@ -104,6 +104,19 @@ test("answers suggest follow-ups, show their cost, and parts of them can be aske
   await expect(page.getByTestId("message-quote")).toHaveCount(1);
   await expect(page.getByTestId("message-quote")).toHaveText(/The quadratic formula solves/);
 
+  // Editing the question keeps what it was asking about.
+  await page.getByTestId("user-message").last().hover();
+  await page.getByRole("button", { name: "Edit message" }).last().click();
+  await page.getByLabel("Edit your message").fill("Say that even more simply");
+  await page.getByRole("button", { name: "Send", exact: true }).first().click();
+  await expect(page.getByTestId("user-message").last()).toHaveText("Say that even more simply");
+  const edited = page.getByTestId("reply").last();
+  await expect(edited).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
+  await expect(edited).toContainText('You asked about "The quadratic formula solves"');
+  await expect(page.getByTestId("message-quote")).toHaveCount(1);
+  const { data: asked } = await db.from("messages").select("content").eq("chat_id", chatId).eq("role", "user").like("content->>text", "%even more%").single();
+  expect(asked!.content.quote).toBe("The quadratic formula solves");
+
   // The quote stays with the question after a reload.
   await page.reload();
   await expect(page.getByTestId("message-quote")).toHaveText(/The quadratic formula solves/);
