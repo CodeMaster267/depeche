@@ -439,7 +439,7 @@ export async function POST(req: NextRequest) {
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch, cacheKey: finalChatId })) {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch, cacheKey: finalChatId ?? undefined })) {
           if (ev.type !== "thinking") clock.stopped();
           if (ev.type === "thinking") {
             clock.thinking();
@@ -569,7 +569,7 @@ export async function POST(req: NextRequest) {
 
       // Canvases the reply wrote become the AI's new versions, kept even if the reply was stopped
       // after the block was finished.
-      if (saved && reply && !temporary) await saveReplyCanvases(admin, me.userId, finalChatId, saved.id, reply).catch(() => {});
+      if (saved && reply && finalChatId) await saveReplyCanvases(admin, me.userId, finalChatId, saved.id, reply).catch(() => {});
 
       // A suggested memory waits for the person to keep or dismiss it; nothing is used until then.
       const fact = status === "completed" && !temporary ? memory.suggestions[0] : undefined;
@@ -590,7 +590,7 @@ export async function POST(req: NextRequest) {
         // The browser already went away.
       }
       // Left the app while this was being written? A notification says it's ready.
-      if (!temporary && status !== "stopped" && UUID.test(body.clientRequestId ?? "")) {
+      if (finalChatId && status !== "stopped" && UUID.test(body.clientRequestId ?? "")) {
         await notifyIfAway(me.userId, body.clientRequestId!, finalChatId, status === "completed").catch(() => {});
       }
       finished();

@@ -65,7 +65,7 @@ test("a temporary chat answers with its whole conversation, but nothing is saved
   await expect(page).not.toHaveURL(/\/c\//);
 
   // Try again works from what's on screen.
-  await page.getByRole("button", { name: "Try again" }).click();
+  await page.getByTestId("reply").last().getByRole("button", { name: "Try again" }).click();
   await expect(page.getByTestId("reply").last()).not.toHaveAttribute("aria-busy", "true", { timeout: 20_000 });
   await expect(page.getByTestId("reply").last()).toContainText("Your first message was");
 

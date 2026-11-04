@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Wordmark } from "@/components/Wordmark";
 import { Markdown } from "@/components/markdown/Markdown";
-import { Sources } from "@/components/chat/Sources";
+import { Activity } from "@/components/chat/Activity";
 import { FileIcon } from "@/components/chat/icons";
 import { findModel } from "@/lib/ai/models";
 import { isShareToken, type SharedMessage } from "@/lib/chat/share";
@@ -70,8 +70,15 @@ export default async function SharedChat({ params }: { params: Promise<{ token: 
             </div>
           ) : (
             <article key={i} data-testid="reply" className="flex flex-col gap-3">
+              {m.sources?.length ? (
+                <Activity
+                  message={{
+                    id: String(i), chat_id: "", parent_id: null, role: "assistant", status: "completed", model: m.model ?? null, created_at: "",
+                    content: { text: m.text, sources: m.sources },
+                  }}
+                />
+              ) : null}
               <Markdown text={m.text} />
-              {m.sources?.length ? <Sources sources={m.sources} /> : null}
               {m.model ? <span className="self-end font-mono text-[12px] text-mute">{findModel(m.model)?.short ?? m.model}</span> : null}
             </article>
           ),
