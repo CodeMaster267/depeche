@@ -7,7 +7,12 @@ import { supabaseServer } from "@/lib/supabase/server";
 import { describeLog, when, type LogRow } from "@/lib/family/log";
 import { signOut } from "@/app/sign-in/actions";
 import { signOutEverywhere } from "./actions";
+import { lockSession } from "@/lib/lock/server";
+import { AppLock } from "./lock";
 import { ExportButton } from "@/components/ExportButton";
+import { vapidKeys } from "@/lib/push/server";
+import { NotificationsToggle } from "./Notifications";
+import { ImportChats } from "@/components/ImportChats";
 import { DeleteEverythingForm, KeepChatsToggle, PasswordForm, ProfileForm, ShareTitlesToggle } from "./forms";
 
 export const metadata: Metadata = { title: "Account · Depeche" };
@@ -28,6 +33,12 @@ export default async function Account() {
     db.from("profiles").select("id, display_name").returns<{ id: string; display_name: string }[]>(),
   ]);
   const { data: prefs } = await db.from("profiles").select("keep_chats").eq("id", me.userId).maybeSingle<{ keep_chats: boolean }>();
+  const lock = await lockSession();
+  const { data: passkeys } = await db
+    .from("lock_passkeys")
+    .select("id, label, created_at, last_used_at")
+    .order("created_at")
+    .returns<{ id: string; label: string; created_at: string; last_used_at: string | null }[]>();
   const names = new Map((people ?? []).map((p) => [p.id, p.display_name]));
 
   return (
@@ -54,6 +65,23 @@ export default async function Account() {
             temporary one.
           </p>
           <PasswordForm />
+        </Section>
+        <Section title="Notifications">
+          <NotificationsToggle publicKey={vapidKeys()?.publicKey ?? null} />
+        </Section>
+        <Section title="App lock">
+          <AppLock
+            on={Boolean(lock?.meta)}
+            timeout={lock?.meta?.t ?? 300}
+            needsCurrent={Boolean(lock?.meta) && !lock?.fresh}
+            passkeys={passkeys ?? []}
+          />
+        </Section>
+        <Section title="My look">
+          <p className="text-[15px] text-mute">Redesign your own Depeche: colours, fonts, layout and buttons. Only you see it.</p>
+          <Link href="/design" className="press self-start text-[15px] underline underline-offset-4">
+            Change my look
+          </Link>
         </Section>
         <Section title="Old chats">
           <KeepChatsToggle keep={prefs?.keep_chats ?? false} />
@@ -90,9 +118,12 @@ export default async function Account() {
           </p>
           <ExportButton userId={me.userId} email={me.email} />
         </Section>
+        <Section title="Bring in old chats">
+          <ImportChats />
+        </Section>
         <Section title="Delete">
           <p className="text-[15px] text-mute">
-            Permanently delete all your chats and memories. They&apos;re gone straight away, and out of Depeche&apos;s
+            Permanently delete all your chats, memories and personal instructions. They&apos;re gone straight away, and out of Depeche&apos;s
             backups within 30 days. Your spending history stays, without any chat in it.
           </p>
           <DeleteEverythingForm />

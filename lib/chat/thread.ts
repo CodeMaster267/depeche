@@ -21,6 +21,15 @@ export type MessageRow = {
     searches?: number;
     /** Google's "Search suggestions" chips (its own HTML), shown in a sandbox as Google requires. */
     suggestions?: string;
+    /** Set on a deep research report: what was researched. */
+    research?: { title: string; questions: string[]; sources: number };
+    /** On a question: the part of an earlier answer it asks about (selected by the person). */
+    quote?: string;
+    /** On a reply: questions the person might ask next, shown as buttons under the newest answer. */
+    followups?: string[];
+    /** On a reply: the tokens it used (estimated when the reply was stopped). */
+    /** Tokens used; `cached` is the part of the input read back from the provider's prompt cache. */
+    usage?: { input: number; output: number; cached?: number; estimated?: boolean };
     /** The model's reasoning, or its provider's summary of it, shown collapsed above the reply. */
     reasoning?: string;
     /** How long the model thought, in milliseconds. */
@@ -33,6 +42,8 @@ export type MessageRow = {
     read?: string[];
     /** The person asked the model to think harder for this reply. */
     harder?: boolean;
+    /** Set when two or three models answered the same question side by side (see lib/chat/compare.ts). */
+    compare?: { id: string; slot: number };
   };
   status: "pending" | "streaming" | "completed" | "failed" | "stopped";
   model: string | null;
@@ -41,7 +52,18 @@ export type MessageRow = {
   memory?: { id: string; content: string };
 };
 
-export type ChatRow = { id: string; title: string; model: string | null; pinned: boolean; updated_at: string };
+export type ChatRow = {
+  id: string;
+  title: string;
+  model: string | null;
+  pinned: boolean;
+  updated_at: string;
+  /** Set while the chat is archived: out of the list until restored or written in. */
+  archived_at?: string | null;
+  /** Set on chats brought in from another app's export. */
+  imported_from?: "chatgpt" | "claude" | "gemini" | null;
+  created_at?: string;
+};
 
 /**
  * Messages are never edited or deleted. A regenerated reply is a new message with the same parent,

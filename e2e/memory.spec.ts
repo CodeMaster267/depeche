@@ -47,8 +47,12 @@ test("a suggested memory is kept with a tap, used later, and can be forgotten", 
   // Still offered after a reload, until answered.
   await page.reload();
   await expect(page.getByTestId("memory-suggestion")).toBeVisible();
-  await page.getByTestId("memory-suggestion").getByRole("button", { name: "Remember" }).click();
-  await expect(page.getByText("Remembered.")).toBeVisible();
+  // Safari can take a tap before the reloaded page is ready for it; tap again if nothing happened.
+  await expect(async () => {
+    const remember = page.getByTestId("memory-suggestion").getByRole("button", { name: "Remember" });
+    if (await remember.isVisible()) await remember.click();
+    await expect(page.getByText("Remembered.")).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 15_000 });
 
   await page.goto("/memory");
   await expect(page.getByTestId("memories")).toContainText("Their favourite colour is black.");
@@ -75,8 +79,13 @@ test("a dismissed suggestion is never kept", async ({ page }) => {
   await page.getByRole("dialog", { name: "Choose a model" }).getByRole("button", { name: /Gemini 3\.8 Flash/ }).click();
   await page.getByLabel("Message Depeche").fill("My favourite colour is black");
   await page.getByRole("button", { name: "Send" }).click();
-  await page.getByTestId("memory-suggestion").getByRole("button", { name: "No thanks" }).click();
-  await expect(page.getByTestId("memory-suggestion")).toHaveCount(0);
+  // As above: tap again if Safari took the tap before the page was ready for it.
+  await expect(page.getByTestId("memory-suggestion")).toBeVisible({ timeout: 15_000 });
+  await expect(async () => {
+    const noThanks = page.getByTestId("memory-suggestion").getByRole("button", { name: "No thanks" });
+    if (await noThanks.isVisible()) await noThanks.click();
+    await expect(page.getByTestId("memory-suggestion")).toHaveCount(0, { timeout: 3_000 });
+  }).toPass({ timeout: 15_000 });
   await expect
     .poll(async () => (await db.from("memories").select("status").eq("owner_id", user.user!.id).single()).data?.status)
     .toBe("rejected");
