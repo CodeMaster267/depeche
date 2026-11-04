@@ -54,12 +54,15 @@ export function VersionSwitch({
  */
 export function UserMessage({
   message: m,
+  found,
   versions,
   busy,
   onEdit,
   onPickVersion,
 }: {
   message: MessageRow;
+  /** Opened from a search result: marked for a moment. */
+  found?: boolean;
   versions: MessageRow[];
   busy: boolean;
   onEdit: (text: string) => void;
@@ -72,7 +75,7 @@ export function UserMessage({
   const local = m.id.startsWith("local-");
 
   return (
-    <div data-part="user-row" className="msg-row flex flex-col items-end gap-1.5">
+    <div data-part="user-row" data-message-id={m.id} className="msg-row flex flex-col items-end gap-1.5">
       {m.content.quote ? <QuoteLine quote={m.content.quote} /> : null}
       {m.content.files?.length ? <MessageFiles files={m.content.files} /> : null}
       {editing ? (
@@ -90,7 +93,8 @@ export function UserMessage({
         <div
           data-testid="user-message"
           data-part="user-message"
-          className="max-w-[85%] whitespace-pre-wrap break-words rounded-[22px] bg-inv px-5 py-3 text-[17px] leading-relaxed text-on-inv"
+          data-found={found || undefined}
+          className="found-mark max-w-[85%] whitespace-pre-wrap break-words rounded-[22px] bg-inv px-5 py-3 text-[17px] leading-relaxed text-on-inv"
         >
           {text}
         </div>

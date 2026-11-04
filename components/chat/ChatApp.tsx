@@ -66,12 +66,15 @@ export function ChatApp({
   chat: initialChat,
   messages: initial,
   all: initialAll,
+  focus,
 }: {
   shell: Shell;
   chat: ChatRow | null;
   messages: MessageRow[];
   /** Every version of every message; the screen shows one path through them. */
   all?: MessageRow[];
+  /** A message to scroll to and mark, when the chat was opened from a search result. */
+  focus?: string | null;
 }) {
   const router = useRouter();
   const [shell, setShell] = useState(initialShell);
@@ -79,7 +82,12 @@ export function ChatApp({
   // Edits and regenerations sit beside the originals, so a chat is a tree. `leaf` is where the
   // conversation on screen ends; flipping a version moves it.
   const [tree, setTree] = useState<Live[]>(initialAll ?? initial);
-  const [leaf, setLeaf] = useState<string | null>(initial.at(-1)?.id ?? null);
+  // Opened from a search result on an earlier version: show that version's conversation.
+  const [leaf, setLeaf] = useState<string | null>(() =>
+    focus && !initial.some((m) => m.id === focus) && initialAll?.some((m) => m.id === focus)
+      ? latestLeaf(initialAll, focus)
+      : (initial.at(-1)?.id ?? null),
+  );
   const messages = useMemo(() => pathTo(tree, leaf), [tree, leaf]);
   const [modelId, setModelId] = useState<string | null>(
     initialChat?.model && initialShell.modelIds.includes(initialChat.model) ? initialChat.model : initialShell.defaultModel,
@@ -156,6 +164,22 @@ export function ChatApp({
     const el = scroller.current;
     if (el && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  // Opened from a search result: show that message instead of the end of the chat, marked for a
+  // moment (an earlier version is switched to above).
+  const [found, setFound] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (!focus) return;
+    const el = scroller.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(focus)}"]`);
+    if (!el) return;
+    pinnedToBottom.current = false;
+    el.scrollIntoView({ block: "center" });
+    setFound(focus);
+    const t = setTimeout(() => setFound(null), 2600);
+    // Don't jump again on a reload.
+    window.history.replaceState(window.history.state, "", window.location.pathname);
+    return () => clearTimeout(t);
+  }, [focus]);
 
   // Another device may have added chats or replies: catch up whenever the app comes back.
   const sync = useCallback(async () => {
@@ -783,6 +807,7 @@ export function ChatApp({
                 <div key={m.id} className="flex flex-col">
                   <UserMessage
                     message={m}
+                    found={found === m.id}
                     versions={versionsOf(tree, m)}
                     busy={busy || research.running}
                     onEdit={(text) => edit(m, text)}
@@ -824,6 +849,7 @@ export function ChatApp({
                 <CanvasMessage.Provider key={m.id} value={m.id.startsWith("local-") ? null : m.id}>
                 <Reply
                   message={m}
+                  found={found === m.id}
                   onEdit={pictureModels.length ? (f) => editPicture(f, m.model) : undefined}
                   run={fresh.has(m.id) ? runContexts.fresh : runContexts.old}
                   canRegenerate={!busy && !!m.parent_id && !m.parent_id.startsWith("local-")}
@@ -956,6 +982,7 @@ function stopThinking(m: Live): Live {
 
 function Reply({
   message: m,
+  found,
   canRegenerate,
   onRegenerate,
   onEdit,
@@ -965,6 +992,8 @@ function Reply({
   run,
 }: {
   message: Live;
+  /** Opened from a search result: marked for a moment. */
+  found?: boolean;
   canRegenerate: boolean;
   onRegenerate: () => void;
   onEdit?: (f: FileRef) => void;
@@ -980,7 +1009,13 @@ function Reply({
   const info = findModel(m.model);
   const text = m.content.text ?? "";
   return (
-    <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
+    <article
+      data-testid="reply"
+      data-message-id={m.id}
+      data-found={found || undefined}
+      aria-busy={m.streaming || undefined}
+      className="found-mark flex flex-col gap-3"
+    >
       <Activity message={m} />
       {m.content.files?.length ? <ReplyPictures files={m.content.files} onEdit={onEdit} /> : null}
       {text ? (
