@@ -30,10 +30,18 @@ test("header links look like buttons and mark the current page", async ({ page }
   const account = await menuLink(page, "Account");
   await account.click();
   await expect(page).toHaveURL(/\/account$/);
-  const header = page.getByRole("link", { name: "Account" });
-  await expect(header).toHaveClass(/nav-pill/);
-  expect(await header.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("1px");
-  await expect(header).toHaveAttribute("aria-current", "page");
+  // Phones show one pill naming the page, which opens the others; wider screens show every pill.
+  const pages = page.getByRole("button", { name: "Pages menu" });
+  const onPhone = page.viewportSize()!.width < 640;
+  const pill = onPhone ? pages : page.getByRole("link", { name: "Account" });
+  await expect(pill).toHaveClass(/nav-pill/);
+  expect(await pill.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("1px");
+  if (onPhone) {
+    await expect(pages).toHaveText("Account");
+    await pages.click();
+  }
+  const scope = onPhone ? page.getByRole("navigation", { name: "Pages" }) : page.locator("[data-part=page-header]");
+  await expect(scope.getByRole("link", { name: "Account", exact: true })).toHaveAttribute("aria-current", "page");
   // Sign out sits at the top now, beside the email.
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeInViewport();
   expect(errors).toEqual([]);

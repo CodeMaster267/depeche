@@ -99,3 +99,23 @@ test("with reduced motion the waiting line doesn't flip its letters", async ({ p
   await expect(waiting.locator(".waiting-flip")).toHaveCount(0);
   expect(await waiting.locator(".waiting-signal").evaluate((el) => getComputedStyle(el).animationName)).toBe("none");
 });
+
+test("on a phone the page header fits: one pill names the page and opens the others", async ({ page }, info) => {
+  test.skip(!/android|iphone/.test(info.project.name), "phones only");
+  await signInOwner(page);
+  await page.goto("/family");
+  const pages = page.getByRole("button", { name: "Pages menu" });
+  await expect(pages).toHaveText("Family");
+  await noSidewaysScroll(page);
+  // Nothing in the header runs past the screen's edge.
+  const right = await page.locator("[data-part=page-header]").evaluate((el) => Math.max(...[...el.querySelectorAll("*")].map((c) => c.getBoundingClientRect().right)));
+  expect(right).toBeLessThanOrEqual(page.viewportSize()!.width);
+  // The row of pills is gone on phones: only the one pill shows.
+  await expect(page.locator("[data-part=page-header] .nav-pill").filter({ visible: true })).toHaveCount(1);
+  await pages.click();
+  const list = page.getByRole("navigation", { name: "Pages" });
+  for (const name of ["Family", "Health", "Memory", "Account"]) await expect(list.getByRole("link", { name, exact: true })).toBeVisible();
+  await list.getByRole("link", { name: "Memory", exact: true }).click();
+  await expect(page).toHaveURL(/\/memory$/);
+  await expect(page.getByRole("button", { name: "Pages menu" })).toHaveText("Memory");
+});
