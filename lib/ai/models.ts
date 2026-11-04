@@ -155,3 +155,14 @@ export const MAX_SEARCHES = 5;
 export function searchCost(provider: Provider, searches: number): number {
   return Math.max(0, searches) * SEARCH_PRICE[provider];
 }
+
+/**
+ * Whether the "think harder" switch is offered: the provider lets Depeche ask for more reasoning.
+ * Claude, GPT and Gemini take an effort or thinking level, and Groq's GPT-OSS models a reasoning
+ * effort. DeepSeek always thinks at its own level, and Grok and Qwen on Groq take no setting.
+ */
+export function canThinkHarder(model: Pick<Model, "id" | "provider"> | undefined): boolean {
+  if (!model) return false;
+  if (model.provider === "groq") return model.id.startsWith("openai/gpt-oss");
+  return model.provider === "anthropic" || model.provider === "openai" || model.provider === "google";
+}

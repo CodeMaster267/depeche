@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
-import { canSearch, findModel } from "@/lib/ai/models";
+import { canSearch, canThinkHarder, findModel } from "@/lib/ai/models";
+import { MAX_QUEUED, draftKey, nextQueued, readDraft, writeDraft, type Queued } from "@/lib/chat/composer";
 import { titleFrom, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
 import { deleteChat, pinChat, refreshChat, refreshShell, rememberModel, renameChat } from "@/app/c/actions";
@@ -14,6 +15,8 @@ import type { FileRef } from "@/lib/chat/files";
 import { ACCEPT, AttachmentTray, MessageFiles, useAttachments, type Pending } from "./Attachments";
 import { ModelPicker } from "./ModelPicker";
 import { MemorySuggestion } from "./MemorySuggestion";
+import { SavedPrompts } from "./SavedPrompts";
+import { LaterIcon, PromptsIcon, ThinkIcon } from "./ComposerIcons";
 import { Sidebar } from "./Sidebar";
 import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions, Searching, Sources } from "./Sources";
@@ -41,7 +44,28 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   const [drawer, setDrawer] = useState(false);
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraftState] = useState("");
+  // Unsent text is kept on this device per chat, so it's still there when you come back.
+  const draftChat = useRef(initialChat?.id ?? null);
+  const setDraft = useCallback(
+    (next: string | ((d: string) => string)) =>
+      setDraftState((d) => {
+        const v = typeof next === "function" ? next(d) : next;
+        writeDraft(draftKey(initialShell.userId, draftChat.current), v);
+        return v;
+      }),
+    [initialShell.userId],
+  );
+  useEffect(() => {
+    const saved = readDraft(draftKey(initialShell.userId, initialChat?.id ?? null));
+    if (saved) setDraftState((d) => d || saved);
+  }, [initialShell.userId, initialChat?.id]);
+  // Messages typed while a reply is still being written, sent one by one once it's done.
+  const [queue, setQueue] = useState<Queued[]>([]);
+  const ended = useRef<"completed" | "stopped" | "failed">("completed");
+  // "Think harder" is for the next messages in this visit only, as it costs more.
+  const [think, setThink] = useState(false);
+  const [promptsOpen, setPromptsOpen] = useState(false);
   // Web search is on unless this person turned it off on this device.
   const [search, setSearch] = useState(true);
   useEffect(() => {
@@ -75,6 +99,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   const model = findModel(modelId);
   // DeepSeek and some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
   const searchable = canSearch(model);
+  const thinkable = canThinkHarder(model);
   const noModels = shell.modelIds.length === 0;
   // Listening needs a provider that understands audio (Groq, OpenAI or Google); Claude has none.
   const canListen = shell.modelIds.some((id) => ["groq", "openai", "google"].includes(findModel(id)?.provider ?? ""));
@@ -114,8 +139,9 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     rememberModel(id).catch(() => {});
   };
 
-  async function run(body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean }, optimistic: Live[]) {
+  async function run(body: { text?: string; files?: FileRef[]; regenerate?: string; voice?: boolean } & Record<string, unknown>, optimistic: Live[]) {
     if (!model) return;
+    ended.current = "failed";
     setBanner(null);
     setBusy(true);
     pinnedToBottom.current = true;
@@ -141,14 +167,21 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chatId, model: model.id, clientRequestId: crypto.randomUUID(), search: search && canSearch(model), ...body }),
+        body: JSON.stringify({
+          chatId,
+          model: model.id,
+          clientRequestId: crypto.randomUUID(),
+          search: search && canSearch(model),
+          ...(think && canThinkHarder(model) ? { think: true } : {}),
+          ...body,
+        }),
         signal: abort.signal,
       });
       if (!res.ok || !res.body) {
         const { error } = (await res.json().catch(() => ({}))) as { error?: string };
         // Nothing was sent: take the message back off the screen and return it to the box.
         setMessages((list) => list.filter((m) => m.id !== replyId && !optimistic.some((o) => o.id === m.id)));
-        if (body.text) setDraft(body.text);
+        if (body.text) setDraft((d) => (d.trim() ? d : (body.text ?? "")));
         setBanner(error ?? "Couldn't send that. Try again.");
         if (res.status === 409) sync();
         return;
@@ -192,6 +225,10 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
               setChat(created);
               setShell((s) => ({ ...s, chats: [created, ...s.chats] }));
               window.history.replaceState(null, "", `/c/${ev.chatId}`);
+              // Anything typed meanwhile is now this chat's draft.
+              writeDraft(draftKey(shell.userId, null), "");
+              draftChat.current = ev.chatId;
+              setDraftState((d) => (writeDraft(draftKey(shell.userId, ev.chatId), d), d));
             }
             const local = optimistic[0]?.id;
             if (local) setMessages((list) => list.map((m) => (m.id === local ? ev.userMessage : m)));
@@ -220,6 +257,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             flush();
             const saved = ev.message;
             if (saved) {
+              ended.current = saved.status === "completed" ? "completed" : "failed";
               setMessages((list) => list.map((m) => (m.id === replyId ? saved : m)));
               setShell((s) => ({ ...s, spent: s.spent + Number(saved.content.cost ?? 0) }));
             } else patchReply((m) => ({ ...m, streaming: false, status: "failed", content: { ...m.content, error: ev.error } }));
@@ -229,6 +267,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       if (frame) flush();
     } catch {
       if (abort.signal.aborted) {
+        ended.current = "stopped";
         patchReply((m) => ({ ...m, streaming: false, status: "stopped" }));
         // The server saves what was written; pick up its copy once it has.
         setTimeout(() => sync(), 1500);
@@ -250,12 +289,38 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
 
   const send = () => {
     const text = draft.trim();
-    if ((!text && !attachments.ready) || attachments.uploading || busy || !model) return;
+    if ((!text && !attachments.ready) || attachments.uploading || !model) return;
+    if (busy) {
+      // Still answering: this one goes next.
+      if (queue.length >= MAX_QUEUED) {
+        setBanner(`You can line up ${MAX_QUEUED} messages at a time.`);
+        return;
+      }
+      setDraft("");
+      setQueue((q) => [...q, { id: draftId(), text, files: attachments.take() }]);
+      return;
+    }
     setDraft("");
     sendText(text, false, attachments.take());
   };
 
-  const sendText = (text: string, voice = false, files: FileRef[] = []) => {
+  // Once a reply has finished, the next queued message goes. After a stop or an error they wait.
+  useEffect(() => {
+    if (busy) return;
+    const next = nextQueued(queue, ended.current);
+    if (!next) return;
+    setQueue((q) => q.filter((x) => x.id !== next.id));
+    sendText(next.text, false, next.files, next.extras);
+    // sendText is recreated each render; the queue and busy are what matter here.
+  }, [busy, queue]);
+
+  const sendQueuedNow = (item: Queued) => {
+    if (busy) return;
+    setQueue((q) => q.filter((x) => x.id !== item.id));
+    sendText(item.text, false, item.files, item.extras);
+  };
+
+  const sendText = (text: string, voice = false, files: FileRef[] = [], extras: Record<string, unknown> = {}) => {
     if ((!text && !files.length) || busy || !model) return;
     const mine: Live = {
       id: draftId(),
@@ -267,7 +332,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       model: null,
       created_at: new Date().toISOString(),
     };
-    run({ text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}) }, [mine]);
+    run({ ...extras, text, ...(files.length ? { files } : {}), ...(voice ? { voice } : {}) }, [mine]);
   };
 
   const regenerate = (questionId: string) => {
@@ -388,7 +453,44 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
               {banner}
             </p>
           ) : null}
+          {queue.length ? (
+            <ul aria-label="Queued messages" className="mb-2 flex flex-col gap-1.5">
+              {queue.map((q, i) => (
+                <li key={q.id} data-testid="queued" className="flex items-center gap-2 rounded-2xl border border-line py-1 pl-3 pr-1 text-[15px]">
+                  <LaterIcon className="shrink-0 text-mute" />
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="sr-only">Queued: </span>
+                    {q.text || q.files.map((f) => f.name).join(", ")}
+                  </span>
+                  {!busy && i === 0 ? (
+                    <button type="button" className="press shrink-0 rounded-full px-3 py-1.5 text-[14px] underline underline-offset-4" onClick={() => sendQueuedNow(q)}>
+                      Send now
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    aria-label="Remove from queue"
+                    className="shrink-0 rounded-full p-2 text-mute hover:text-fg"
+                    onClick={() => setQueue((list) => list.filter((x) => x.id !== q.id))}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+                      <path d="M6 6l12 12M18 6L6 18" />
+                    </svg>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <Composer
+            think={think && thinkable}
+            thinkable={thinkable}
+            onToggleThink={() => {
+              setHint(think ? "Think harder off" : "Think harder on: slower, more careful answers that cost a little more");
+              clearTimeout(hintTimer.current);
+              hintTimer.current = setTimeout(() => setHint(null), 2500);
+              setThink(!think);
+            }}
+            onPrompts={() => setPromptsOpen(true)}
             attachments={attachments.items}
             onAttach={async (files) => {
               const skipped = await attachments.add(files);
@@ -415,7 +517,9 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
               {hint}
             </p>
           ) : (
-            <p className="mt-2 hidden text-center text-[12px] text-mute md:block">Enter to send · Shift + Enter for a new line</p>
+            <p className="mt-2 hidden text-center text-[12px] text-mute md:block">
+              {busy ? "Enter to send after this reply" : "Enter to send"} · Shift + Enter for a new line
+            </p>
           )}
         </div>
       </div>
@@ -428,6 +532,16 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
           onSend={(t) => sendText(t, true)}
           onStop={() => abortRef.current?.abort()}
           onClose={() => setVoiceOpen(false)}
+        />
+      ) : null}
+      {promptsOpen ? (
+        <SavedPrompts
+          draft={draft}
+          onClose={() => setPromptsOpen(false)}
+          onUse={(text) => {
+            setPromptsOpen(false);
+            setDraft((d) => (d.trim() ? `${d.trimEnd()}\n\n${text}` : text));
+          }}
         />
       ) : null}
       {picking ? <ModelPicker available={shell.modelIds} current={modelId} onPick={pickModel} onClose={() => setPicking(false)} /> : null}
@@ -486,6 +600,7 @@ function Reply({ message: m, canRegenerate, onRegenerate }: { message: Live; can
           </span>
           <span className="font-mono text-[12px]">
             {info?.short ?? m.model}
+            {m.content.thought ? " · thought harder" : ""}
             {typeof cost === "number" && cost > 0 ? ` · $${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}` : ""}
           </span>
         </div>
@@ -508,6 +623,10 @@ function Composer({
   search,
   searchable,
   onToggleSearch,
+  think,
+  thinkable,
+  onToggleThink,
+  onPrompts,
   voice,
   onVoice,
   onDictated,
@@ -516,6 +635,10 @@ function Composer({
   search: boolean;
   searchable: boolean;
   onToggleSearch: () => void;
+  think: boolean;
+  thinkable: boolean;
+  onToggleThink: () => void;
+  onPrompts: () => void;
   attachments: Pending[];
   onAttach: (files: File[]) => void;
   onRemoveAttachment: (id: string) => void;
@@ -540,6 +663,7 @@ function Composer({
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   }, [value]);
+  const tool = "press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors";
 
   return (
     <form
@@ -562,7 +686,31 @@ function Composer({
       }}
     >
       <AttachmentTray items={attachments} onRemove={onRemoveAttachment} />
-      <div className="flex items-end gap-1">
+      <textarea
+        ref={box}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onPaste={(e) => {
+          const files = [...e.clipboardData.files];
+          if (!files.length) return;
+          e.preventDefault();
+          onAttach(files);
+        }}
+        onKeyDown={(e) => {
+          // On a keyboard, Enter sends (or lines the message up while a reply is being written).
+          // On phones, Enter is a new line and the button sends.
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+            e.preventDefault();
+            onSend();
+          }
+        }}
+        rows={1}
+        placeholder={busy ? "Write your next message" : "Message Depeche"}
+        aria-label="Message Depeche"
+        disabled={disabled}
+        className="block max-h-[220px] min-h-[44px] w-full resize-none bg-transparent px-3 pb-1 pt-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
+      />
+      <div className="flex items-center gap-0.5">
         <input
           ref={picker}
           type="file"
@@ -581,7 +729,7 @@ function Composer({
           onClick={() => picker.current?.click()}
           disabled={disabled}
           aria-label="Attach photos or files"
-          className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mute hover:text-fg disabled:opacity-30"
+          className={`${tool} text-mute hover:text-fg disabled:opacity-30`}
         >
           <PaperclipIcon />
         </button>
@@ -592,34 +740,36 @@ function Composer({
           aria-pressed={search}
           aria-label="Search the web"
           title={!searchable ? "This model can't search the web" : search ? "Web search on: the model searches when it needs to" : "Web search off"}
-          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${search ? "text-fg" : "text-faint"}`}
+          className={`${tool} disabled:opacity-40 ${search ? "text-fg" : "text-faint"}`}
         >
           {search ? <GlobeIcon /> : <GlobeOffIcon />}
         </button>
-        <textarea
-          ref={box}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onPaste={(e) => {
-            const files = [...e.clipboardData.files];
-            if (!files.length) return;
-            e.preventDefault();
-            onAttach(files);
-          }}
-          onKeyDown={(e) => {
-            // On a keyboard, Enter sends. On phones, Enter is a new line and the button sends.
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
-              e.preventDefault();
-              onSend();
-            }
-          }}
-          rows={1}
-          placeholder="Message Depeche"
-          aria-label="Message Depeche"
-          disabled={disabled}
-          className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
-        />
+        <button
+          type="button"
+          onClick={onToggleThink}
+          disabled={!thinkable || disabled}
+          aria-pressed={think}
+          aria-label="Think harder"
+          title={!thinkable ? "This model can't be asked to think harder" : think ? "Think harder on" : "Think harder off"}
+          className={`${tool} disabled:opacity-40 ${think ? "text-fg" : "text-faint"}`}
+        >
+          <ThinkIcon on={think} />
+        </button>
+        <button type="button" onClick={onPrompts} disabled={disabled} aria-label="Saved prompts" className={`${tool} text-mute hover:text-fg disabled:opacity-30`}>
+          <PromptsIcon />
+        </button>
+        <span className="flex-1" />
         {voice ? <DictateButton onText={onDictated} onError={onVoiceError} disabled={disabled} /> : null}
+        {busy && canSend ? (
+          <button
+            type="submit"
+            aria-label="Send after this reply"
+            title="Send after this reply"
+            className="press flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line"
+          >
+            <ArrowUpIcon />
+          </button>
+        ) : null}
         {busy ? (
           <button type="button" onClick={onStop} aria-label="Stop" className="press glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full">
             <StopIcon />

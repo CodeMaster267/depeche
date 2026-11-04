@@ -1,7 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { FunctionCallingConfigMode, GoogleGenAI, type Part } from "@google/genai";
+import { FunctionCallingConfigMode, GoogleGenAI, ThinkingLevel, type Part } from "@google/genai";
 import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canLookUp, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
 import { MAX_OUTPUT } from "@/lib/ai/budget";
 import { CHAT_SEARCH_TOOL, MAX_CHAT_SEARCHES, type ChatSearch } from "@/lib/chat/search";
@@ -51,6 +51,8 @@ export type ReplyRequest = {
    * chat"), offered when some of them are summarised or left out. Not on Groq (test-only).
    */
   chatSearch?: ChatSearch;
+  /** "Think harder": ask for the model's highest usual reasoning effort, where it takes one. */
+  think?: boolean;
 };
 
 /** A provider error, worded for the person chatting. */
@@ -227,7 +229,7 @@ const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-
 /** Long searches can pause a Claude turn; it is continued this many times at most. */
 const MAX_CONTINUES = 3;
 
-async function* anthropicReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* anthropicReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch, think }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new Anthropic({ apiKey, maxRetries: 1 });
   const fallback = FALLBACK_MODELS.has(model.id);
   type Msg = { role: "user" | "assistant"; content: unknown };
@@ -272,7 +274,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
         max_tokens: left,
         system,
         messages: messages as never,
-        output_config: { effort: "medium" },
+        output_config: { effort: think ? "high" : "medium" },
         ...(tools.length ? { tools: tools as never } : {}),
         // Once the lookups are used up the tool stays defined (earlier rounds used it) but can't be called.
         ...(chatSearch && lookups >= MAX_CHAT_SEARCHES ? { tool_choice: { type: "none" as const } } : {}),
@@ -372,7 +374,7 @@ async function* anthropicReply({ model, apiKey, system, turns, signal, search, m
   yield { type: "usage", input, output };
 }
 
-async function* openaiReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* openaiReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch, think }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const client = new OpenAI({ apiKey, maxRetries: 1 });
   const input: unknown[] = turns.map((t) =>
     t.role === "user" && t.files?.length
@@ -418,6 +420,7 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
         stream: true,
         ...(tools.length ? { tools: tools as never } : {}),
         ...(search ? { max_tool_calls: MAX_SEARCHES } : {}),
+        ...(think ? { reasoning: { effort: "high" as const } } : {}),
         // Nothing is stored at OpenAI, so the model's reasoning comes back encrypted to be handed
         // back after a lookup.
         ...(chatSearch
@@ -481,7 +484,7 @@ async function* openaiReply({ model, apiKey, system, turns, signal, search, maxO
   yield { type: "usage", input: inputTokens, output: outputTokens };
 }
 
-async function* googleReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch }: ReplyRequest): AsyncGenerator<StreamEvent> {
+async function* googleReply({ model, apiKey, system, turns, signal, search, maxOutput = MAX_OUTPUT, chatSearch, think }: ReplyRequest): AsyncGenerator<StreamEvent> {
   const ai = new GoogleGenAI({ apiKey });
   type Content = { role: "user" | "model"; parts: Part[] };
   const contents: Content[] = turns.map((t) => ({
@@ -519,6 +522,7 @@ async function* googleReply({ model, apiKey, system, turns, signal, search, maxO
         systemInstruction: system,
         maxOutputTokens: left,
         abortSignal: signal,
+        ...(think ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
         ...(tools.length ? { tools } : {}),
         ...(chatSearch && lookups >= MAX_CHAT_SEARCHES
           ? { toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.NONE } } }
@@ -790,7 +794,7 @@ This is well documented[^1].
 [^1]: [Quadratic formula](https://en.wikipedia.org/wiki/Quadratic_formula), Wikipedia.
 `.replaceAll("\\`", "`");
 
-async function* fakeReply({ turns, signal, search, model, system, chatSearch }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
+async function* fakeReply({ turns, signal, search, model, system, chatSearch, think }: ReplyRequest, chosen = true): AsyncGenerator<StreamEvent> {
   const last = turns.at(-1);
   const q = last?.text.slice(0, 80) ?? "";
   // "what did I say about X" looks X up in this chat, to test the search-this-chat tool.
@@ -861,7 +865,8 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
     : "";
   // "make files" makes it write files to download, to test generated documents.
   const made = q.includes("make files") ? FAKE_FILES : "";
-  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
+  // Says when it was asked to think harder, to test the switch reaches the model.
+  const reply = (think ? "I thought harder about this.\n\n" : "") + (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");

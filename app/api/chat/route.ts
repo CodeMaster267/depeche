@@ -3,7 +3,7 @@ import { getMe } from "@/lib/auth/session";
 import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
-import { MAX_SEARCHES, canLookUp, estimateCost, findModel, searchCost } from "@/lib/ai/models";
+import { MAX_SEARCHES, canLookUp, canThinkHarder, estimateCost, findModel, searchCost } from "@/lib/ai/models";
 import { ProviderError, fakeAi, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
 import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOfferChatSearch } from "@/lib/chat/search";
 import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
@@ -29,6 +29,8 @@ type Body = {
   search?: boolean;
   /** Sent from voice chat: the reply will be read aloud. */
   voice?: boolean;
+  /** "Think harder": the model's highest usual reasoning effort, where it takes one. */
+  think?: boolean;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -108,6 +110,8 @@ export async function POST(req: NextRequest) {
   // The monthly limit is a hard one: reserve the most this reply could cost before anything is
   // spent, counting other replies still being written. The reply is then kept short enough to fit.
   const search = body.search === true;
+  // Thinking harder costs more output, which stays within the same spending hold.
+  const think = body.think === true && canThinkHarder(model);
   // What the person asked Depeche to remember. Their own rows only, read as them.
   const { data: remembered } = await db
     .from("memories")
@@ -319,7 +323,7 @@ export async function POST(req: NextRequest) {
       let status: MessageRow["status"] = "completed";
       let error: string | undefined;
       try {
-        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch })) {
+        for await (const ev of streamReply({ model, apiKey, system, turns, signal: abort.signal, search, maxOutput, chatSearch, think })) {
           if (ev.type === "text") {
             // A suggested memory is taken out of the reply and offered separately.
             const shown = memory.push(ev.text);
@@ -383,6 +387,7 @@ export async function POST(req: NextRequest) {
             ...(sources.length ? { sources } : {}),
             ...(searches ? { searches } : {}),
             ...(suggestions ? { suggestions } : {}),
+            ...(think ? { thought: true } : {}),
             cost,
           },
           status,

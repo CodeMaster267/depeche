@@ -59,7 +59,7 @@ export async function* groqReply(req: ReplyRequest): AsyncGenerator<StreamEvent>
         stream: true,
         stream_options: { include_usage: true },
         ...(maxTokens ? { max_completion_tokens: maxTokens } : {}),
-        ...reasoningOptions(model, !!search),
+        ...reasoningOptions(model, !!search, !!req.think),
         ...(search && canBrowse(model) ? { tools: [{ type: "browser_search" }] as never, tool_choice: "auto" as const } : {}),
       },
       { signal },
@@ -133,9 +133,9 @@ function canBrowse(model: Model): boolean {
   return model.id.startsWith("openai/gpt-oss");
 }
 
-/** Reasoning stays out of the reply text. Groq advises low effort when browsing. */
-function reasoningOptions(model: Model, search: boolean): object {
-  return canBrowse(model) ? { include_reasoning: false, reasoning_effort: search ? "low" : "medium" } : { reasoning_format: "hidden" };
+/** Reasoning stays out of the reply text. Groq advises low effort when browsing, unless asked to think harder. */
+function reasoningOptions(model: Model, search: boolean, think: boolean): object {
+  return canBrowse(model) ? { include_reasoning: false, reasoning_effort: think ? "high" : search ? "low" : "medium" } : { reasoning_format: "hidden" };
 }
 
 function errorText(e: unknown): string {
