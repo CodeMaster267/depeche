@@ -46,7 +46,7 @@ test("rename, pin, archive, restore and delete from a chat's three dots in the l
   // Rename: the sheet starts with the old name, and the new one shows straight away and is saved.
   await list.getByRole("button", { name: "Options for Chemistry revision" }).click();
   const menu = page.getByRole("menu", { name: "Options for Chemistry revision" });
-  await expect(menu.getByRole("menuitem")).toHaveText(["Rename", "Share", "Pin", "Archive", "Delete"]);
+  await expect(menu.getByRole("menuitem")).toHaveText(["Rename", "Share", "Pin", "Archive", "Download", "Delete"]);
   await noSidewaysScroll(page);
   await menu.getByRole("menuitem", { name: "Rename" }).click();
   const rename = page.getByRole("dialog", { name: "Rename chat" });
@@ -69,7 +69,10 @@ test("rename, pin, archive, restore and delete from a chat's three dots in the l
 
   // Archive takes it out of the list and keeps it.
   await list.getByRole("button", { name: "Options for Trip to Lahore" }).click();
+  // The reload below must not cut off the save (Safari reports a cut-off request as "Load failed").
+  const saved = page.waitForResponse((r) => r.request().method() === "POST" && !!r.request().headers()["next-action"]);
   await page.getByRole("menuitem", { name: "Archive" }).click();
+  await saved;
   await expect(list.getByRole("link", { name: "Trip to Lahore" })).toHaveCount(0);
   await expect.poll(async () => (await db.from("chats").select("archived_at").eq("owner_id", id).eq("title", "Trip to Lahore").single()).data?.archived_at).not.toBeNull();
 
@@ -81,7 +84,7 @@ test("rename, pin, archive, restore and delete from a chat's three dots in the l
   await expect(list.getByRole("heading", { name: "Archived" })).toBeVisible();
   await expect(list.locator("section").getByRole("link")).toHaveText(["Trip to Lahore"]);
   await list.getByRole("button", { name: "Options for Trip to Lahore" }).click();
-  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Rename", "Share", "Restore", "Delete"]);
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Rename", "Share", "Restore", "Download", "Delete"]);
   await page.getByRole("menuitem", { name: "Restore" }).click();
   await expect(list.getByText("No archived chats.")).toBeVisible();
   await list.getByRole("button", { name: "All chats" }).click();

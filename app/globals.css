@@ -209,7 +209,7 @@ body {
 }
 .md-code-bar button { color: var(--mute); }
 .md-code-bar button:hover { color: var(--fg); }
-.md-code pre, .md-diagram pre {
+.md-code pre, .md-diagram pre, .md-run pre {
   overflow-x: auto; padding: 14px 16px; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.6; -webkit-overflow-scrolling: touch;
 }
 /* A file the model made, with Download. */
@@ -225,6 +225,25 @@ body {
   margin-top: 10px; max-height: 320px; overflow: auto; padding: 12px; border-radius: 12px; background: var(--soft);
   font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
 }
+/* Charts (components/markdown/Chart.tsx) and code that ran (components/markdown/RunCode.tsx). */
+.md-chart, .md-run { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin: 0; }
+.md-chart-body { padding: 14px 14px 12px; }
+.md-chart-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+.md-chart svg text { font-family: var(--font-sans); font-variant-numeric: tabular-nums; }
+.md-chart [tabindex]:focus-visible { outline: 2px solid var(--fg); outline-offset: 4px; border-radius: 6px; }
+.md-chart-tip {
+  position: absolute; z-index: 2; pointer-events: none; min-width: 120px; padding: 8px 10px; border-radius: 10px;
+  background: var(--bg); border: 1px solid var(--fg); font-size: 13px; line-height: 1.45; box-shadow: 0 6px 20px rgb(0 0 0 / 0.12);
+}
+.md-chart-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 10px; font-size: 13px; }
+.md-chart-legend button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; }
+.md-chart-legend button:disabled { cursor: default; }
+.md-run-out { border-top: 1px solid var(--line); padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+.md-run-text {
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  max-height: 360px; overflow: auto; -webkit-overflow-scrolling: touch;
+}
+.md-run-out img { max-width: 100%; height: auto; border-radius: 8px; background: #fff; }
 .md-diagram-svg { display: flex; justify-content: center; padding: 16px; overflow-x: auto; }
 .md-diagram-svg svg { max-width: 100%; height: auto; }
 
@@ -575,6 +594,17 @@ body {
   .voice-orb-speaking, .voice-orb-busy, .voice-dots { animation: none; }
 }
 
+/* App lock: the PIN dots shake once after a wrong PIN. */
+@keyframes lock-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-10px); }
+  40%, 80% { transform: translateX(10px); }
+}
+.lock-shake { animation: lock-shake 0.36s ease-in-out; }
+@media (prefers-reduced-motion: reduce) {
+  .lock-shake { animation: none; }
+}
+
 /*
  * Chat menus (components/chat/ChatMenu.tsx). The menu pops in quickly; under reduced motion it
  * just appears. In the chat list the three dots are always there on touch screens, and appear on
@@ -595,3 +625,12 @@ body {
   .chat-row[data-active] .chat-more,
   .chat-row .chat-more[aria-expanded="true"] { opacity: 1; }
 }
+
+/*
+ * The small buttons under your own messages (edit, versions). Always shown on touch screens; with a
+ * mouse or trackpad they appear when the message is hovered or focused, unless there are versions.
+ */
+@media (hover: hover) and (pointer: fine) {
+  .msg-row:not(:hover):not(:focus-within) .msg-tools[data-idle] { opacity: 0; }
+}
+.msg-tools { transition: opacity 150ms ease; }

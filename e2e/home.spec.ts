@@ -37,5 +37,6 @@ test("glitch is switched off for people who ask for reduced motion", async ({ pa
 test("the wordmark reads \"depeche\" in lower case", async ({ page }) => {
   await page.goto("/sign-in");
   const wordmark = page.getByRole("img", { name: "Depeche" });
-  expect(await wordmark.evaluate((el) => getComputedStyle(el).textTransform)).toBe("lowercase");
+  // toHaveCSS waits for the stylesheet; reading the style once can run before it has loaded.
+  await expect(wordmark).toHaveCSS("text-transform", "lowercase");
 });

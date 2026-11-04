@@ -3,6 +3,7 @@ import { ChatApp } from "@/components/chat/ChatApp";
 import { isConfigured } from "@/lib/config";
 import { requireMe } from "@/lib/auth/session";
 import { loadShell } from "@/lib/chat/load";
+import { PersonalLook } from "@/components/design/PersonalLook";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ n
   // /?temporary opens a temporary chat straight away.
   const { new: fresh, temporary } = await searchParams;
   return (
-    <ChatApp key={`new-${String(fresh ?? "").slice(0, 20)}`} shell={shell} chat={null} messages={[]} temporary={temporary !== undefined} />
+    <PersonalLook>
+      <ChatApp key={`new-${String(fresh ?? "").slice(0, 20)}`} shell={shell} chat={null} messages={[]} temporary={temporary !== undefined} />
+    </PersonalLook>
   );
 }

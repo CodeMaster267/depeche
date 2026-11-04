@@ -12,18 +12,21 @@ const ITEM = "flex w-full items-center px-4 py-3 text-left text-[16px] hover:bg-
 
 /**
  * The three dots on a chat (in the chat list and in an open chat's header): rename, share, pin, archive
- * or restore, and delete. The menu floats above everything (it is drawn at the end of the page),
+ * or restore, download, and delete. The menu floats above everything (it is drawn at the end of the page),
  * so the chat list's scrolling never cuts it off, and it opens upwards near the bottom of the screen.
  * Rename and delete open a small sheet of their own rather than the browser's prompt boxes.
  */
 export function ChatMenu({
   chat,
+  userId,
   onChange,
   onDeleted,
   className = "p-2 text-mute",
   label = "Chat options",
 }: {
   chat: ChatRow;
+  /** Whose chat it is, for Download (the browser reads the chat itself, under row-level security). */
+  userId: string;
   /** The chat after a rename, pin or archive, shown straight away while the server catches up. */
   onChange: (next: ChatRow) => void;
   onDeleted: () => void;
@@ -132,6 +135,21 @@ export function ChatMenu({
                   })}
                 >
                   {archived ? "Restore" : "Archive"}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={ITEM}
+                  onClick={pick(async () => {
+                    try {
+                      const [{ supabaseBrowser }, { downloadChat }] = await Promise.all([import("@/lib/supabase/browser"), import("@/lib/export/collect")]);
+                      await downloadChat(supabaseBrowser(), userId, chat.id);
+                    } catch {
+                      window.alert("Couldn't download this chat. Try again.");
+                    }
+                  })}
+                >
+                  Download
                 </button>
                 <div className="my-1.5 h-px bg-line" />
                 <button type="button" role="menuitem" className={ITEM} onClick={pick(() => setSheet("delete"))}>
@@ -247,7 +265,7 @@ function RenameSheet({ title, onSave, onClose }: { title: string; onSave: (title
 }
 
 /** A small sheet: slides up from the bottom on phones, a centred card on wider screens. */
-function Sheet({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
+export function Sheet({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
