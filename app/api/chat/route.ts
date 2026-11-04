@@ -16,6 +16,7 @@ import { allow } from "@/lib/rate-limit";
 import { notifyIfAway } from "@/lib/push/notify";
 import { MAX_QUERIES, MAX_REASONING_CHARS, thinkingClock } from "@/lib/chat/activity";
 import { MAX_MESSAGE_CHARS, activePath, titleFrom, type MessageRow, type Source } from "@/lib/chat/thread";
+import { pictureReply } from "./picture";
 import { MAX_COMPARE } from "@/lib/chat/compare";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
@@ -124,6 +125,15 @@ export async function POST(req: NextRequest) {
   }
   // An edit or a reply to an earlier version must follow a message in this same chat.
   if (parentGiven && body.parent && !all.some((m) => m.id === body.parent)) return fail(404, "That message doesn't exist.");
+
+  // Picture models make or edit a picture instead of writing a reply.
+  if (model.image) {
+    return pictureReply({
+      me, db, admin, model, apiKey, chatId, all, text, files: fileRefs,
+      clientRequestId: body.clientRequestId, regenerate: body.regenerate,
+      parent: parentGiven ? (body.parent ?? null) : undefined,
+    });
+  }
 
   // The monthly limit is a hard one: reserve the most this reply could cost before anything is
   // spent, counting other replies still being written. The reply is then kept short enough to fit.
@@ -294,6 +304,10 @@ export async function POST(req: NextRequest) {
           attached.push({ name: f.name, mime: f.mime, data: Buffer.from(await blob.arrayBuffer()).toString("base64") });
         }
       }
+    }
+    // Pictures a picture model made are named, so a chat model knows they're there.
+    if (m.role === "assistant" && m.content.files?.length) {
+      t += `\n\n${m.content.files.map((f) => `[Made the picture "${f.name.replace(/"/g, "'")}".]`).join(" ")}`;
     }
     t = t.trim();
     if ((!t && !attached.length) || m.role === "system" || (m.role === "assistant" && m.status === "failed")) {

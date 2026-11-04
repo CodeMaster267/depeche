@@ -657,13 +657,13 @@ function testUrl(name: string): string | undefined {
   return (!process.env.VERCEL && process.env[name]) || undefined;
 }
 
-function status(e: unknown): number | undefined {
+export function status(e: unknown): number | undefined {
   const s = (e as { status?: unknown; code?: unknown })?.status ?? (e as { code?: unknown })?.code;
   return typeof s === "number" ? s : undefined;
 }
 
 /** The provider's own explanation, unwrapped from the JSON some SDKs nest it in. */
-function detail(e: unknown): string {
+export function detail(e: unknown): string {
   let msg = e instanceof Error ? e.message : String(e ?? "");
   for (let i = 0; i < 3; i++) {
     try {
@@ -680,7 +680,7 @@ function detail(e: unknown): string {
   return msg.replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
-function describe(provider: Provider, e: unknown): string {
+export function describe(provider: Provider, e: unknown): string {
   const text = friendlyError(provider, e);
   const said = detail(e);
   // Logged for debugging in Vercel; never includes the key.

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
 import type { RunContext } from "@/components/markdown/RunCode";
-import { canSearch, findModel, type Model } from "@/lib/ai/models";
+import { MODELS, canSearch, findModel, type Model } from "@/lib/ai/models";
 import { latestLeaf, pathTo, titleFrom, versionsOf, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
 import { archiveChat, refreshChat, refreshShell, rememberModel } from "@/app/c/actions";
@@ -26,10 +26,16 @@ import { UserMessage, VersionSwitch } from "./Versions";
 import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
+import { EditingChip, MakingPicture, ReplyPictures, isPicture } from "./Pictures";
 import type { Source } from "@/lib/chat/thread";
 import { SOURCE_NAMES } from "@/lib/import/types";
 
-type Live = MessageRow & LiveActivity;
+type Live = MessageRow &
+  LiveActivity & {
+    /** A picture model is drawing (editing one, if `editing`). */
+    making?: boolean;
+    editing?: boolean;
+  };
 
 const SEARCH_PREF = "depeche:web-search";
 
@@ -120,6 +126,17 @@ export function ChatApp({
   const selected = model;
   // DeepSeek and some Groq models can't search the web, so the globe is shown off and greyed out while one is picked.
   const searchable = canSearch(model);
+  // Picture models make or edit a picture from each message.
+  const imaging = !!model?.image;
+  const pictureModels = MODELS.filter((m) => m.image && shell.modelIds.includes(m.id));
+  // The newest picture in the chat is edited by the next message to a picture model, unless the
+  // person taps × to make a new one.
+  const newest = messages.at(-1);
+  const lastPicture =
+    newest?.role === "assistant" && !newest.streaming ? newest.content.files?.find(isPicture) : undefined;
+  const [editLast, setEditLast] = useState(true);
+  useEffect(() => setEditLast(true), [lastPicture?.path]);
+  const editing = imaging && editLast && lastPicture && !attachments.items.some((x) => x.ref?.path === lastPicture.path) ? lastPicture : undefined;
   const noModels = shell.modelIds.length === 0;
   // Listening needs a provider that understands audio (Groq, OpenAI or Google); Claude has none.
   const canListen = shell.modelIds.some((id) => ["groq", "openai", "google"].includes(findModel(id)?.provider ?? ""));
@@ -187,7 +204,20 @@ export function ChatApp({
     setModelId(id);
     setCompareIds([]);
     setPicking(false);
-    rememberModel(id).catch(() => {});
+    // New chats start with the last chat model, never a picture model.
+    if (!findModel(id)?.image) rememberModel(id).catch(() => {});
+  };
+
+  /** Edit a picture: switch to a picture model if needed (the one that made it, if it can). */
+  const editPicture = (f: FileRef, madeBy: string | null) => {
+    if (!imaging) {
+      const next = pictureModels.find((m) => m.id === madeBy) ?? pictureModels[0];
+      if (!next) return;
+      setModelId(next.id);
+    }
+    if (f.path === lastPicture?.path) setEditLast(true);
+    else attachments.attach(f);
+    document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Depeche"]')?.focus();
   };
 
   async function run(
@@ -276,6 +306,7 @@ export function ChatApp({
             | { type: "notice"; text: string }
             | { type: "searching"; query?: string; where?: "chat" }
             | { type: "sources"; sources: Source[] }
+            | { type: "making"; editing?: boolean }
             | { type: "done" | "error"; message: MessageRow | null; error?: string };
           if (ev.type === "start") {
             if (!chatId) {
@@ -323,6 +354,9 @@ export function ChatApp({
           } else if (ev.type === "sources") {
             const sources = ev.sources;
             patchReply((m) => ({ ...m, content: { ...m.content, sources } }));
+          } else if (ev.type === "making") {
+            const editing = !!ev.editing;
+            patchReply((m) => (m.making ? m : { ...m, making: true, editing }));
           } else if (ev.type === "notice") {
             patchReply((m) => ({ ...m, content: { ...m.content, notice: ev.text } }));
           } else {
@@ -342,7 +376,11 @@ export function ChatApp({
       }
       if (frame) flush();
     } catch {
-      if (abort.signal.aborted) {
+      if (abort.signal.aborted && model.image) {
+        // A picture is still made and saved after Stop (it's billed either way): fetch it later.
+        patchReply((m) => ({ ...m, streaming: false, making: false, content: { ...m.content, notice: "Still making the picture. It will appear here when it's ready." } }));
+        for (const wait of [15_000, 45_000, 100_000]) setTimeout(() => sync(), wait);
+      } else if (abort.signal.aborted) {
         patchReply((m) => ({ ...m, streaming: false, status: "stopped" }));
         // The server saves what was written; pick up its copy once it has.
         setTimeout(() => sync(), 1500);
@@ -369,9 +407,12 @@ export function ChatApp({
   const send = () => {
     const text = draft.trim();
     if ((!text && !attachments.ready) || attachments.uploading || busy || !model) return;
+    // A picture model needs to be told what to make or change.
+    if (imaging && !text) return;
     setDraft("");
     setQuote(null);
-    sendText(text, false, attachments.take(), quote ?? undefined);
+    const files = attachments.take();
+    sendText(text, false, editing ? [editing, ...files].slice(0, 5) : files, quote ?? undefined);
   };
 
   // The message a new one follows: the end of the conversation on screen.
@@ -390,7 +431,7 @@ export function ChatApp({
       model: null,
       created_at: new Date().toISOString(),
     };
-    const others = compareIds.map((id) => findModel(id)).filter((m): m is Model => !!m && shell.modelIds.includes(m.id));
+    const others = compareIds.map((id) => findModel(id)).filter((m): m is Model => !!m && !m.image && shell.modelIds.includes(m.id));
     if (!voice && others.length >= 2) {
       // Comparing: the first model answers the message as usual; once it's saved, the others answer
       // the same message. Each is its own request with its own spending hold.
@@ -663,6 +704,7 @@ export function ChatApp({
                 <Reply
                   key={m.id}
                   message={m}
+                  onEdit={pictureModels.length ? (f) => editPicture(f, m.model) : undefined}
                   run={fresh.has(m.id) ? runContexts.fresh : runContexts.old}
                   canRegenerate={!busy && !!m.parent_id && !m.parent_id.startsWith("local-")}
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
@@ -693,6 +735,9 @@ export function ChatApp({
             </p>
           ) : null}
           <Composer
+            editing={editing}
+            onClearEditing={() => setEditLast(false)}
+            placeholder={imaging ? (editing || attachments.items.some((x) => x.mime.startsWith("image/")) ? "Describe what to change" : "Describe a picture to make") : "Message Depeche"}
             quote={quote}
             onClearQuote={() => setQuote(null)}
             attachments={attachments.items}
@@ -701,7 +746,7 @@ export function ChatApp({
               if (skipped) setBanner("You can attach up to 5 files to one message.");
             }}
             onRemoveAttachment={attachments.remove}
-            canSend={!attachments.uploading && (!!draft.trim() || attachments.ready)}
+            canSend={!attachments.uploading && (!!draft.trim() || (attachments.ready && !imaging))}
             value={draft}
             onChange={setDraft}
             onSend={send}
@@ -711,7 +756,7 @@ export function ChatApp({
             search={search && searchable}
             searchable={searchable}
             onToggleSearch={toggleSearch}
-            voice={canListen && !!model}
+            voice={canListen && !!model && !imaging}
             onVoice={() => setVoiceOpen(true)}
             onDictated={(t) => setDraft((d) => (d.trim() ? `${d.trimEnd()} ${t}` : t))}
             onVoiceError={setBanner}
@@ -783,6 +828,7 @@ function Reply({
   message: m,
   canRegenerate,
   onRegenerate,
+  onEdit,
   followUps,
   onFollowUp,
   versions,
@@ -791,6 +837,7 @@ function Reply({
   message: Live;
   canRegenerate: boolean;
   onRegenerate: () => void;
+  onEdit?: (f: FileRef) => void;
   followUps?: string[];
   onFollowUp: (q: string) => void;
   /** "‹ 1/2 ›" when this reply has other versions. */
@@ -805,13 +852,15 @@ function Reply({
   return (
     <article data-testid="reply" aria-busy={m.streaming || undefined} className="flex flex-col gap-3">
       <Activity message={m} />
+      {m.content.files?.length ? <ReplyPictures files={m.content.files} onEdit={onEdit} /> : null}
       {text ? (
         // Text selected in here can be asked about (see AskAboutSelection).
         <div data-reply-text className="contents">
           <Markdown text={text} streaming={m.streaming} run={run} />
         </div>
       ) : null}
-      {m.streaming && !m.searchingNow && !m.thinkingNow ? (
+      {m.streaming && m.making ? <MakingPicture editing={m.editing} /> : null}
+      {m.streaming && !m.searchingNow && !m.thinkingNow && !m.making ? (
         <span aria-label="Writing" className="block h-6">
           <span className="stream-cursor" />
         </span>
@@ -881,6 +930,9 @@ function Reply({
 }
 
 function Composer({
+  editing,
+  onClearEditing,
+  placeholder,
   quote,
   onClearQuote,
   attachments,
@@ -901,6 +953,9 @@ function Composer({
   onDictated,
   onVoiceError,
 }: {
+  editing?: FileRef;
+  onClearEditing: () => void;
+  placeholder: string;
   quote: string | null;
   onClearQuote: () => void;
   search: boolean;
@@ -951,6 +1006,7 @@ function Composer({
         onAttach([...e.dataTransfer.files]);
       }}
     >
+      {editing ? <EditingChip file={editing} onClear={onClearEditing} /> : null}
       {quote ? <QuoteChip quote={quote} onClear={onClearQuote} /> : null}
       <AttachmentTray items={attachments} onRemove={onRemoveAttachment} />
       <div className="flex items-end gap-1">
@@ -1005,7 +1061,7 @@ function Composer({
             }
           }}
           rows={1}
-          placeholder="Message Depeche"
+          placeholder={placeholder}
           aria-label="Message Depeche"
           disabled={disabled}
           className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
