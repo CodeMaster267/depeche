@@ -6,6 +6,18 @@ import { readyToSpeak, speakable } from "@/lib/voice/text";
 import { micProblem } from "./VoiceButtons";
 import { CloseIcon, MicIcon, MicOffIcon, SpeakerIcon, SpeakerOffIcon } from "./icons";
 import { LanguagePicker } from "./LanguagePicker";
+import { openLive, type Listener } from "@/lib/voice/live";
+
+const TALK_OVER_KEY = "depeche:voice-talk-over";
+const readTalkOver = () => {
+  try {
+    return localStorage.getItem(TALK_OVER_KEY) !== "off";
+  } catch {
+    return true;
+  }
+};
+/** Two words in a row while it's answering means the person is talking, not a cough. */
+const talking = (t: string) => t.trim().split(/\s+/).filter(Boolean).length >= 2;
 
 export type VoiceMessage = { id: string; role: string; content: { text?: string; error?: string }; status: string; streaming?: boolean };
 
@@ -64,8 +76,18 @@ export function VoiceMode({
   const mic = useRef<Mic | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const speech = useRef<AbortController | null>(null);
-  /** Pieces of the answer waiting to be said, each with its audio already being made. */
-  const queue = useRef<{ text: string; voiced: Promise<Voiced> }[]>([]);
+  /** Pieces of the answer waiting to be said. The next one's audio is made while one plays. */
+  const queue = useRef<{ text: string; voiced?: Promise<Voiced> }[]>([]);
+  /** Live listening (words appear as you talk), while it works; null means the usual way. */
+  const live = useRef<Listener | null>(null);
+  const liveOff = useRef(false);
+  /** Talk over the answer to cut it off. Keeps the mic open while it speaks. */
+  const [talkOver, setTalkOverState] = useState(true);
+  const talkOverRef = useRef(true);
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const stopRef = useRef(onStop);
+  stopRef.current = onStop;
   /** Cancels everything for the current answer: audio being made and audio playing. */
   const answerCtl = useRef<AbortController | null>(null);
   /** Once the provider's voice fails, the rest of the conversation uses the device's voice. */
@@ -88,12 +110,55 @@ export function VoiceMode({
     return sending.current && list.length >= base.current + 2 && list.at(-1)?.role === "assistant" ? list.at(-1) : undefined;
   };
 
+  /** The live listener, opening one if needed; null when live listening isn't available. */
+  const getLive = async (): Promise<Listener | null> => {
+    if (live.current && !live.current.closed) return live.current;
+    live.current = null;
+    if (liveOff.current) return null;
+    const l = await openLive();
+    if (!l) {
+      // No Google key, or Google said no: the usual listening for the rest of this conversation.
+      liveOff.current = true;
+      return null;
+    }
+    if (!open.current) {
+      l.close();
+      return null;
+    }
+    l.events.onText = (t) => heardLive(t);
+    live.current = l;
+    return l;
+  };
+  const liveUp = () => !!live.current && !live.current.closed;
+
+  /** Words from live listening, as they're said. */
+  const heardLive = (t: string) => {
+    const p = phaseRef.current;
+    if (p === "listening") {
+      if (t) {
+        setSaid(t);
+        setAnswerAt(null);
+      }
+    } else if ((p === "speaking" || p === "thinking") && talkOverRef.current && talking(t)) {
+      // Talking over the answer: stop it and carry on listening, keeping what's been said.
+      console.info("[voice] talked over the answer");
+      interrupt();
+      setSaid(t);
+      setAnswerAt(null);
+      setNote(null);
+      setPhase("listening");
+      mic.current?.restart(true);
+    }
+  };
+
+  const micStreamUp = () => !!stream.current && stream.current.getAudioTracks().some((t) => t.readyState !== "ended");
+
   /** Listens for your turn. With the mic muted it waits for a tap instead (`once` is that tap). */
   const startListening = useCallback(async (once = false) => {
     if (!open.current) return;
-    mic.current?.cancel();
-    mic.current = null;
     if (mutedRef.current && !once) {
+      mic.current?.cancel();
+      mic.current = null;
       closeMicStream(stream.current);
       stream.current = null;
       setLevel(0);
@@ -101,19 +166,23 @@ export function VoiceMode({
       return setPhase("muted");
     }
     setNote(null);
+    // Still listening from while the answer played: just start the turn over.
+    if (mic.current && liveUp() && micStreamUp()) {
+      live.current!.reset();
+      mic.current.restart(true);
+      return setPhase("listening");
+    }
+    mic.current?.cancel();
+    mic.current = null;
     setPhase("listening");
     try {
       const ctx = unlockAudio();
-      // The microphone is open only while it's your turn.
-      if (!stream.current || stream.current.getAudioTracks().every((t) => t.readyState === "ended")) {
-        stream.current = await openMicStream();
-      }
+      // The microphone is open only while it's your turn (or while you can talk over the answer).
+      if (!micStreamUp()) stream.current = await openMicStream();
+      const l = await getLive();
       if (!open.current) return;
-      mic.current = await Mic.open(ctx, {
-        autoStop: true,
-        onLevel: setLevel,
-        onAutoStop: (heard) => (heard ? hear() : pause("Didn't hear anything. Tap to talk.")),
-      }, stream.current);
+      l?.reset();
+      mic.current = await openMic(ctx, true);
       if (!open.current) mic.current.cancel();
     } catch (e) {
       console.warn("[voice] microphone", (e as Error)?.name, (e as Error)?.message);
@@ -121,6 +190,43 @@ export function VoiceMode({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const openMic = (ctx: AudioContext, autoStop: boolean) =>
+    Mic.open(
+      ctx,
+      {
+        autoStop,
+        onLevel: setLevel,
+        // With live listening the words are already written out, so a shorter pause will do.
+        quietMs: liveUp() ? 900 : undefined,
+        onChunk: (pcm) => live.current?.send(pcm),
+        onAutoStop: (heard) => (heard ? hear() : pause("Didn't hear anything. Tap to talk.")),
+      },
+      stream.current!,
+    );
+
+  /** While the answer plays, keep listening so you can talk over it. */
+  const overhear = async () => {
+    if (!talkOverRef.current || mutedRef.current || !liveUp() || !micStreamUp() || !open.current) return;
+    // Only what's said from now on counts.
+    live.current!.reset();
+    try {
+      mic.current = await openMic(unlockAudio(), false);
+    } catch {
+      mic.current = null;
+    }
+  };
+
+  /** Stops the answer: what's playing, what's being made and what's being written. */
+  const interrupt = () => {
+    queue.current = [];
+    answerCtl.current?.abort();
+    speech.current?.abort();
+    speech.current = null;
+    stopSpeaking();
+    if (busyRef.current) stopRef.current();
+    sending.current = false;
+  };
 
   const pause = (why: string | null) => {
     mic.current?.cancel();
@@ -137,15 +243,20 @@ export function VoiceMode({
     mic.current = null;
     if (!rec || !open.current) return;
     const wav = rec.stop();
-    // Let go of the microphone until it's your turn again, so the answer plays like media: through
-    // headphones when they're in, at full volume.
-    closeMicStream(stream.current);
-    stream.current = null;
+    const keepMic = talkOverRef.current && !mutedRef.current && liveUp();
+    if (!keepMic) {
+      // Let go of the microphone until it's your turn again, so the answer plays like media:
+      // through headphones when they're in, at full volume.
+      closeMicStream(stream.current);
+      stream.current = null;
+    }
     setLevel(0);
     setPhase("hearing");
     let text = "";
     try {
-      text = (await listen(wav, within(undefined, HEAR_TIMEOUT_MS))).trim();
+      if (liveUp()) text = (await live.current!.finish()).trim();
+      // Nothing came back live: write out the recording the usual way.
+      if (!text) text = (await listen(wav, within(undefined, HEAR_TIMEOUT_MS))).trim();
     } catch (e) {
       const late = ["TimeoutError", "AbortError"].includes((e as Error)?.name);
       console.warn("[voice] writing out", (e as Error)?.name, (e as Error)?.message);
@@ -167,6 +278,7 @@ export function VoiceMode({
     sending.current = true;
     setPhase("thinking");
     sendRef.current(text);
+    overhear();
     // If no answer starts arriving, say so rather than flicker forever.
     const sentAt = base.current;
     setTimeout(() => {
@@ -177,20 +289,25 @@ export function VoiceMode({
     }, ANSWER_TIMEOUT_MS);
   };
 
-  /** Starts making a piece's audio now, so it's ready by the time the piece before it ends. */
-  const enqueue = (text: string) => {
+  /** Starts making a piece's audio, if it hasn't been started yet. */
+  const voice = (item: { text: string; voiced?: Promise<Voiced> }) => {
+    if (item.voiced) return item.voiced;
     const signal = answerCtl.current?.signal ?? new AbortController().signal;
-    const voiced: Promise<Voiced> =
+    item.voiced =
       soundOffRef.current || deviceVoice.current
         ? Promise.resolve({ fallback: "" })
-        : fetchVoice(text, signal).then((v) => {
+        : fetchVoice(item.text, signal, true).then((v) => {
             if ("fallback" in v && !signal.aborted && !deviceVoice.current) {
               deviceVoice.current = true;
               setNote(`Using this device's voice. ${v.fallback}`);
             }
             return v;
           });
-    queue.current.push({ text, voiced });
+    return item.voiced;
+  };
+
+  const enqueue = (text: string) => {
+    queue.current.push({ text });
   };
 
   const pump = async () => {
@@ -209,7 +326,10 @@ export function VoiceMode({
     setPhase("speaking");
     const c = startSpeaking();
     speech.current = c;
-    const voiced = await next.voiced;
+    const voiced = await voice(next);
+    // Make the next piece while this one plays (one at a time, so a fast reply doesn't run into
+    // the limit on requests at once).
+    if (queue.current[0] && !c.signal.aborted) voice(queue.current[0]);
     // Sound off: the captions carry the answer, nothing is played.
     if (!soundOffRef.current && !c.signal.aborted) await playVoice(next.text, voiced, c.signal);
     if (speech.current === c) speech.current = null;
@@ -240,6 +360,8 @@ export function VoiceMode({
   // Start listening on open; let go of the mic and stop talking on close.
   useEffect(() => {
     open.current = true;
+    talkOverRef.current = readTalkOver();
+    setTalkOverState(talkOverRef.current);
     startListening();
     let lock: { release: () => Promise<void> } | null = null;
     // Keep the screen on while talking, where the browser allows it.
@@ -255,6 +377,8 @@ export function VoiceMode({
       speech.current?.abort();
       answerCtl.current?.abort();
       stopSpeaking();
+      live.current?.close();
+      live.current = null;
       lock?.release().catch(() => {});
     };
   }, [startListening]);
@@ -274,6 +398,8 @@ export function VoiceMode({
     setMutedState(next);
     const p = phaseRef.current;
     if (next) {
+      // Half-heard words won't be sent.
+      if (p === "listening") setSaid("");
       // Stop listening now; anything being said still finishes, and a tap on the circle still
       // lets you talk.
       if (p === "listening" || p === "paused" || p === "starting") startListening();
@@ -289,6 +415,26 @@ export function VoiceMode({
     if (next) stopSpeaking();
   };
 
+  const toggleTalkOver = () => {
+    const next = !talkOverRef.current;
+    talkOverRef.current = next;
+    setTalkOverState(next);
+    try {
+      localStorage.setItem(TALK_OVER_KEY, next ? "on" : "off");
+    } catch {
+      // Remembered for this conversation only.
+    }
+    const p = phaseRef.current;
+    if (next && (p === "speaking" || p === "thinking") && !mic.current) overhear();
+    if (!next && (p === "speaking" || p === "thinking") && mic.current) {
+      // Let go of the mic now, so the answer plays like media again.
+      mic.current.cancel();
+      mic.current = null;
+      closeMicStream(stream.current);
+      stream.current = null;
+    }
+  };
+
   const tap = () => {
     unlockAudio();
     const p = phaseRef.current;
@@ -298,12 +444,7 @@ export function VoiceMode({
     }
     if (p === "speaking" || p === "thinking") {
       // Interrupt: stop talking (and writing), and listen.
-      queue.current = [];
-      answerCtl.current?.abort();
-      speech.current?.abort();
-      speech.current = null;
-      if (busy) onStop();
-      sending.current = false;
+      interrupt();
       startListening(true);
       return;
     }
@@ -316,7 +457,9 @@ export function VoiceMode({
     phase === "listening"
       ? "Talk, then pause."
       : phase === "speaking" || phase === "thinking"
-        ? "Tap the circle to interrupt."
+        ? talkOver && liveUp() && !muted
+          ? "Talk, or tap the circle, to interrupt."
+          : "Tap the circle to interrupt."
         : phase === "muted"
           ? "Tap the circle when you want to talk."
           : "";
@@ -345,7 +488,24 @@ export function VoiceMode({
             <p className="text-[15px] text-mute">{hint}</p>
           ) : null}
         </div>
-        <LanguagePicker />
+        <div className="flex flex-wrap items-start justify-center gap-2">
+          <LanguagePicker
+            onChange={() => {
+              // Listen with the new languages from the next turn (this one is written out the usual way).
+              live.current?.close();
+              live.current = null;
+              liveOff.current = false;
+            }}
+          />
+          <button
+            type="button"
+            onClick={toggleTalkOver}
+            aria-pressed={talkOver}
+            className="press rounded-full border border-line px-3.5 py-1.5 text-[14px] text-mute"
+          >
+            Talk over answers: {talkOver ? "on" : "off"}
+          </button>
+        </div>
       </div>
 
       {/* Captions: what you said, then the answer as it is written and read out. */}
