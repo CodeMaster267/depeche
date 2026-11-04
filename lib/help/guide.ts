@@ -133,6 +133,21 @@ Voice works while the app is open; iPhones don't let websites listen in the back
   deleted, a line at the top of the chat screen says so, with "Keep" to save them.`,
   },
   {
+    id: "skills",
+    title: "Skills",
+    routes: ["/skills", "/skills/[id]"],
+    text: `
+[Skills](/skills) (side menu → Skills) teach Depeche how to help with one kind of task, like a family budget or planning a
+wedding. Add a skill to "My skills" and your chats pick it up by themselves whenever a message is about it (or names it).
+- Make a skill: describe what it should help with; a model writes it and names it. Every skill is checked for safety
+  and goes in the Library for everyone on Depeche.
+- Library: search everyone's skills and tap Add (or Remove) to choose which are yours.
+- Tap a skill to see its Instructions, any Files, and "Picked up when a message mentions" (the words that trigger it).
+  If you made it, "Change this skill" lets you ask for changes or edit it yourself, and Delete takes it out of the
+  library. Admins can remove a skill from the library.
+Skills never see your memories or other chats.`,
+  },
+  {
     id: "caching",
     title: "Prompt caching",
     text: `
