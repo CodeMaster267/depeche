@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
+import type { RunContext } from "@/components/markdown/RunCode";
 import { canSearch, findModel, type Model } from "@/lib/ai/models";
 import { latestLeaf, pathTo, titleFrom, versionsOf, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
@@ -11,6 +12,7 @@ import { archiveChat, refreshChat, refreshShell, rememberModel } from "@/app/c/a
 import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
+import { markAway } from "@/lib/push/client";
 import { ACCEPT, AttachmentTray, useAttachments, type Pending } from "./Attachments";
 import { AskAboutSelection, CostButton, FollowUps, QuoteChip } from "./Extras";
 import { ModelPicker } from "./ModelPicker";
@@ -75,6 +77,7 @@ export function ChatApp({
     initialChat?.model && initialShell.modelIds.includes(initialChat.model) ? initialChat.model : initialShell.defaultModel,
   );
   const [picking, setPicking] = useState(false);
+  const [fresh, setFresh] = useState<Set<string>>(() => new Set());
   const [drawer, setDrawer] = useState(false);
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
@@ -219,6 +222,33 @@ export function ChatApp({
     }
   }
 
+  // Leaving the app while an answer is being written asks for a notification when it's ready
+  // (only on devices where notifications are on, from Account). Coming back cancels it.
+  // Each answer being written (several at once when comparing models): whether the app has
+  // marked it "away", and whether its stream is still open.
+  const writing = useRef(new Map<string, { away: boolean; live: boolean }>());
+  useEffect(() => {
+    const onChange = () => {
+      const hidden = document.visibilityState === "hidden";
+      for (const [id, w] of writing.current) {
+        if (!hidden && !w.live) {
+          // Back after the connection dropped: the answer is still being written on the server,
+          // so keep the mark and let the notification say when it's saved.
+          writing.current.delete(id);
+        } else if (w.live && w.away !== hidden) {
+          w.away = hidden;
+          markAway(id, hidden);
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", onChange);
+    window.addEventListener("pagehide", onChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onChange);
+      window.removeEventListener("pagehide", onChange);
+    };
+  }, []);
+
   const pickModel = (id: string) => {
     setModelId(id);
     setCompareIds([]);
@@ -257,11 +287,13 @@ export function ChatApp({
     const patchReply = (fn: (m: Live) => Live) => setTree((list) => list.map((m) => (m.id === replyId ? fn(m) : m)));
 
     let chatId = opts.chatId ?? chat?.id ?? null;
+    const clientRequestId = crypto.randomUUID();
+    writing.current.set(clientRequestId, { away: false, live: true });
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chatId, model: model.id, clientRequestId: crypto.randomUUID(), search: search && canSearch(model), ...body }),
+        body: JSON.stringify({ chatId, model: model.id, clientRequestId, search: search && canSearch(model), ...body }),
         signal: abort.signal,
       });
       if (!res.ok || !res.body) {
@@ -367,6 +399,8 @@ export function ChatApp({
               setTree((list) => list.map((m) => (m.id === replyId ? saved : m)));
               if (follow) setLeaf(saved.id);
               else setLeaf((l) => (l === replyId ? saved.id : l));
+              // Code in a reply that just arrived may run by itself.
+              setFresh((f) => new Set(f).add(saved.id));
               setShell((s) => ({ ...s, spent: s.spent + Number(saved.content.cost ?? 0) }));
             } else patchReply((m) => ({ ...m, streaming: false, status: "failed", content: { ...m.content, error: ev.error } }));
           }
@@ -383,6 +417,10 @@ export function ChatApp({
         setTimeout(() => sync(), 2500);
       }
     } finally {
+      // Read here and now, so no notification is needed (one already asked for still arrives).
+      const w = writing.current.get(clientRequestId);
+      if (w) w.live = false;
+      if (document.visibilityState === "visible") writing.current.delete(clientRequestId);
       aborts.current.delete(abort);
       if (!aborts.current.size) setBusy(false);
       setShell((s) => ({
@@ -472,6 +510,18 @@ export function ChatApp({
     pinnedToBottom.current = false;
     setLeaf(latestLeaf(tree, id));
   };
+
+  // Code in replies can open this chat's files and send its results back as a message.
+  const sendRef = useRef(sendText);
+  sendRef.current = sendText;
+  const fileKey = messages.flatMap((m) => (m.role === "user" ? (m.content.files ?? []).map((f) => f.path) : [])).join("|");
+  const runContexts = useMemo(() => {
+    const files = messages.flatMap((m) => (m.role === "user" ? (m.content.files ?? []) : []));
+    const onSend = (t: string) => sendRef.current(t);
+    return { fresh: { files, autoRun: true, onSend } as RunContext, old: { files, autoRun: false, onSend } as RunContext };
+    // The files only change when fileKey does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileKey]);
 
   /** Continue the conversation from one model's answer, and keep using that model. */
   const choose = (reply: MessageRow) => {
@@ -686,6 +736,8 @@ export function ChatApp({
                       message={r}
                       canRegenerate={!busy && !!r.parent_id && !r.parent_id.startsWith("local-")}
                       onRegenerate={() => retryCompared(r)}
+                      // Side-by-side answers don't start code by themselves; each has a Run button.
+                      run={runContexts.old}
                       // Follow-ups carry on from the picked answer, so only it offers them.
                       followUps={!busy && r.id === m.id && m.id === messages.at(-1)?.id ? r.content.followups : undefined}
                       onFollowUp={(q) => sendText(q)}
@@ -696,6 +748,7 @@ export function ChatApp({
                 <Reply
                   key={m.id}
                   message={m}
+                  run={fresh.has(m.id) ? runContexts.fresh : runContexts.old}
                   canRegenerate={!busy && !!m.parent_id && !m.parent_id.startsWith("local-")}
                   onRegenerate={() => m.parent_id && regenerate(m.parent_id)}
                   versions={<ReplyVersions message={m} tree={tree} busy={busy} onPick={showVersion} />}
@@ -820,6 +873,7 @@ function Reply({
   followUps,
   onFollowUp,
   versions,
+  run,
 }: {
   message: Live;
   canRegenerate: boolean;
@@ -828,6 +882,8 @@ function Reply({
   onFollowUp: (q: string) => void;
   /** "‹ 1/2 ›" when this reply has other versions. */
   versions?: ReactNode;
+  /** Lets Python in the reply open this chat's files and send its results. */
+  run: RunContext;
 }) {
   const [copied, setCopied] = useState(false);
   const [source, setSource] = useState(false);
@@ -839,7 +895,7 @@ function Reply({
       {text ? (
         // Text selected in here can be asked about (see AskAboutSelection).
         <div data-reply-text className="contents">
-          <Markdown text={text} streaming={m.streaming} />
+          <Markdown text={text} streaming={m.streaming} run={run} />
         </div>
       ) : null}
       {m.streaming && !m.searchingNow && !m.thinkingNow ? (

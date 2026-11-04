@@ -33,6 +33,8 @@ export const LIMITS = {
   researchPerDay: { limit: 20, seconds: 24 * 60 * 60 },
   /** Voice requests (listening and reading aloud), per person. */
   voicePerMinute: { limit: 30, seconds: 60 },
+  /** Turning notifications on or off, and test notifications, per person. */
+  pushChanges: { limit: 30, seconds: 60 * 60 },
   /** Batches of imported chats, per person (an export of a few thousand chats is about 100). */
   importBatches: { limit: 300, seconds: 60 * 60 },
   /** Bug reports, per person. */

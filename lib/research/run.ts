@@ -1,6 +1,7 @@
 import "server-only";
 import { createHmac, hkdfSync, timingSafeEqual } from "node:crypto";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { pushTo } from "@/lib/push/server";
 import { serviceRoleKey } from "@/lib/config";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
 import { MAX_SEARCHES, estimateCost, findModel, searchCost, type Model } from "@/lib/ai/models";
@@ -226,8 +227,24 @@ export async function advance(runId: string, origin: string): Promise<void> {
     await save({ status: "failed", error: "Something went wrong while researching. Try again." });
   } finally {
     await admin.from("research_runs").update({ lease_until: null }).eq("id", runId);
+    if (!more) await notifyEnd(admin, run);
   }
   if (more) await handOver(origin, runId);
+}
+
+/**
+ * If this step ended the run, tell the person's devices (where they turned notifications on): research
+ * takes minutes and they have usually left the app. Never quotes the report.
+ */
+async function notifyEnd(admin: Admin, run: ResearchRun) {
+  const { data: end } = await admin.from("research_runs").select("status, title").eq("id", run.id).maybeSingle<{ status: string; title: string | null }>();
+  if (end?.status !== "done" && end?.status !== "failed") return;
+  await pushTo(run.owner_id, {
+    title: end.title?.trim() || "Deep research",
+    body: end.status === "done" ? "Your research report is ready." : "The research didn't finish. Open the chat to see why.",
+    url: `/c/${run.chat_id}`,
+    tag: `chat-${run.chat_id}`,
+  }).catch(() => 0);
 }
 
 /** Saves the report as the reply to the question, and marks the run done. */
