@@ -20,6 +20,7 @@ import { CANVAS_PROMPT_CHARS, fenceFor, withoutCanvasBlocks } from "@/lib/canvas
 import { saveReplyCanvases } from "@/lib/chat/canvas";
 import { pictureReply } from "./picture";
 import { MAX_COMPARE } from "@/lib/chat/compare";
+import { DESIGN_INSTRUCTIONS } from "@/lib/design/instructions";
 
 // Long replies from reasoning models can take minutes. Vercel Hobby allows up to 300 seconds.
 export const maxDuration = 300;
@@ -629,6 +630,7 @@ function systemPrompt(name: string, voice: boolean, memories: string[], instruct
     voice ? "" : FILE_INSTRUCTIONS,
     voice ? "" : CHART_INSTRUCTIONS,
     voice ? "" : CODE_INSTRUCTIONS,
+    voice ? "" : DESIGN_INSTRUCTIONS,
     voice ? "" : CANVAS_INSTRUCTIONS(name),
     voice ? "" : followUpInstructions(name),
     voice

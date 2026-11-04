@@ -3,6 +3,7 @@ import { ChatApp } from "@/components/chat/ChatApp";
 import { isConfigured } from "@/lib/config";
 import { requireMe } from "@/lib/auth/session";
 import { loadShell } from "@/lib/chat/load";
+import { PersonalLook } from "@/components/design/PersonalLook";
 
 export const dynamic = "force-dynamic";
 
@@ -27,5 +28,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ n
   const shell = await loadShell(me);
   // "New chat" from a chat begun on this screen adds ?new=… so the screen starts over.
   const { new: fresh } = await searchParams;
-  return <ChatApp key={`new-${String(fresh ?? "").slice(0, 20)}`} shell={shell} chat={null} messages={[]} />;
+  return (
+    <PersonalLook>
+      <ChatApp key={`new-${String(fresh ?? "").slice(0, 20)}`} shell={shell} chat={null} messages={[]} />
+    </PersonalLook>
+  );
 }
