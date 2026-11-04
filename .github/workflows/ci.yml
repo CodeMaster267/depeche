@@ -54,7 +54,11 @@ jobs:
           DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
           BACKUP_PASSPHRASE: local-drill-passphrase-not-a-secret
         run: |
-          scripts/backup/backup.sh "$RUNNER_TEMP/backup"
+          # The tests upload files, so the drill backs those up too, with the local Supabase's own
+          # service key (written to .env.local by db:start). The restore only checks the data.
+          SUPABASE_URL="$(grep '^NEXT_PUBLIC_SUPABASE_URL=' .env.local | cut -d= -f2-)" \
+          SUPABASE_SERVICE_ROLE_KEY="$(grep '^SUPABASE_SERVICE_ROLE_KEY=' .env.local | cut -d= -f2-)" \
+            scripts/backup/backup.sh "$RUNNER_TEMP/backup"
           scripts/backup/restore.sh "$RUNNER_TEMP"/backup/*.gpg "$(scripts/backup/scratch-db.sh)"
       - name: Keep the report if something failed
         if: failure()
