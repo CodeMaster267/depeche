@@ -7,8 +7,8 @@ import type { ReplyRequest, StreamEvent, Turn } from "@/lib/ai/providers";
 
 /**
  * DeepSeek, through its OpenAI-compatible Chat Completions API. Its models think before answering
- * (on by default); the thinking streams separately as `reasoning_content` and is kept out of the
- * reply. DeepSeek's API has no web search. Only Flash sees pictures, so it answers a message that
+ * (on by default); the thinking streams separately as `reasoning_content`, kept out of the
+ * reply and shown collapsed above it. DeepSeek's API has no web search. Only Flash sees pictures, so it answers a message that
  * has some; PDFs are turned into text here, as no DeepSeek model reads them.
  */
 
@@ -53,6 +53,9 @@ export async function* deepseekReply(req: ReplyRequest): AsyncGenerator<StreamEv
   let finish = "";
   for await (const chunk of stream) {
     const choice = chunk.choices?.[0];
+    // The thinking is shown collapsed above the reply, never inside it.
+    const thought = (choice?.delta as { reasoning_content?: string | null } | undefined)?.reasoning_content;
+    if (thought && req.think !== false) yield { type: "thinking", text: thought };
     const text = choice?.delta?.content;
     if (text) {
       wroteText = true;
