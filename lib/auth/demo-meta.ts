@@ -31,3 +31,10 @@ export function demoState(
 }
 
 export const isDemoBlocked = (path: string) => DEMO_BLOCKED.some((p) => path === p || path.startsWith(p + "/"));
+
+/** Readable by the page: this tab is in a demo, so it signs out when opened in a fresh tab. */
+export const DEMO_COOKIE = "dp_demo";
+/** Set in sessionStorage by the tab that typed the demo key; gone when that tab closes. */
+export const DEMO_TAB_KEY = "dp_demo_tab";
+/** The random id this browser keeps for demo keys (localStorage). */
+export const DEMO_DEVICE_KEY = "dp_demo_device";

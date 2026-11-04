@@ -13,7 +13,7 @@ import {
   unlockState,
   windowFor,
 } from "@/lib/lock/token";
-import { demoState, isDemoBlocked } from "@/lib/auth/demo-meta";
+import { DEMO_COOKIE, demoState, isDemoBlocked } from "@/lib/auth/demo-meta";
 
 /**
  * Runs before every page. Keeps the Supabase session fresh (so people stay signed in on their
@@ -57,9 +57,11 @@ export async function proxy(request: NextRequest) {
     const { data: s } = await supabase.auth.getSession();
     const demo = demoState(data.user.app_metadata, sessionClaims(s.session?.access_token)?.sessionId);
     if (demo !== "none") return applyDemo(request, response, supabase, demo, path);
+    if (request.cookies.has(DEMO_COOKIE)) response.cookies.delete(DEMO_COOKIE);
     return applyLock(request, response, s.session?.access_token, data.user.id, data.user.app_metadata, path);
   }
   if (request.cookies.has(SETTINGS_COOKIE)) response.cookies.delete(SETTINGS_COOKIE);
+  if (request.cookies.has(DEMO_COOKIE)) response.cookies.delete(DEMO_COOKIE);
   return response;
 }
 
@@ -85,6 +87,8 @@ async function applyDemo(
     for (const c of response.cookies.getAll()) out.cookies.set(c);
     return out;
   }
+  // Tells the page this is a demo, so a tab that didn't type the key signs out (see DemoGuard).
+  if (!request.cookies.has(DEMO_COOKIE)) response.cookies.set(DEMO_COOKIE, "1", COOKIE_BASE);
   if (!isDemoBlocked(path)) return response;
   const isPage = request.method === "GET" && !path.startsWith("/api/");
   const to = request.nextUrl.clone();
