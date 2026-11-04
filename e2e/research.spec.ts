@@ -41,8 +41,8 @@ test.describe("deep research", () => {
   test.setTimeout(90_000);
 
   test("plans, searches each question across steps, and writes a cited report", async ({ page }) => {
-    const errors = watchErrors(page);
     await start(page);
+    const errors = watchErrors(page);
     await research(page, `The latest on heat pumps, slowly, handover ${Date.now()}`);
 
     const card = page.getByTestId("research");
@@ -60,8 +60,9 @@ test.describe("deep research", () => {
     await expect(reply.getByTestId("sources").getByRole("button", { name: /3 sources/ })).toBeVisible();
     await expect(reply.getByText(/\$\d/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
-    // (Checked before reloading: Safari reports prefetches a reload cancels as errors.)
-    expect(errors).toEqual([]);
+    // Safari can report a page prefetch that a navigation cancelled (see watchErrors); that isn't
+    // a fault in Depeche. Checked before reloading for the same reason.
+    expect(errors.filter((e) => !/_rsc=.* due to access control checks/.test(e))).toEqual([]);
 
     // It's an ordinary reply in the chat, still there after a reload.
     await page.reload();
