@@ -165,6 +165,7 @@ export function ProjectPanel({
                 <span className="absolute inset-y-0 right-0 flex items-center">
                   <ChatMenu
                     chat={c}
+                    userId={userId}
                     label={`Options for ${c.title}`}
                     className="rounded-full p-2 text-mute hover:text-fg"
                     onChange={onChatChange}
