@@ -9,11 +9,11 @@ permissions:
   contents: read
 
 # A new push to the same pull request cancels the run it replaces, so superseded commits don't hold
-# up the runners that every thread shares. Runs on main are never cancelled, so every merge is fully
-# tested.
+# up the runners that every thread shares. Pushes to main each get their own group (by commit), so
+# no main run is ever cancelled or replaced while queued, and every merge is fully tested.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('sha-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
