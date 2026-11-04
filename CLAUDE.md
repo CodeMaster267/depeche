@@ -100,10 +100,11 @@ under reduced motion. Mockups: `/mnt/project-files/depeche/screens/` in the proj
   Supabase (`npm run db:start`, needs Docker; emails land in Mailpit). The `setup` project wipes the
   local data and does first-time owner setup before the rest. Report results for both browsers.
   Claude's cloud container can run both browsers and Docker (start `dockerd` if it isn't running).
-- **Vercel deploys main once an hour** (`.github/workflows/deploy.yml` calls a Deploy Hook at :07 if
-  anything merged in the last hour; `git.deploymentEnabled` in `vercel.json` turns off per-push
-  builds), because Hobby allows 100 deployments a day and threads merge 50+ times a day. So a merge
-  reaches depai.vercel.app within about an hour; run the workflow by hand to deploy at once. When
+- **Vercel deploys main in batches** (`.github/workflows/deploy.yml` calls a Deploy Hook on each push
+  to main and every 10 minutes, at most once per 30 minutes; `git.deploymentEnabled` in `vercel.json`
+  turns off per-push builds), because Hobby allows 100 deployments a day and threads merge 50+ times
+  a day. So a merge reaches depai.vercel.app within about 30 minutes; run the workflow by hand to
+  deploy at once. A deployed commit has a "Vercel" status on GitHub. When
   Hasan wants to see unmerged work, push the same commit to a `preview/<name>` branch (those still
   deploy) and send him that preview link; delete the branch after.
 - Migrations are forward-only SQL files in `supabase/migrations/`, named by timestamp.
