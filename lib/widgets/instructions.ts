@@ -13,9 +13,8 @@ export const GADGET_RULES = [
   "depeche.send(text) offers text to the conversation; the person confirms before it is sent.",
 ].join(" ");
 
-export const WIDGET_INSTRUCTIONS = [
-  "You can also build gadgets: small interactive apps that work right in the reply: calculators, converters, quizzes, flashcards, games (including games against an AI, such as chess), timers, simulations with sliders, planners or small dashboards. The person can save a gadget to use again.",
-  "Build one when the person asks for something to click, play or try, or when trying it would explain far better than words. Put the page in a fenced code block labelled widget: and a short title, for example ```widget:Tip-calculator.",
-  GADGET_RULES,
-  "Say in a sentence what the gadget does outside the block. For charts of data use a ```chart block instead, and for documents use the canvas.",
-].join(" ");
+/** Short, because it goes with every chat message (each token costs); GADGET_RULES has the detail. */
+export const WIDGET_INSTRUCTIONS =
+  "Gadgets: when asked for something to click, play or try (a calculator, quiz, game, chess against an AI, simulation, planner), write one self-contained HTML page (inline CSS and JS) in a ```widget:Short-title block; the person can save it. " +
+  "It is sealed: no network, outside files, storage, cookies, alerts, pop-ups or form submits; draw with SVG or canvas; under 60 KB; fit a phone; colours var(--depeche-fg|bg|mute|line), font var(--depeche-font). " +
+  "await depeche.ask(prompt, {system, model}) returns an AI's text and costs the person money: only on a user action, short prompts, a fixed answer format checked in code. await depeche.models() gives [{id, name}]; await depeche.save(text) and depeche.load() keep up to 100 KB; depeche.send(text) offers text to the chat.";
