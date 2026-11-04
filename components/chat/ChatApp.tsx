@@ -7,7 +7,7 @@ import { Markdown } from "@/components/markdown/Markdown";
 import { canSearch, findModel } from "@/lib/ai/models";
 import { latestLeaf, pathTo, titleFrom, versionsOf, type ChatRow, type MessageRow } from "@/lib/chat/thread";
 import type { Shell } from "@/lib/chat/load";
-import { deleteChat, pinChat, refreshChat, refreshShell, rememberModel, renameChat } from "@/app/c/actions";
+import { archiveChat, refreshChat, refreshShell, rememberModel } from "@/app/c/actions";
 import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
@@ -17,8 +17,9 @@ import { AskAboutSelection, CostButton, FollowUps, QuoteChip } from "./Extras";
 import { ModelPicker } from "./ModelPicker";
 import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
+import { ChatMenu } from "./ChatMenu";
 import { UserMessage, VersionSwitch } from "./Versions";
-import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
+import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
 import type { Source } from "@/lib/chat/thread";
@@ -386,11 +387,45 @@ export function ChatApp({
     run({ regenerate: questionId }, []);
   };
 
+  // A fresh chat. The home screen that a chat was started on is the same page as the new one, so
+  // it gets a fresh key (?new=…) to start over; a reply still being written finishes on the server.
+  const startNew = () => {
+    setDrawer(false);
+    router.push(initialChat ? "/" : `/?new=${Date.now().toString(36)}`);
+  };
+  useEffect(() => {
+    if (!initialChat && window.location.search.includes("new=")) window.history.replaceState(null, "", "/");
+  }, [initialChat]);
+
+  // A chat renamed, pinned, archived or restored from a menu. Archived chats leave the list.
+  const changeChat = (next: ChatRow) => {
+    if (chat?.id === next.id) setChat(next);
+    setShell((s) => {
+      const rest = s.chats.filter((x) => x.id !== next.id);
+      if (next.archived_at) return { ...s, chats: rest };
+      const was = s.chats.find((x) => x.id === next.id);
+      const chats = was ? s.chats.map((x) => (x.id === next.id ? next : x)) : [next, ...rest].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      return { ...s, chats };
+    });
+  };
+  const chatDeleted = (id: string) => {
+    setShell((s) => ({ ...s, chats: s.chats.filter((x) => x.id !== id) }));
+    if (chat?.id === id) startNew();
+  };
+
   return (
     <div className="flex h-dvh overflow-hidden">
       {/* Chats: always visible on wide screens, a drawer on phones. */}
       <aside className="hidden w-[300px] shrink-0 border-r border-line md:block">
-        <Sidebar {...shell} chats={shell.chats} activeId={chat?.id ?? null} onNavigate={() => {}} />
+        <Sidebar
+          {...shell}
+          chats={shell.chats}
+          activeId={chat?.id ?? null}
+          onNavigate={() => {}}
+          onNewChat={startNew}
+          onChatChange={changeChat}
+          onChatDeleted={chatDeleted}
+        />
       </aside>
       {drawer ? (
         <div className="fixed inset-0 z-40 md:hidden">
@@ -400,7 +435,10 @@ export function ChatApp({
               {...shell}
               activeId={chat?.id ?? null}
               onNavigate={() => setDrawer(false)}
+              onNewChat={startNew}
               onClose={() => setDrawer(false)}
+              onChatChange={changeChat}
+              onChatDeleted={chatDeleted}
             />
           </aside>
         </div>
@@ -427,11 +465,39 @@ export function ChatApp({
               </button>
             ) : null}
           </div>
-          {chat ? <ChatMenu chat={chat} userId={shell.userId} onChange={(c) => { setChat(c); setShell((s) => ({ ...s, chats: s.chats.map((x) => (x.id === c.id ? c : x)) })); }} onDeleted={() => router.push("/")} /> : null}
-          <Link href="/" className="p-2 md:hidden" aria-label="New chat">
-            <NewChatIcon />
-          </Link>
+          {chat ? <ChatMenu chat={chat} userId={shell.userId} onChange={changeChat} onDeleted={() => chatDeleted(chat.id)} /> : null}
+          {chat || messages.length ? (
+            <Link
+              href="/"
+              onClick={(e) => {
+                e.preventDefault();
+                startNew();
+              }}
+              className="press glass flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+              aria-label="New chat"
+              title="New chat"
+            >
+              <NewChatIcon className="h-[19px] w-[19px]" />
+            </Link>
+          ) : (
+            <span className="h-10 w-10 shrink-0 md:hidden" aria-hidden />
+          )}
         </header>
+        {chat?.archived_at ? (
+          <div className="flex items-center justify-center gap-3 border-b border-line px-4 py-2 text-[14px] text-mute" role="status">
+            <span>This chat is archived. Writing in it brings it back.</span>
+            <button
+              type="button"
+              className="press rounded-full border border-line px-3 py-1 text-fg"
+              onClick={() => {
+                changeChat({ ...chat, archived_at: null });
+                archiveChat(chat.id, false).catch(() => {});
+              }}
+            >
+              Restore
+            </button>
+          </div>
+        ) : null}
 
         <div
           ref={scroller}
@@ -824,79 +890,5 @@ function Composer({
         )}
       </div>
     </form>
-  );
-}
-
-function ChatMenu({ chat, userId, onChange, onDeleted }: { chat: ChatRow; userId: string; onChange: (c: ChatRow) => void; onDeleted: () => void }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="relative">
-      <button type="button" className="p-2 text-mute" aria-label="Chat options" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <MoreIcon />
-      </button>
-      {open ? (
-        <>
-          <button type="button" aria-label="Close" className="fixed inset-0 z-20 cursor-default" onClick={() => setOpen(false)} />
-          <div role="menu" className="absolute right-0 top-11 z-30 w-48 overflow-hidden rounded-2xl border border-line bg-bg py-1 text-[16px] shadow-lg">
-            <button
-              type="button"
-              role="menuitem"
-              className="block w-full px-4 py-2.5 text-left hover:bg-soft"
-              onClick={async () => {
-                setOpen(false);
-                const title = window.prompt("Rename chat", chat.title)?.trim();
-                if (title) {
-                  onChange({ ...chat, title });
-                  await renameChat(chat.id, title);
-                }
-              }}
-            >
-              Rename
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="block w-full px-4 py-2.5 text-left hover:bg-soft"
-              onClick={async () => {
-                setOpen(false);
-                onChange({ ...chat, pinned: !chat.pinned });
-                await pinChat(chat.id, !chat.pinned);
-              }}
-            >
-              {chat.pinned ? "Unpin" : "Pin"}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="block w-full px-4 py-2.5 text-left hover:bg-soft"
-              onClick={async () => {
-                setOpen(false);
-                try {
-                  const [{ supabaseBrowser }, { downloadChat }] = await Promise.all([import("@/lib/supabase/browser"), import("@/lib/export/collect")]);
-                  await downloadChat(supabaseBrowser(), userId, chat.id);
-                } catch {
-                  window.alert("Couldn't download this chat. Try again.");
-                }
-              }}
-            >
-              Download
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="block w-full px-4 py-2.5 text-left hover:bg-soft"
-              onClick={async () => {
-                setOpen(false);
-                if (!window.confirm("Delete this chat? This can't be undone.")) return;
-                await deleteChat(chat.id);
-                onDeleted();
-              }}
-            >
-              Delete
-            </button>
-          </div>
-        </>
-      ) : null}
-    </div>
   );
 }
