@@ -4,6 +4,16 @@ import { OWNER, admin, signInWithPassword } from "./helpers";
 test("an answer that reused cached input says so and costs less", async ({ page }) => {
   await signInWithPassword(page, OWNER.email, OWNER.password);
   await expect(page.getByRole("heading", { name: "Hi, Hasan." })).toBeVisible();
+  // The family needs a key for a model to answer; a test Google key is added if there's none yet.
+  await page.goto("/family");
+  const row = page.getByTestId("provider-google");
+  await expect(row.getByText(/Not added|ends in/)).toBeVisible();
+  if (await row.getByText("Not added").isVisible()) {
+    await row.getByLabel("Google (Gemini) API key").fill("test-google-key-1234567890abcd");
+    await row.getByRole("button", { name: "Save key" }).click();
+    await expect(row.getByText(/ends in/)).toBeVisible();
+  }
+  await page.goto("/");
   const question = `A cached question ${Date.now()}`;
   await page.getByLabel("Message Depeche").fill(question);
   await page.getByRole("button", { name: "Send" }).click();
