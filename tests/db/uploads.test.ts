@@ -46,6 +46,12 @@ describe("upload storage", () => {
     ]);
   });
 
+  it("takes photos, PDFs, text, and Word, Excel and PowerPoint files", async () => {
+    const [{ types }] = await asServer<{ types: string[] }>("select allowed_mime_types as types from storage.buckets where id = 'uploads'");
+    expect(types).toEqual(expect.arrayContaining(["image/jpeg", "application/pdf", "text/plain"]));
+    expect(types.filter((t) => t.startsWith("application/vnd.openxmlformats"))).toHaveLength(3);
+  });
+
   it("shows each person only their own files", async () => {
     const names = await rows<{ name: string }>(db, P.hasan, "select name from storage.objects order by name");
     expect(names.map((r) => r.name)).toEqual([`${P.hasan}/e/hasans.png`]);

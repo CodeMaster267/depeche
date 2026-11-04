@@ -115,7 +115,7 @@ export async function setAdmin(memberId: string, makeAdmin: boolean): Promise<Ac
   return { ok: makeAdmin ? "They're now a backup admin." : "They're no longer an admin." };
 }
 
-const PROVIDER_IDS = ["anthropic", "openai", "google", "groq"] as const;
+const PROVIDER_IDS = ["anthropic", "openai", "google", "groq", "deepseek", "xai"] as const;
 
 /**
  * Saves a family's provider key. It is checked with the provider, encrypted here on the server,

@@ -2,10 +2,12 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { FunctionCallingConfigMode, GoogleGenAI, type Part } from "@google/genai";
-import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
+import { MAX_SEARCHES, MODELS, PROVIDER_NAME, canLookUp, canSearch, findModel, type Model, type Provider } from "@/lib/ai/models";
 import { MAX_OUTPUT } from "@/lib/ai/budget";
 import { CHAT_SEARCH_TOOL, MAX_CHAT_SEARCHES, type ChatSearch } from "@/lib/chat/search";
 import { GROQ_VISION_MODEL, groqReply } from "@/lib/ai/groq";
+import { DEEPSEEK_VISION_MODEL, deepseekReply } from "@/lib/ai/deepseek";
+import { xaiReply } from "@/lib/ai/xai";
 import type { Source } from "@/lib/chat/thread";
 import { webSource } from "@/lib/ai/sources";
 
@@ -67,13 +69,19 @@ const BUSY_FALLBACK: Record<string, string> = {
   "openai/gpt-oss-120b": "openai/gpt-oss-20b",
   "openai/gpt-oss-20b": "openai/gpt-oss-120b",
   "qwen/qwen3.8-27b": "openai/gpt-oss-120b",
+  // DeepSeek often says its servers are busy at peak times.
+  "deepseek-v4-pro": "deepseek-flash",
+  "deepseek-flash": "deepseek-v4-pro",
+  "grok-4.7": "grok-4.3",
+  "grok-4.3": "grok-4.7",
 };
 
 /** Every model that might answer when this one is chosen, so a spending hold covers the dearest. */
 export function modelsThatMayAnswer(model: Model): Model[] {
   const backup = findModel(BUSY_FALLBACK[model.id]);
-  // On Groq, Qwen answers messages with pictures.
-  const vision = model.provider === "groq" ? findModel(GROQ_VISION_MODEL) : undefined;
+  // On Groq, Qwen answers messages with pictures; on DeepSeek, Flash does.
+  const vision =
+    model.provider === "groq" ? findModel(GROQ_VISION_MODEL) : model.provider === "deepseek" ? findModel(DEEPSEEK_VISION_MODEL) : undefined;
   return [model, backup, vision].filter((m, i, all): m is Model => !!m && all.findIndex((x) => x?.id === m.id) === i);
 }
 
@@ -117,7 +125,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
         yield { type: "notice", text: `${req.model.name} ${why}, so ${attempt.model.name} answered instead.` };
       }
       // Telling a model it can search without giving it the tool makes some reply with nothing.
-      const lookup = attempt.model.provider === "groq" ? undefined : chatSearch;
+      const lookup = canLookUp(attempt.model.provider) ? chatSearch : undefined;
       const system = [req.system, search ? SEARCH_HINT : "", lookup ? CHAT_SEARCH_HINT : ""].filter(Boolean).join(" ");
       const r = { ...req, model: attempt.model, search, chatSearch: lookup, system };
       const inner = fakeAi()
@@ -128,7 +136,11 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
             ? openaiReply(r)
             : r.model.provider === "groq"
               ? groqReply(r)
-              : googleReply(r);
+              : r.model.provider === "deepseek"
+                ? deepseekReply(r)
+                : r.model.provider === "xai"
+                  ? xaiReply(r)
+                  : googleReply(r);
       for await (const ev of inner) {
         if (ev.type === "text") wrote = true;
         yield ev;
@@ -141,7 +153,7 @@ export async function* streamReply(req: ReplyRequest): AsyncGenerator<StreamEven
       if (wrote) break;
       // If a provider won't take the chat-search tool (some can't mix it with their own web
       // search), answer without it rather than failing or dropping web search.
-      if (chatSearch && attempt.model.provider !== "groq" && status(e) === 400) {
+      if (chatSearch && canLookUp(attempt.model.provider) && status(e) === 400) {
         chatSearch = undefined;
         console.error("[chat] chat search tool refused, answering without it", detail(e));
         i--;
@@ -610,6 +622,9 @@ function friendlyError(provider: Provider, e: unknown): string {
   const name = PROVIDER_NAME[provider];
   const code = status(e);
   const msg = detail(e);
+  // DeepSeek says 402 "Insufficient Balance"; xAI says 403 when a team has no credits or hit its spending limit.
+  if (code === 402 || /insufficient balance|doesn't have any credits|no credits|spending limit|exhausted its credits/i.test(msg))
+    return `${name} says your family's key is out of credit. Ask your family admin to add credit with ${name}.`;
   if (code === 401 || code === 403 || /api key|unauthori[sz]ed|permission/i.test(msg))
     return `${name} didn't accept your family's key. Ask your family admin to check it in Family settings.`;
   if (provider === "google" && (code === 429 || /quota|rate limit|resource.?exhausted/i.test(msg)))
@@ -657,8 +672,9 @@ export async function listKeyModels(provider: Provider, key: string): Promise<st
       const res = await fetch("https://api.openai.com/v1/models", { signal, headers: { authorization: `Bearer ${key}` } });
       if (!res.ok) return res.status === 401 || res.status === 403 ? null : ours;
       for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
-    } else if (provider === "groq") {
-      const res = await fetch("https://api.groq.com/openai/v1/models", { signal, headers: { authorization: `Bearer ${key}` } });
+    } else if (provider === "groq" || provider === "deepseek" || provider === "xai") {
+      const url = { groq: "https://api.groq.com/openai/v1/models", deepseek: "https://api.deepseek.com/models", xai: "https://api.x.ai/v1/models" }[provider];
+      const res = await fetch(url, { signal, headers: { authorization: `Bearer ${key}` } });
       if (!res.ok) return res.status === 401 || res.status === 403 ? null : ours;
       for (const m of ((await res.json()).data ?? []) as { id: string }[]) seen.add(m.id);
     } else {
@@ -675,7 +691,9 @@ export async function listKeyModels(provider: Provider, key: string): Promise<st
         page = body.nextPageToken;
       }
     }
-    const usable = ours.filter((id) => seen.has(id));
+    // xAI and DeepSeek may list a model under a dated name (grok-4.3-0612) that its short name points to.
+    const dated = provider === "xai" || provider === "deepseek";
+    const usable = ours.filter((id) => seen.has(id) || (dated && [...seen].some((s) => s.startsWith(`${id}-`))));
     // If none of our names match, the provider has probably renamed things; better to offer
     // everything than nothing.
     return usable.length ? usable : ours;
@@ -695,6 +713,39 @@ export async function checkKey(provider: Provider, key: string): Promise<boolean
 export function fakeAi(): boolean {
   return process.env.DEPECHE_FAKE_AI === "1" && !process.env.VERCEL;
 }
+
+const FAKE_FILES = String.raw`Here are your files.
+
+\`\`\`\`file:Trip-plan.docx
+# Trip plan
+
+A **short** trip to Lisbon. Café stop on day one.
+
+- Passport
+- Chargers
+
+| Day | Plan |
+| --- | --- |
+| Mon | Museum |
+
+\`\`\`text
+pack light
+\`\`\`
+\`\`\`\`
+
+\`\`\`file:Budget.xlsx
+Item,Cost
+Flights,240
+Hotel,310
+Total,=SUM(B2:B3)
+\`\`\`
+
+\`\`\`file:Budget.csv
+Item,Cost
+Flights,240
+\`\`\`
+
+`.replaceAll("\\`", "`");
 
 const FAKE_REPLY = String.raw`Here's a worked answer to "{q}".
 
@@ -813,7 +864,13 @@ async function* fakeReply({ turns, signal, search, model, system, chatSearch }: 
   const seen = [...(last?.files ?? []).map((f) => f.name), ...[...(last?.text ?? "").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1])];
   // "favourite colour" makes it suggest a memory, to test memory suggestions.
   const remember = q.includes("favourite colour") ? "\n\n<remember>Their favourite colour is black.</remember>" : "";
-  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + FAKE_REPLY.replace("{q}", q) + remember;
+  // "quote" makes it repeat the start of each text it was given, to test documents are read.
+  const quoted = q.includes("quote")
+    ? [...(last?.text ?? "").matchAll(/<file name="([^"]+)">\n([\s\S]*?)\n<\/file>/g)].map((m) => `${m[1]} says: ${m[2].replace(/\s+/g, " ").slice(0, 120)}\n\n`).join("")
+    : "";
+  // "make files" makes it write files to download, to test generated documents.
+  const made = q.includes("make files") ? FAKE_FILES : "";
+  const reply = (seen.length ? `I can see ${seen.join(", ")}.\n\n` : "") + quoted + made + FAKE_REPLY.replace("{q}", q) + remember;
   const slow = q.includes("slowly");
   for (let i = 0; i < reply.length; i += 24) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
