@@ -55,6 +55,17 @@ under reduced motion. Mockups: `/mnt/project-files/depeche/screens/` in the proj
   system prompt). The browser builds the file on Download (`lib/docs/write.ts`); only docx, pdf,
   xlsx, csv, md, txt and json, never HTML or SVG.
 
+## Skills
+
+- `/skills`: packs of instructions (plus up to 4 text files) a chat picks up by itself. A model writes
+  and names each one (`lib/skills/write.ts`, family keys, counts toward spending); the person never
+  types the name. One library for every Depeche user across families; each person adds skills to
+  their own list, and only those are matched (free trigger-word matching, `lib/skills/match.ts`).
+- Only the server writes skills, and every new version is screened (rules in `lib/skills/screen.ts`,
+  OpenAI moderation, a cheap checking model). Skills are fenced in the prompt as advice that grants
+  nothing and never reach memories or other chats. Makers edit and delete; the app owner (any) or a
+  family admin (their family's) can remove one from the library (`remove_skill`).
+
 ## Bug reports
 
 - People report bugs at `/report` (3 a day each, enforced in `submit_bug_report`). Who sent a report
@@ -77,8 +88,10 @@ under reduced motion. Mockups: `/mnt/project-files/depeche/screens/` in the proj
   Supabase (`npm run db:start`, needs Docker; emails land in Mailpit). The `setup` project wipes the
   local data and does first-time owner setup before the rest. Report results for both browsers.
   Claude's cloud container can run both browsers and Docker (start `dockerd` if it isn't running).
-- **Vercel builds only `main`** (`git.deploymentEnabled` in `vercel.json`), because Hobby allows 100
-  deployments a day and every branch push used to make a preview. Merging to main deploys to
-  depai.vercel.app within minutes. When Hasan wants to see unmerged work, push the same commit to a
-  `preview/<name>` branch (those still deploy) and send him that preview link; delete the branch after.
+- **Vercel deploys main once an hour** (`.github/workflows/deploy.yml` calls a Deploy Hook at :07 if
+  anything merged in the last hour; `git.deploymentEnabled` in `vercel.json` turns off per-push
+  builds), because Hobby allows 100 deployments a day and threads merge 50+ times a day. So a merge
+  reaches depai.vercel.app within about an hour; run the workflow by hand to deploy at once. When
+  Hasan wants to see unmerged work, push the same commit to a `preview/<name>` branch (those still
+  deploy) and send him that preview link; delete the branch after.
 - Migrations are forward-only SQL files in `supabase/migrations/`, named by timestamp.
