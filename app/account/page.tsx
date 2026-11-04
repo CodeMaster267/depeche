@@ -8,6 +8,7 @@ import { describeLog, when, type LogRow } from "@/lib/family/log";
 import { signOut } from "@/app/sign-in/actions";
 import { signOutEverywhere } from "./actions";
 import { ExportButton } from "@/components/ExportButton";
+import { ImportChats } from "@/components/ImportChats";
 import { DeleteEverythingForm, KeepChatsToggle, PasswordForm, ProfileForm, ShareTitlesToggle } from "./forms";
 
 export const metadata: Metadata = { title: "Account · Depeche" };
@@ -90,9 +91,12 @@ export default async function Account() {
           </p>
           <ExportButton userId={me.userId} email={me.email} />
         </Section>
+        <Section title="Bring in old chats">
+          <ImportChats />
+        </Section>
         <Section title="Delete">
           <p className="text-[15px] text-mute">
-            Permanently delete all your chats and memories. They&apos;re gone straight away, and out of Depeche&apos;s
+            Permanently delete all your chats, memories and personal instructions. They&apos;re gone straight away, and out of Depeche&apos;s
             backups within 30 days. Your spending history stays, without any chat in it.
           </p>
           <DeleteEverythingForm />

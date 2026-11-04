@@ -85,7 +85,7 @@ export async function loadChat(me: Me, chatId: string): Promise<{ chat: ChatRow;
   const db = await supabaseServer();
   const { data: chat } = await db
     .from("chats")
-    .select("id, title, model, pinned, updated_at, archived_at, project_id, assistant_id")
+    .select("id, title, model, pinned, updated_at, archived_at, project_id, assistant_id, imported_from, created_at")
     .eq("id", chatId)
     .eq("owner_id", me.userId)
     .maybeSingle<ChatRow>();

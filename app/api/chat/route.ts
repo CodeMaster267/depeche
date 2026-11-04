@@ -7,6 +7,7 @@ import { MAX_SEARCHES, canLookUp, estimateCost, findModel, searchCost } from "@/
 import { ProviderError, fakeAi, modelsThatMayAnswer, streamReply, type Turn, type TurnFile } from "@/lib/ai/providers";
 import { CHAT_SEARCH_RESULT_TOKENS, MAX_CHAT_SEARCHES, chatSearcher, shouldOfferChatSearch } from "@/lib/chat/search";
 import { MEMORY_PROMPT_LIMIT, memoryFilter, memoryInstructions } from "@/lib/chat/memory";
+import { personalInstructions, type PersonalInstructions } from "@/lib/chat/instructions";
 import { MAX_FILES_PER_MESSAGE, OFFICE_TYPES, UPLOAD_BUCKET, isFileRef, readAsText, type FileRef } from "@/lib/chat/files";
 import { documentText } from "@/lib/docs/read";
 import {
@@ -156,6 +157,12 @@ export async function POST(req: NextRequest) {
     .order("updated_at", { ascending: false })
     .limit(MEMORY_PROMPT_LIMIT)
     .returns<{ content: string }[]>();
+  // Their personal instructions ("About you", "How should Depeche answer"), also read as them.
+  const { data: instructions } = await db
+    .from("personal_instructions")
+    .select("about_me, answer_style, enabled")
+    .eq("owner_id", me.userId)
+    .maybeSingle<PersonalInstructions>();
   let project: ProjectContext | null = null;
   if (projectId) {
     project = await projectContext(db, me.userId, projectId);
@@ -171,6 +178,7 @@ export async function POST(req: NextRequest) {
     me.profile.display_name,
     Boolean(body.voice),
     (remembered ?? []).map((m) => m.content),
+    instructions,
     project,
     assistant,
   );
@@ -567,6 +575,7 @@ function systemPrompt(
   name: string,
   voice: boolean,
   memories: string[],
+  instructions: PersonalInstructions | null,
   project: ProjectContext | null,
   assistant: AssistantContext | null,
 ): string {
@@ -575,6 +584,7 @@ function systemPrompt(
     `Today is ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}.`,
     "Format replies in Markdown. Write maths in LaTeX between $…$ or $$…$$. When a diagram helps, use a ```mermaid code block. Cite sources as Markdown links.",
     memoryInstructions(name, memories),
+    personalInstructions(name, instructions),
     voice ? "" : FILE_INSTRUCTIONS,
     voice ? "" : followUpInstructions(name),
     voice

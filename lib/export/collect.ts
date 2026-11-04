@@ -47,6 +47,12 @@ export async function collectData(db: SupabaseClient, userId: string, extra: Rec
   const memories = await all<ExportMemory>((a, b) =>
     db.from("memories").select("id, content, status, created_at, updated_at").eq("owner_id", userId).order("created_at").order("id").range(a, b),
   );
+  const { data: instructions, error: instructionsError } = await db
+    .from("personal_instructions")
+    .select("about_me, answer_style, enabled, updated_at")
+    .eq("owner_id", userId)
+    .maybeSingle<NonNullable<ExportData["instructions"]>>();
+  if (instructionsError) throw new Error(instructionsError.message);
   const usage = await all<ExportUsage>((a, b) =>
     db
       .from("usage_events")
@@ -77,6 +83,7 @@ export async function collectData(db: SupabaseClient, userId: string, extra: Rec
     messages,
     memories,
     usage,
+    instructions,
     projects: (projects ?? []).map((p) => ({ ...p, files: filesOf(projectFiles, "project_id", p.id) })),
     assistants: (assistants ?? []).map((a) => ({ ...a, files: filesOf(assistantFiles, "assistant_id", a.id) })),
   };

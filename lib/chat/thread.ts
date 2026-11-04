@@ -57,6 +57,9 @@ export type ChatRow = {
   project_id?: string | null;
   /** The saved assistant the chat was started with, if any. */
   assistant_id?: string | null;
+  /** Set on chats brought in from another app's export. */
+  imported_from?: "chatgpt" | "claude" | "gemini" | null;
+  created_at?: string;
 };
 
 /**

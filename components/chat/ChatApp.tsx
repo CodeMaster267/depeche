@@ -27,6 +27,7 @@ import { ArrowUpIcon, ChevronDownIcon, CodeIcon, CopyIcon, FolderIcon, GlobeIcon
 import { SearchSuggestions } from "./Sources";
 import { Activity, ViewSource, type LiveActivity } from "./Activity";
 import type { Source } from "@/lib/chat/thread";
+import { SOURCE_NAMES } from "@/lib/import/types";
 
 type Live = MessageRow & LiveActivity;
 
@@ -639,6 +640,12 @@ export function ChatApp({
                   </ul>
                 ) : null}
               </div>
+            ) : null}
+            {chat?.imported_from ? (
+              <p data-testid="imported-from" className="text-center text-[13px] text-mute">
+                Imported from {SOURCE_NAMES[chat.imported_from]}
+                {chat.created_at ? ` · started ${new Date(chat.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}` : ""}
+              </p>
             ) : null}
             {messages.map((m) =>
               m.role === "user" ? (

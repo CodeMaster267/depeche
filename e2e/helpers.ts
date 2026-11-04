@@ -76,8 +76,9 @@ export async function noSidewaysScroll(page: Page) {
 /** Collects page errors and console errors so a test can assert there were none. */
 export function watchErrors(page: Page): string[] {
   const errors: string[] = [];
+  // Safari can also raise the cancelled prefetch below as a page error.
   page.on("pageerror", (e) => {
-    if (/_rsc=.* due to access control checks/.test(e.message)) return; // the same dropped prefetch, below
+    if (/_rsc=.* due to access control checks/.test(e.message)) return;
     errors.push(e.message);
   });
   page.on("console", (m) => {
