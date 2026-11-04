@@ -17,6 +17,7 @@ import { ProjectPanel } from "./Projects";
 import { DictateButton, ReadAloudButton, VoiceChatButton } from "@/components/voice/VoiceButtons";
 import { VoiceMode } from "@/components/voice/VoiceMode";
 import type { FileRef } from "@/lib/chat/files";
+import { markAway } from "@/lib/push/client";
 import { ACCEPT, AttachmentTray, useAttachments, type Pending } from "./Attachments";
 import { AskAboutSelection, CostButton, FollowUps, QuoteChip } from "./Extras";
 import { ModelPicker } from "./ModelPicker";
@@ -185,6 +186,33 @@ export function ChatApp({
     };
   }, [sync]);
 
+  // Leaving the app while an answer is being written asks for a notification when it's ready
+  // (only on devices where notifications are on, from Account). Coming back cancels it.
+  // Each answer being written (several at once when comparing models): whether the app has
+  // marked it "away", and whether its stream is still open.
+  const writing = useRef(new Map<string, { away: boolean; live: boolean }>());
+  useEffect(() => {
+    const onChange = () => {
+      const hidden = document.visibilityState === "hidden";
+      for (const [id, w] of writing.current) {
+        if (!hidden && !w.live) {
+          // Back after the connection dropped: the answer is still being written on the server,
+          // so keep the mark and let the notification say when it's saved.
+          writing.current.delete(id);
+        } else if (w.live && w.away !== hidden) {
+          w.away = hidden;
+          markAway(id, hidden);
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", onChange);
+    window.addEventListener("pagehide", onChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onChange);
+      window.removeEventListener("pagehide", onChange);
+    };
+  }, []);
+
   const pickModel = (id: string) => {
     setModelId(id);
     setCompareIds([]);
@@ -223,6 +251,8 @@ export function ChatApp({
     const patchReply = (fn: (m: Live) => Live) => setTree((list) => list.map((m) => (m.id === replyId ? fn(m) : m)));
 
     let chatId = opts.chatId ?? chat?.id ?? null;
+    const clientRequestId = crypto.randomUUID();
+    writing.current.set(clientRequestId, { away: false, live: true });
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -230,7 +260,7 @@ export function ChatApp({
         body: JSON.stringify({
           chatId,
           model: model.id,
-          clientRequestId: crypto.randomUUID(),
+          clientRequestId,
           search: search && canSearch(model),
           ...(!chatId && project ? { projectId: project.id } : {}),
           ...(!chatId && assistant ? { assistantId: assistant.id } : {}),
@@ -361,6 +391,10 @@ export function ChatApp({
         setTimeout(() => sync(), 2500);
       }
     } finally {
+      // Read here and now, so no notification is needed (one already asked for still arrives).
+      const w = writing.current.get(clientRequestId);
+      if (w) w.live = false;
+      if (document.visibilityState === "visible") writing.current.delete(clientRequestId);
       aborts.current.delete(abort);
       if (!aborts.current.size) setBusy(false);
       setShell((s) => ({
