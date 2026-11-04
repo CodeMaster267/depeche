@@ -8,10 +8,12 @@ import { decideMemory } from "@/app/memory/actions";
 export function MemorySuggestion({ memory }: { memory: { id: string; content: string } }) {
   const [answer, setAnswer] = useState<"kept" | "dismissed" | null>(null);
   const [pending, start] = useTransition();
-  const decide = (keep: boolean) => {
-    setAnswer(keep ? "kept" : "dismissed");
-    start(() => decideMemory(memory.id, keep));
-  };
+  // Say "Remembered." only once it is saved, so leaving the page straight away can't lose it.
+  const decide = (keep: boolean) =>
+    start(async () => {
+      await decideMemory(memory.id, keep);
+      setAnswer(keep ? "kept" : "dismissed");
+    });
 
   if (answer === "dismissed") return null;
   if (answer === "kept") {
@@ -35,7 +37,7 @@ export function MemorySuggestion({ memory }: { memory: { id: string; content: st
           onClick={() => decide(true)}
           className="press h-10 rounded-full bg-inv px-4 text-[15px] font-medium text-on-inv"
         >
-          Remember
+          {pending ? "Saving…" : "Remember"}
         </button>
         <button type="button" disabled={pending} onClick={() => decide(false)} className="press h-10 rounded-full border border-line px-4 text-[15px]">
           No thanks

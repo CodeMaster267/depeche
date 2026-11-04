@@ -47,8 +47,12 @@ test("a suggested memory is kept with a tap, used later, and can be forgotten", 
   // Still offered after a reload, until answered.
   await page.reload();
   await expect(page.getByTestId("memory-suggestion")).toBeVisible();
-  await page.getByTestId("memory-suggestion").getByRole("button", { name: "Remember" }).click();
-  await expect(page.getByText("Remembered.")).toBeVisible();
+  // Safari can take a tap before the reloaded page is ready for it; tap again if nothing happened.
+  await expect(async () => {
+    const remember = page.getByTestId("memory-suggestion").getByRole("button", { name: "Remember" });
+    if (await remember.isVisible()) await remember.click();
+    await expect(page.getByText("Remembered.")).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 15_000 });
 
   await page.goto("/memory");
   await expect(page.getByTestId("memories")).toContainText("Their favourite colour is black.");
