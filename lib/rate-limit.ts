@@ -29,6 +29,8 @@ export const LIMITS = {
   /** Messages to the AI, per person. */
   messagesPerMinute: { limit: 12, seconds: 60 },
   messagesPerDay: { limit: 400, seconds: 24 * 60 * 60 },
+  /** Deep research reports started, per person (each runs many searches). */
+  researchPerDay: { limit: 20, seconds: 24 * 60 * 60 },
   /** Voice requests (listening and reading aloud), per person. */
   voicePerMinute: { limit: 30, seconds: 60 },
   /** Bug reports, per person. */

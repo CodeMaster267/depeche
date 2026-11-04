@@ -17,6 +17,8 @@ import { MemorySuggestion } from "./MemorySuggestion";
 import { Sidebar } from "./Sidebar";
 import { ArrowUpIcon, ChevronDownIcon, CopyIcon, GlobeIcon, GlobeOffIcon, MenuIcon, MoreIcon, NewChatIcon, PaperclipIcon, RetryIcon, StopIcon } from "./icons";
 import { SearchSuggestions, Searching, Sources } from "./Sources";
+import { ResearchCard, ResearchIcon, runFor, useResearch } from "./Research";
+import type { RunView } from "@/lib/research/types";
 import type { Source } from "@/lib/chat/thread";
 
 type Live = MessageRow & { streaming?: boolean; queries?: string[]; searchingNow?: boolean; searchingWhere?: "web" | "chat" };
@@ -67,6 +69,8 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
     });
   };
   const [voiceOpen, setVoiceOpen] = useState(false);
+  // Deep research: on for the next message only.
+  const [deep, setDeep] = useState(false);
   const attachments = useAttachments(initialShell.userId);
   const abortRef = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -107,6 +111,63 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
       window.removeEventListener("focus", onVisible);
     };
   }, [sync]);
+
+  const research = useResearch(chat?.id ?? null, () => sync());
+  const toggleDeep = () => {
+    setHint(deep ? "Deep research off" : "Deep research: several web searches and a long report with sources. Takes a few minutes.");
+    clearTimeout(hintTimer.current);
+    hintTimer.current = setTimeout(() => setHint(null), 3500);
+    setDeep((on) => !on);
+  };
+
+  /** Starts deep research on the message; progress shows under it and the report arrives as a reply. */
+  async function startResearch(text: string) {
+    if (!model) return;
+    setBanner(null);
+    setBusy(true);
+    pinnedToBottom.current = true;
+    const mine: Live = {
+      id: draftId(),
+      chat_id: chat?.id ?? "",
+      parent_id: null,
+      role: "user",
+      content: { text },
+      status: "completed",
+      model: null,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((m) => [...m, mine]);
+    try {
+      const res = await fetch("/api/research", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chatId: chat?.id ?? null, model: model.id, clientRequestId: crypto.randomUUID(), text }),
+      });
+      const out = (await res.json().catch(() => ({}))) as { error?: string; chatId?: string; userMessage?: MessageRow; run?: RunView };
+      if (!res.ok || !out.chatId || !out.userMessage || !out.run) {
+        setMessages((list) => list.filter((m) => m.id !== mine.id));
+        setDraft(text);
+        setDeep(true);
+        setBanner(out.error ?? "Couldn't start the research. Try again.");
+        return;
+      }
+      if (!chat) {
+        const created: ChatRow = { id: out.chatId, title: titleFrom(text), model: model.id, pinned: false, updated_at: new Date().toISOString() };
+        setChat(created);
+        setShell((s) => ({ ...s, chats: [created, ...s.chats] }));
+        window.history.replaceState(null, "", `/c/${out.chatId}`);
+      }
+      const saved = out.userMessage;
+      setMessages((list) => list.map((m) => (m.id === mine.id ? saved : m)));
+      research.add(out.run);
+    } catch {
+      setMessages((list) => list.filter((m) => m.id !== mine.id));
+      setDraft(text);
+      setBanner("Couldn't start the research. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const pickModel = (id: string) => {
     setModelId(id);
@@ -250,7 +311,15 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
 
   const send = () => {
     const text = draft.trim();
-    if ((!text && !attachments.ready) || attachments.uploading || busy || !model) return;
+    if ((!text && !attachments.ready) || attachments.uploading || busy || research.running || !model) return;
+    if (deep && searchable) {
+      if (attachments.items.length) return setBanner("Deep research works from your message only. Remove the attached files first.");
+      if (!text) return;
+      setDraft("");
+      setDeep(false);
+      startResearch(text);
+      return;
+    }
     setDraft("");
     sendText(text, false, attachments.take());
   };
@@ -278,6 +347,7 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
   };
 
   const lastUser = [...messages].reverse().find((m) => m.role === "user" && !m.id.startsWith("local-"));
+  const shownIds = new Set(messages.map((m) => m.id));
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -369,6 +439,14 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
                       {m.content.text}
                     </div>
                   ) : null}
+                  {(() => {
+                    const run = runFor(research.runs, m.id, shownIds);
+                    return run ? (
+                      <div className="w-full pt-5">
+                        <ResearchCard run={run} onStop={research.stop} />
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
               ) : (
                 <Reply
@@ -399,12 +477,14 @@ export function ChatApp({ shell: initialShell, chat: initialChat, messages: init
             value={draft}
             onChange={setDraft}
             onSend={send}
-            onStop={() => abortRef.current?.abort()}
-            busy={busy}
+            onStop={() => (research.running ? research.stop() : abortRef.current?.abort())}
+            busy={busy || research.running}
             disabled={!model}
             search={search && searchable}
             searchable={searchable}
             onToggleSearch={toggleSearch}
+            deep={deep && searchable}
+            onToggleDeep={toggleDeep}
             voice={canListen && !!model}
             onVoice={() => setVoiceOpen(true)}
             onDictated={(t) => setDraft((d) => (d.trim() ? `${d.trimEnd()} ${t}` : t))}
@@ -508,6 +588,8 @@ function Composer({
   search,
   searchable,
   onToggleSearch,
+  deep,
+  onToggleDeep,
   voice,
   onVoice,
   onDictated,
@@ -516,6 +598,8 @@ function Composer({
   search: boolean;
   searchable: boolean;
   onToggleSearch: () => void;
+  deep: boolean;
+  onToggleDeep: () => void;
   attachments: Pending[];
   onAttach: (files: File[]) => void;
   onRemoveAttachment: (id: string) => void;
@@ -596,6 +680,17 @@ function Composer({
         >
           {search ? <GlobeIcon /> : <GlobeOffIcon />}
         </button>
+        <button
+          type="button"
+          onClick={onToggleDeep}
+          disabled={!searchable || disabled}
+          aria-pressed={deep}
+          aria-label="Deep research"
+          title={!searchable ? "This model can't search the web" : deep ? "Deep research on for this message" : "Deep research: a long report with sources"}
+          className={`press flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${deep ? "bg-inv text-on-inv" : "text-faint hover:text-fg"}`}
+        >
+          <ResearchIcon />
+        </button>
         <textarea
           ref={box}
           value={value}
@@ -614,7 +709,7 @@ function Composer({
             }
           }}
           rows={1}
-          placeholder="Message Depeche"
+          placeholder={deep ? "What to research?" : "Message Depeche"}
           aria-label="Message Depeche"
           disabled={disabled}
           className="max-h-[220px] min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-[17px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"

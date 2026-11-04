@@ -21,6 +21,8 @@ export type MessageRow = {
     searches?: number;
     /** Google's "Search suggestions" chips (its own HTML), shown in a sandbox as Google requires. */
     suggestions?: string;
+    /** Set on a deep research report: what was researched. */
+    research?: { title: string; questions: string[]; sources: number };
   };
   status: "pending" | "streaming" | "completed" | "failed" | "stopped";
   model: string | null;
