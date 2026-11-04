@@ -27,6 +27,11 @@ type Body = {
   model?: string;
   /** Answer this existing message again instead of sending a new one. */
   regenerate?: string;
+  /**
+   * The message this one follows: the end of the conversation as shown, or, for an edit, the
+   * message before the one being edited (null when editing the first). Left out, the newest.
+   */
+  parent?: string | null;
   /** Let the model search the web when it needs to. */
   search?: boolean;
   /** Sent from voice chat: the reply will be read aloud. */
@@ -71,6 +76,8 @@ export async function POST(req: NextRequest) {
   if (!body.regenerate && !UUID.test(body.clientRequestId ?? "")) return fail(400, "Something went wrong. Try again.");
   if (body.chatId && !UUID.test(body.chatId)) return fail(404, "That chat doesn't exist.");
   if (body.regenerate && !UUID.test(body.regenerate)) return fail(404, "That message doesn't exist.");
+  const parentGiven = "parent" in body && !body.regenerate;
+  if (parentGiven && body.parent !== null && !UUID.test(String(body.parent))) return fail(404, "That message doesn't exist.");
 
   const db = await supabaseServer();
   const admin = supabaseAdmin();
@@ -103,15 +110,18 @@ export async function POST(req: NextRequest) {
       .order("created_at")
       .returns<MessageRow[]>();
     all = existing ?? [];
-  } else if (body.regenerate) {
+  } else if (body.regenerate || (parentGiven && body.parent)) {
     return fail(404, "That chat doesn't exist.");
   }
+  // An edit or a reply to an earlier version must follow a message in this same chat.
+  if (parentGiven && body.parent && !all.some((m) => m.id === body.parent)) return fail(404, "That message doesn't exist.");
 
   // Picture models make or edit a picture instead of writing a reply.
   if (model.image) {
     return pictureReply({
       me, db, admin, model, apiKey, chatId, all, text, files: fileRefs,
       clientRequestId: body.clientRequestId, regenerate: body.regenerate,
+      parent: parentGiven ? (body.parent ?? null) : undefined,
     });
   }
 
@@ -212,7 +222,7 @@ export async function POST(req: NextRequest) {
     }
     question = q;
   } else {
-    const parent = activePath(all).at(-1);
+    const parent = parentGiven ? (body.parent ? all.find((m) => m.id === body.parent) : undefined) : activePath(all).at(-1);
     const { data: inserted, error } = await db
       .from("messages")
       .insert({

@@ -23,6 +23,8 @@ type Args = {
   files: FileRef[];
   clientRequestId?: string;
   regenerate?: string;
+  /** The message this one follows (null: the first; left out: the newest), as for replies. */
+  parent?: string | null;
 };
 
 const fail = (status: number, error: string) => Response.json({ error }, { status });
@@ -75,7 +77,7 @@ export async function pictureReply(a: Args): Promise<Response> {
     chatId = chat.id;
   }
   if (!question) {
-    const parent = activePath(a.all).at(-1);
+    const parent = a.parent !== undefined ? (a.parent ? a.all.find((m) => m.id === a.parent) : undefined) : activePath(a.all).at(-1);
     const { data: inserted, error } = await db
       .from("messages")
       .insert({
