@@ -39,6 +39,8 @@ export type MessageRow = {
     lookups?: string[];
     /** Files the reply read (those sent with the question). */
     read?: string[];
+    /** Set when two or three models answered the same question side by side (see lib/chat/compare.ts). */
+    compare?: { id: string; slot: number };
   };
   status: "pending" | "streaming" | "completed" | "failed" | "stopped";
   model: string | null;
