@@ -47,8 +47,12 @@ test("a suggested memory is kept with a tap, used later, and can be forgotten", 
   // Still offered after a reload, until answered.
   await page.reload();
   await expect(page.getByTestId("memory-suggestion")).toBeVisible();
-  await page.getByTestId("memory-suggestion").getByRole("button", { name: "Remember" }).click();
-  await expect(page.getByText("Remembered.")).toBeVisible();
+  // Right after a reload Safari may not have finished loading the page, and a tap then does nothing.
+  await expect(async () => {
+    const card = page.getByTestId("memory-suggestion");
+    if (await card.count()) await card.getByRole("button", { name: "Remember" }).click({ timeout: 1_000 });
+    await expect(page.getByText("Remembered.")).toBeVisible({ timeout: 1_000 });
+  }).toPass();
 
   await page.goto("/memory");
   await expect(page.getByTestId("memories")).toContainText("Their favourite colour is black.");
@@ -75,8 +79,13 @@ test("a dismissed suggestion is never kept", async ({ page }) => {
   await page.getByRole("dialog", { name: "Choose a model" }).getByRole("button", { name: /Gemini 3\.8 Flash/ }).click();
   await page.getByLabel("Message Depeche").fill("My favourite colour is black");
   await page.getByRole("button", { name: "Send" }).click();
-  await page.getByTestId("memory-suggestion").getByRole("button", { name: "No thanks" }).click();
-  await expect(page.getByTestId("memory-suggestion")).toHaveCount(0);
+  await expect(page.getByTestId("memory-suggestion")).toBeVisible({ timeout: 15_000 });
+  // A tap before the page has finished loading does nothing, so tap until the card goes.
+  await expect(async () => {
+    const card = page.getByTestId("memory-suggestion");
+    if (await card.count()) await card.getByRole("button", { name: "No thanks" }).click({ timeout: 1_000 });
+    await expect(card).toHaveCount(0, { timeout: 1_000 });
+  }).toPass();
   await expect
     .poll(async () => (await db.from("memories").select("status").eq("owner_id", user.user!.id).single()).data?.status)
     .toBe("rejected");

@@ -399,7 +399,7 @@ export function ChatApp({
                 )}
               </div>
             ) : null}
-            {messages.map((m, i) => [
+            {messages.flatMap((m, i) => [
               m.role === "user" ? (
                 <div key={m.id} className="flex flex-col items-end gap-2">
                   {m.content.files?.length ? <MessageFiles files={m.content.files} /> : null}
@@ -423,7 +423,7 @@ export function ChatApp({
               applied && applied.index === i && i < messages.length - 1 ? (
                 <SummaryLine key={`summary-${applied.summary.id}`} onOpen={() => setViewing(applied.summary.id)} />
               ) : null,
-            ])}
+            ].filter(Boolean))}
           </div>
         </div>
 

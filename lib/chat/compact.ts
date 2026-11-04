@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { decryptSecret, fromBytea } from "@/lib/crypto";
 import { MODELS, estimateCost, type Model } from "@/lib/ai/models";
 import { inputTokensUpperBound, planReply } from "@/lib/ai/budget";
-import { streamReply } from "@/lib/ai/providers";
+import { streamReply, type Turn } from "@/lib/ai/providers";
 import { UPLOAD_BUCKET, isFileRef } from "@/lib/chat/files";
 import type { MessageRow } from "@/lib/chat/thread";
 import {
@@ -14,6 +14,8 @@ import {
   SUMMARY_OUTPUT_TOKENS,
   activeSummary,
   approxTokens,
+  missingDetails,
+  missingDetailsRequest,
   parseSummary,
   planCompaction,
   summariserInput,
@@ -127,37 +129,52 @@ export async function compactChat(opts: {
 
   // Hold the most the whole job could cost against the person's limit.
   const inputs = parts.map((p) => p.join("\n\n"));
-  const plan = planReply([writer], inputTokensUpperBound([...inputs, ...inputs.map(() => SUMMARISER_SYSTEM)]) + parts.length * SUMMARY_OUTPUT_TOKENS);
+  // Each part may need a second call (the detail check), which reads the part again.
+  const calls = parts.length * 2;
+  const plan = planReply(
+    [writer],
+    2 * inputTokensUpperBound([...inputs, ...inputs.map(() => SUMMARISER_SYSTEM)]) + calls * SUMMARY_OUTPUT_TOKENS,
+  );
   const { data: holds } = await admin.rpc("reserve_spend", { p_person: userId, p_want: plan.want, p_need: plan.need });
   const hold = (holds as { hold_id: string; amount_usd: number }[] | null)?.[0];
   if (!hold) return { skipped: "monthly limit" };
-  const maxOutput = Math.min(SUMMARY_OUTPUT_TOKENS, Math.floor(plan.maxOutput(Number(hold.amount_usd)) / parts.length));
+  const maxOutput = Math.min(SUMMARY_OUTPUT_TOKENS, Math.floor(plan.maxOutput(Number(hold.amount_usd)) / calls));
 
   let used = writer;
   let input = 0;
   let output = 0;
   let result: { summary: string; facts: string[] } | null = null;
   try {
-    for (const part of inputs) {
+    const ask = async (turns: Turn[]) => {
       let reply = "";
-      for await (const ev of streamReply({
-        model: writer,
-        apiKey,
-        system: SUMMARISER_SYSTEM,
-        turns: [{ role: "user", text: summariserInput(previous, part) }],
-        signal,
-        maxOutput,
-      })) {
+      for await (const ev of streamReply({ model: writer, apiKey, system: SUMMARISER_SYSTEM, turns, signal, maxOutput })) {
         if (ev.type === "text") reply += ev.text;
         else if (ev.type === "usage") {
           input += ev.input;
           output += ev.output;
         } else if (ev.type === "model") used = MODELS.find((m) => m.id === ev.id) ?? used;
       }
-      const parsed = parseSummary(reply);
+      return reply;
+    };
+    for (const part of inputs) {
+      const question = summariserInput(previous, part);
+      const reply = await ask([{ role: "user", text: question }]);
+      let parsed = parseSummary(reply);
       if (!parsed.summary) throw new Error("empty summary");
-      // Facts carry forward even if a model forgets one.
-      const kept = previous?.facts.filter((f) => !parsed.facts.includes(f)) ?? [];
+      // Detail check: exact numbers, links and file names from the conversation that the summary
+      // dropped are put back to the model once, which adds each one that could matter.
+      const missing = missingDetails(part, parsed);
+      if (missing.length) {
+        const again = await ask([
+          { role: "user", text: question },
+          { role: "assistant", text: reply },
+          { role: "user", text: missingDetailsRequest(missing) },
+        ]).catch(() => "");
+        const facts = parseSummary(again.includes("<facts>") ? again : "").facts;
+        if (facts.length >= parsed.facts.length) parsed = { summary: parsed.summary, facts };
+      }
+      // An earlier fact whose exact details vanished without being replaced is carried forward.
+      const kept = previous?.facts.filter((f) => !parsed.facts.includes(f) && missingDetails(f, parsed).length > 0) ?? [];
       previous = { summary: parsed.summary, facts: [...kept, ...parsed.facts].slice(0, 300) };
       result = previous;
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MessageRow } from "@/lib/chat/thread";
-import { activeSummary, compactAt, parseSummary, planCompaction, summariserInput, summaryForModel, transcriptLine } from "@/lib/chat/summary";
+import { activeSummary, compactAt, detailsIn, missingDetails, parseSummary, planCompaction, summariserInput, summaryForModel, transcriptLine } from "@/lib/chat/summary";
 
 let n = 0;
 function msg(role: "user" | "assistant", chars: number, extra: Partial<MessageRow> = {}): MessageRow {
@@ -111,5 +111,19 @@ describe("summary text", () => {
     const reply = msg("assistant", 0, { content: { text: "found", sources: [{ url: "https://x.org", title: "X" }] } });
     expect(transcriptLine(reply, "Amir")).toBe("[Assistant]\nfound\n[Sources: X <https://x.org>]");
     expect(transcriptLine(msg("assistant", 5, { status: "failed" }), "Amir")).toBe("");
+  });
+});
+
+describe("detail check", () => {
+  it("finds exact details worth keeping, not list markers", () => {
+    const text = "1. The quote was £1,250 (or 12%), due 14/03 at 10:30. See https://example.com/quote. Email jo@x.org about plan-v2.pdf. Step 2.";
+    expect(detailsIn(text).sort()).toEqual(
+      ["£1,250", "12%", "14/03", "10:30", "https://example.com/quote", "jo@x.org", "plan-v2.pdf"].sort(),
+    );
+  });
+
+  it("lists details the summary dropped, matching loosely", () => {
+    const out = { summary: "The quote was 1250 pounds.", facts: ["Link: https://example.com/quote/"] };
+    expect(missingDetails("Quote £1,250, link https://example.com/quote, code 4417.", out)).toEqual(["4417"]);
   });
 });
