@@ -5,7 +5,7 @@ import { estimateCost, findModel } from "@/lib/ai/models";
 import { ProviderError, streamReply } from "@/lib/ai/providers";
 import { inputTokensUpperBound } from "@/lib/ai/budget";
 import { allow } from "@/lib/rate-limit";
-import { pickBuilder } from "@/lib/design/build";
+import { GADGET_BUILDERS, pickBuilder } from "@/lib/design/build";
 import { familyKeys } from "@/lib/gadgets/server";
 import { GADGET_RULES } from "@/lib/widgets/instructions";
 import { MAX_WIDGET } from "@/lib/widgets/frame";
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!gadget) return fail(404, "That gadget isn't yours.");
 
   const { keys, keyOf } = await familyKeys(me.profile.family_id);
-  const model = pickBuilder(keys);
+  const model = pickBuilder(keys, GADGET_BUILDERS);
   if (!model) return fail(400, me.profile.role === "admin" ? "Add an AI key in Family settings first." : "Your family admin hasn't added any AI keys yet.");
   const apiKey = keyOf(model.provider);
   if (!apiKey) return fail(500, "Your family's key needs to be added again. Ask your family admin.");

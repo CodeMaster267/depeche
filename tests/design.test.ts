@@ -5,7 +5,7 @@ import { designCss } from "@/lib/design/css";
 import { familyFriendly } from "@/lib/design/friendly";
 
 vi.mock("server-only", () => ({}));
-const { judge, pickBuilder, readJson } = await import("@/lib/design/build");
+const { GADGET_BUILDERS, judge, pickBuilder, readJson } = await import("@/lib/design/build");
 
 describe("cleaning a design", () => {
   it("keeps only allowed values, on top of the current design", () => {
@@ -107,9 +107,14 @@ describe("building", () => {
   });
 
   it("picks the strongest model the family's keys allow", () => {
-    expect(pickBuilder([{ provider: "anthropic", models: null }])?.id).toBe("claude-fable-5-1");
-    expect(pickBuilder([{ provider: "anthropic", models: ["claude-sonnet-5-5"] }, { provider: "openai", models: null }])?.id).toBe("gpt-6-astra");
-    expect(pickBuilder([{ provider: "google", models: ["gemini-3.8-flash"] }])?.id).toBe("gemini-3.8-flash");
+    // My look: Opus, then Argon, then Sol, never Fable and nothing else.
+    expect(pickBuilder([{ provider: "anthropic", models: null }])?.id).toBe("claude-opus-5-5");
+    expect(pickBuilder([{ provider: "anthropic", models: ["claude-fable-5-1"] }, { provider: "google", models: null }])?.id).toBe("gemini-4-argon");
+    expect(pickBuilder([{ provider: "anthropic", models: ["claude-sonnet-5-5"] }, { provider: "openai", models: null }])?.id).toBe("gpt-6.1-sol");
+    expect(pickBuilder([{ provider: "google", models: ["gemini-3.8-flash"] }])).toBeUndefined();
     expect(pickBuilder([])).toBeUndefined();
+    // Gadget changes: strongest first, never Fable.
+    expect(pickBuilder([{ provider: "anthropic", models: null }], GADGET_BUILDERS)?.id).toBe("claude-opus-5-5");
+    expect(pickBuilder([{ provider: "google", models: ["gemini-3.8-flash"] }], GADGET_BUILDERS)?.id).toBe("gemini-3.8-flash");
   });
 });
